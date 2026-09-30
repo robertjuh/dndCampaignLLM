@@ -1,0 +1,376 @@
+import { z } from 'zod';
+
+export const stats = ['STR', 'DEX', 'INT'] as const;
+export const statSchema = z.enum(stats);
+export type Stat = z.infer<typeof statSchema>;
+export const statArray = [5, 5, 5];
+export const abilitySchema = z
+  .object({
+    name: z.string().min(1).max(80),
+    description: z.string().min(1).max(500),
+    kind: z.enum(['combat', 'utility']),
+    effect: z.enum(['strike', 'mend', 'assist', 'guard']),
+  })
+  .strict();
+export const slots = ['left', 'right', 'body', 'head', 'boots'] as const;
+export type Slot = (typeof slots)[number];
+export const itemSchema = z
+  .object({
+    id: z.string().min(1).max(100),
+    name: z.string().min(1).max(100),
+    kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic']),
+    rarity: z.enum(['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Cursed']),
+    scaling: z.array(statSchema).max(2),
+    requirements: z.object({
+      STR: z.number().int().min(0).max(50),
+      DEX: z.number().int().min(0).max(50),
+      INT: z.number().int().min(0).max(50),
+    }),
+    hands: z.union([z.literal(1), z.literal(2)]),
+    light: z.boolean(),
+    damage: z.string().regex(/^[1-4]d(?:4|6|8|10|12|20)$/),
+    defense: z.number().int().min(0).max(3),
+    initiativePenalty: z.number().int().min(-3).max(0),
+    healing: z.number().int().min(0).max(12),
+    description: z.string().max(700),
+  })
+  .strict();
+export type Item = z.infer<typeof itemSchema>;
+export const traitSchema = z
+  .object({
+    id: z.string().min(1).max(80),
+    name: z.string().min(1).max(80),
+    description: z.string().min(1).max(700),
+    stats: z
+      .object({
+        STR: z.number().int().min(-3).max(4),
+        DEX: z.number().int().min(-3).max(4),
+        INT: z.number().int().min(-3).max(4),
+      })
+      .strict(),
+    blocked: z.array(z.enum(slots)).max(5),
+    hp: z.number().int().min(-4).max(4),
+    defense: z.number().int().min(0).max(1),
+    immunities: z.array(z.enum(['Bleeding', 'Burning', 'Poisoned', 'Stunned', 'Weakened'])).max(2),
+    healing: z.enum(['normal', 'repair', 'necrotic']),
+    regeneration: z.number().int().min(0).max(1),
+    natural: z.boolean(),
+    heavyRestricted: z.boolean(),
+    lifesteal: z.boolean(),
+  })
+  .strict();
+export type Trait = z.infer<typeof traitSchema>;
+export const weaponOptionSchema = z
+  .object({ name: z.string().min(1).max(100), stat: statSchema, description: z.string().max(500) })
+  .strict();
+export const lootSchema = z
+  .object({
+    name: z.string().min(1).max(100),
+    kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic']),
+    scaling: z.array(statSchema).max(2),
+    hands: z.union([z.literal(1), z.literal(2)]),
+    light: z.boolean(),
+    description: z.string().max(500),
+  })
+  .strict();
+export type LootBlueprint = z.infer<typeof lootSchema>;
+export const characterSchema = z
+  .object({
+    name: z.string().trim().min(1).max(60),
+    role: z.string().trim().min(1).max(80),
+    species: z.string().min(1).max(80),
+    appearance: z.string().max(1000).default(''),
+    traits: z.array(traitSchema).max(3),
+    weaponOptions: z.array(weaponOptionSchema).length(3),
+    healingItemName: z.string().min(1).max(100),
+    concept: z.string().max(1000),
+    background: z.string().max(1500),
+    personality: z.string().max(500),
+    motivation: z.string().max(500),
+    weakness: z.string().max(500),
+    stats: z
+      .object({
+        STR: z.number().int().min(0).max(15),
+        DEX: z.number().int().min(0).max(15),
+        INT: z.number().int().min(0).max(15),
+      })
+      .strict(),
+    abilities: z.array(abilitySchema).max(6),
+    equipment: z.array(z.string().trim().min(1).max(80)).max(4),
+  })
+  .strict();
+export type Character = z.infer<typeof characterSchema>;
+export const campaignSchema = z
+  .object({
+    ruleset: z.literal('roguelike-v1').default('roguelike-v1'),
+    name: z.string().trim().min(1).max(100),
+    setting: z.string().trim().min(1).max(500),
+    premise: z.string().max(2500),
+    tone: z.string().max(300),
+    language: z.enum(['English', 'Nederlands']),
+    instructions: z.string().max(3000),
+    custom: z
+      .array(z.object({ key: z.string().trim().min(1).max(60), value: z.string().max(500) }).strict())
+      .max(20),
+    provider: z.enum(['chatgpt', 'practice']),
+    model: z.string().max(100).default(''),
+  })
+  .strict()
+  .superRefine((c, ctx) => {
+    if (new Set(c.custom.map((x) => x.key)).size !== c.custom.length)
+      ctx.addIssue({ code: 'custom', message: 'Custom field names must be unique.', path: ['custom'] });
+  });
+export type CampaignConfig = z.infer<typeof campaignSchema>;
+export const checkSchema = z
+  .object({
+    memberId: z.string().uuid(),
+    stat: statSchema,
+    dc: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
+    reason: z.string().min(1).max(500),
+    mode: z.enum(['normal', 'advantage', 'disadvantage']),
+    lethal: z.boolean().default(false),
+  })
+  .strict();
+export type Check = z.infer<typeof checkSchema>;
+export const changeSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('hp'),
+      memberId: z.string().uuid(),
+      amount: z.number().int().min(-6).max(6),
+      reason: z.string().min(1).max(300),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('item'),
+      memberId: z.string().uuid(),
+      name: z.string().trim().min(1).max(80),
+      amount: z
+        .number()
+        .int()
+        .min(-3)
+        .max(3)
+        .refine((n) => n !== 0),
+      reason: z.string().min(1).max(300),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('condition'),
+      memberId: z.string().uuid(),
+      name: z.string().trim().min(1).max(80),
+      remove: z.boolean(),
+      reason: z.string().min(1).max(300),
+    })
+    .strict(),
+]);
+export const outcomeSchema = z
+  .object({
+    narration: z.string().min(1).max(12000),
+    summary: z.string().min(1).max(2000),
+    choices: z.array(z.string().min(1).max(500)).max(5),
+    changes: z.array(changeSchema).max(30),
+    xp: z.number().int().min(0).max(40).default(0),
+    gold: z.number().int().min(0).max(100).default(0),
+    lethalWarning: z.string().max(1000).nullable().default(null),
+    safeRest: z.boolean().default(false),
+    nextFloor: z
+      .object({
+        biome: z.string().min(1).max(100),
+        atmosphere: z.string().min(1).max(1500),
+        hazard: z.string().max(1000),
+      })
+      .nullable()
+      .default(null),
+    journal: z
+      .array(
+        z
+          .object({
+            kind: z.enum(['npc', 'location', 'quest', 'faction', 'fact']),
+            name: z.string().min(1).max(100),
+            detail: z.string().min(1).max(1500),
+          })
+          .strict(),
+      )
+      .max(10),
+  })
+  .strict();
+export type Outcome = z.infer<typeof outcomeSchema>;
+export type CharacterState = {
+  hp: number;
+  maxHp: number;
+  stats: Record<Stat, number>;
+  level: number;
+  xp: number;
+  statPoints: number;
+  gold: number;
+  inventory: (Item & { quantity: number })[];
+  conditions: string[];
+  conditionTurns: Record<string, number>;
+  equipment: Record<Slot, Item | null>;
+  starterWeapons: Item[];
+  weaponChosen: boolean;
+  kills: number;
+  bosses: number;
+  deathReason: string | null;
+  restedFloor: number | null;
+  guarding?: boolean;
+};
+export const enemySchema = z
+  .object({
+    id: z.string().min(1).max(100),
+    name: z.string().min(1).max(100),
+    tier: z.enum(['minor', 'normal', 'elite', 'boss']),
+    hp: z.number().int().min(1).max(300),
+    defense: z.number().int().min(5).max(30),
+    attack: z.number().int().min(-5).max(15),
+    damage: z.string().regex(/^[1-4]d(?:4|6|8|10|12)$/),
+    description: z.string().max(1000),
+    tactic: z.string().max(500),
+    onHit: z.enum(['Bleeding', 'Burning', 'Poisoned', 'Stunned', 'Weakened']).nullable().default(null),
+  })
+  .strict();
+export type Enemy = z.infer<typeof enemySchema> & {
+  maxHp: number;
+  initiative: number;
+  withdrawn?: boolean;
+  stunned?: boolean;
+};
+export type Encounter = {
+  enemies: Enemy[];
+  round: number;
+  initiative: { id: string; total: number }[];
+  victory: boolean;
+  escaped: boolean;
+};
+export type Scene = {
+  floor: {
+    number: number;
+    biome: string;
+    atmosphere: string;
+    hazard: string;
+    encounters: number;
+    cleared: boolean;
+  };
+  encounter: Encounter | null;
+  loot: (Item & { quantity: number })[];
+  lethalWarning: string | null;
+  safeRest: boolean;
+  usedRest: boolean;
+};
+export const combatSchema = z
+  .object({
+    actions: z
+      .array(
+        z
+          .object({
+            memberId: z.string().uuid(),
+            main: z.enum(['attack', 'defend', 'flee', 'creative']),
+            targetId: z.string().nullable(),
+            stat: statSchema,
+            description: z.string().max(500),
+            minor: z.enum(['none', 'heal', 'offhand', 'equip']),
+            minorItemId: z.string().nullable(),
+            minorSlot: z.enum(slots).nullable().default(null),
+            dc: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]).optional(),
+            effect: z.enum(['damage', 'stun', 'influence']).optional(),
+            weaponSlot: z.enum(['left', 'right', 'natural']).nullable().optional(),
+          })
+          .strict(),
+      )
+      .max(12),
+    loot: lootSchema,
+    enemyTargets: z.array(z.object({ enemyId: z.string(), memberId: z.string().uuid() }).strict()).max(10),
+  })
+  .strict();
+export type CombatInput = z.infer<typeof combatSchema>;
+export type Member = {
+  id: string;
+  playerId: string;
+  playerName: string;
+  characterId: string;
+  character: Character;
+  state: CharacterState;
+  active: boolean;
+};
+export type Action = { memberId: string; text: string; passed: boolean; acceptsLethalRisk?: boolean };
+export type Roll = Check & {
+  id: string;
+  dice: number[];
+  modifier: number;
+  total: number;
+  success: boolean;
+  source: string;
+  critical?: 'success' | 'failure';
+  label?: string;
+  notation?: string;
+};
+export type Turn = {
+  id: string;
+  number: number;
+  phase: 'collecting' | 'queued' | 'resolving' | 'failed' | 'complete';
+  roster: string[];
+  actions: Action[];
+  rolls: Roll[];
+  result: Outcome | null;
+  error: string | null;
+};
+export type Snapshot = {
+  id: string;
+  config: CampaignConfig;
+  status: 'lobby' | 'active' | 'archived' | 'ended';
+  scene: Scene;
+  paused: boolean;
+  version: number;
+  isHost: boolean;
+  myMemberId: string | null;
+  members: Member[];
+  turn: Turn | null;
+  history: Turn[];
+  journal: Outcome['journal'];
+  inviteCode?: string;
+  displayToken?: string;
+  partyOrigins?: string[];
+};
+
+export function blankTrait(name = 'Custom trait'): Trait {
+  return {
+    id: name,
+    name,
+    description: 'Describe a benefit and a drawback.',
+    stats: { STR: 0, DEX: 0, INT: 0 },
+    blocked: [],
+    hp: 0,
+    defense: 0,
+    immunities: [],
+    healing: 'normal',
+    regeneration: 0,
+    natural: false,
+    heavyRestricted: false,
+    lifesteal: false,
+  };
+}
+export function templateCharacter(name = 'New character', species = 'Custom species'): Character {
+  return {
+    name,
+    role: species,
+    species,
+    appearance: '',
+    traits: [],
+    concept: '',
+    background: '',
+    personality: '',
+    motivation: '',
+    weakness: '',
+    stats: { STR: 5, DEX: 5, INT: 5 },
+    equipment: [],
+    abilities: [],
+    weaponOptions: stats.map((stat) => ({
+      name: `${stat} weapon`,
+      stat,
+      description: 'Name and describe this weapon to fit your character.',
+    })),
+    healingItemName: 'Healing consumable',
+  };
+}
