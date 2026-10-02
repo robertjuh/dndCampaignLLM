@@ -4,10 +4,17 @@ import { networkInterfaces } from 'node:os';
 import { createApp } from './app';
 import { openDatabase } from './db';
 import { ChatGPTAuth } from './auth';
+import { GoogleAuth, createGoogleCallbackApp } from './google';
+
+try {
+  process.loadEnvFile(resolve('.env'));
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+}
 
 const directory = resolve(process.env.GATHER_DATA_DIR ?? 'data');
 const port = Number(process.env.PORT ?? 3000);
-const host = process.env.HOST ?? '127.0.0.1';
+const host = process.env.HOST ?? '0.0.0.0';
 const db = openDatabase(join(directory, 'gather.sqlite'));
 const partyOrigins = process.env.GATHER_PUBLIC_URL
   ? [new URL(process.env.GATHER_PUBLIC_URL).origin]
@@ -17,12 +24,30 @@ const partyOrigins = process.env.GATHER_PUBLIC_URL
         .filter((entry) => entry?.family === 'IPv4' && !entry.internal)
         .map((entry) => `http://${entry!.address}:${port}`)
     : [];
+const google =
+  process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI
+    ? new GoogleAuth(db, {
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri: process.env.GOOGLE_REDIRECT_URI,
+      })
+    : undefined;
 const { app } = await createApp({
   db,
   auth: new ChatGPTAuth(join(directory, 'credentials')),
   port,
   partyOrigins,
+  google,
 });
+if (google) {
+  const callback = createGoogleCallbackApp(google);
+  const callbackPort = Number(process.env.GOOGLE_CALLBACK_PORT ?? 3001);
+  await callback.listen({ port: callbackPort, host: '127.0.0.1' });
+  app.addHook('onClose', async () => {
+    await callback.close();
+  });
+  console.log(`Google callback listener: http://127.0.0.1:${callbackPort}/auth/google/callback`);
+}
 if (process.argv.includes('--production')) {
   const root = resolve('dist');
   const assets = new Map<string, Buffer>();
@@ -73,11 +98,7 @@ if (process.argv.includes('--production')) {
 }
 await app.listen({ port, host });
 console.log(`Gather is ready at http://127.0.0.1:${port}`);
-if (host === '0.0.0.0')
-  for (const interfaces of Object.values(networkInterfaces()))
-    for (const entry of interfaces ?? [])
-      if (entry.family === 'IPv4' && !entry.internal)
-        console.log(`Party address: http://${entry.address}:${port}`);
+for (const origin of partyOrigins) console.log(`Party address: ${origin}`);
 let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.on(signal, async () => {

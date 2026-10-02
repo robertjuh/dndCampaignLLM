@@ -204,18 +204,29 @@ it('generates a balanced custom template from the supplied concept without a spe
       description: 'Powerful limbs, careful spellcraft, and awkward footing.',
     },
   ];
-  sheet.weaponOptions[0].name = 'Silk-bound warstaff';
-  const fetcher = vi.fn(async () =>
-    stream([
+  sheet.traits.push(blankTrait('Silk instinct'));
+  const { equipmentOptions: _, selectedEquipmentIds: __, ...core } = sheet;
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const context = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+    const value = context.rolledEquipment
+      ? {
+          items: context.rolledEquipment.map((item: { id: string }, i: number) => ({
+            id: item.id,
+            name: `Silk-bound equipment ${i}`,
+            description: 'Woven silk equipment.',
+          })),
+        }
+      : core;
+    return stream([
       event({
         type: 'response.completed',
         response: {
           status: 'completed',
-          output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(sheet) }] }],
+          output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] }],
         },
       }),
-    ]),
-  );
+    ]);
+  });
   const auth = {
     accessToken: async () => 'subscription-only',
     models: async () => [{ id: 'account-model', name: 'Available' }],
@@ -224,7 +235,7 @@ it('generates a balanced custom template from the supplied concept without a spe
   const concept = 'chaotic warlord elf spider with a tendency to randomly cast spells';
   const result = await gm.generate(concept);
   expect(result).toMatchObject({ name: 'Roberto', species: 'Elf spider', stats: { STR: 8, DEX: 4, INT: 6 } });
-  expect(result.weaponOptions[0].name).toBe('Silk-bound warstaff');
+  expect(result.equipmentOptions[0].name).toBe('Silk-bound equipment 0');
   const request = (fetcher.mock.calls as unknown as [string, RequestInit][])[0];
   expect(request[1].body).toContain(concept);
   expect(request[1].body).not.toContain('api_key');

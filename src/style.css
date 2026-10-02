@@ -2610,13 +2610,13 @@ p {
   font-size: 12px;
   color: #5e7749;
 }
-.weapon-choices {
+.equipment-choices {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 16px 0;
 }
-.weapon-choices > button {
+.equipment-choices > button {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2630,15 +2630,15 @@ p {
   cursor: pointer;
   overflow-wrap: anywhere;
 }
-.weapon-choices > button:hover {
+.equipment-choices > button:hover {
   background: #e6efd8;
 }
-.weapon-choices span,
-.weapon-choices small {
+.equipment-choices span,
+.equipment-choices small {
   font-size: 11px;
   line-height: 1.5;
 }
-.weapon-choices b {
+.equipment-choices b {
   font-size: 13px;
 }
 .level-up {
@@ -2776,10 +2776,10 @@ p {
   .character-controls {
     padding: 20px 17px;
   }
-  .weapon-choices {
+  .equipment-choices {
     grid-template-columns: 1fr;
   }
-  .weapon-choices > button {
+  .equipment-choices > button {
     gap: 5px;
   }
   .gear-item {
@@ -2812,4 +2812,73 @@ p {
 
 .gear-item small {
   overflow-wrap: anywhere;
+}
+
+.character-sheet {
+  padding: 24px 0;
+}
+.character-sheet header h2 {
+  margin: 8px 0 14px;
+  font-size: clamp(26px, 5vw, 40px);
+}
+.character-sheet p,
+.ability-card p {
+  line-height: 1.7;
+}
+.character-sheet section {
+  margin-top: 24px;
+}
+.character-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 20px;
+}
+.character-details dt {
+  text-transform: capitalize;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.character-details dd {
+  margin: 0;
+  line-height: 1.7;
+}
+.ability-card {
+  padding: 16px;
+  border: 1px solid #dbe4ce;
+  border-radius: 7px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ability-card h4 {
+  margin: 10px 0;
+}
+.ability-card p {
+  font-size: 13px;
+  margin-bottom: 0;
+}
+.equipment-choices > button[aria-pressed='true'] {
+  background: #e0edcd;
+  border: 2px solid #587444;
+  padding: 15px;
+}
+.equipment-choices > button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.equipment-choices > button:focus-visible {
+  outline: 3px solid #587444;
+  outline-offset: 3px;
+}
+.level-up-choices {
+  display: grid;
+  gap: 10px;
+}
+.level-up-choices .button {
+  white-space: normal;
+  text-align: left;
+  justify-content: flex-start;
+}
+.reward-result {
+  padding: 12px;
+  border-left: 3px solid #587444;
 }

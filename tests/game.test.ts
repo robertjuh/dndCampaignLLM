@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../server/db';
+import { PracticeGM } from '../server/providers';
 import { Game, type GameMaster, type GMContext } from '../server/game';
 import {
   templateCharacter,
@@ -43,7 +44,11 @@ function fixture(provider: GameMaster = { resolve: async () => outcome() }, file
     if (db.open) db.close();
   });
   const draw = vi.fn(() => 12);
-  const game = new Game(db, () => provider, draw);
+  const game = new Game(
+    db,
+    () => ({ ...provider, levelUp: provider.levelUp ?? new PracticeGM().levelUp }),
+    draw,
+  );
   const host = game.identify();
   const p1 = game.identify();
   const p2 = game.identify();
@@ -55,10 +60,33 @@ function fixture(provider: GameMaster = { resolve: async () => outcome() }, file
   for (const member of game.members(c.id))
     game.manageCharacter(c.id, member.playerId, {
       type: 'starter',
-      itemId: member.state.starterWeapons[0].id,
+      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
     });
   return { game, db, host, p1, p2, c, c1, c2, draw };
 }
+
+it('edits only owned templates and lobby characters, resets readiness, and preserves active runs', async () => {
+  const { game, p1, p2, host, c, c1 } = fixture();
+  expect(() => game.updateCharacter(p2.id, c1.id, templateCharacter('Stolen'))).toThrow('not found');
+  const edited = game.editLobbyCharacter(c.id, p1.id, templateCharacter('Revised character'));
+  expect(edited.id).toBe(c1.id);
+  const member = game.members(c.id).find((m) => m.playerId === p1.id)!;
+  expect(member.character.name).toBe('Revised character');
+  expect(member.state.equipmentChosen).toBe(false);
+  expect(member.state.starterEquipment).toHaveLength(5);
+  expect(() => game.editLobbyCharacter(c.id, host.id, edited)).toThrow('Join');
+  expect(() => game.start(c.id, host.id)).toThrow('starting equipment');
+  game.manageCharacter(c.id, p1.id, {
+    type: 'starter',
+    itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+  });
+  game.start(c.id, host.id);
+  await game.idle();
+  expect(() => game.editLobbyCharacter(c.id, p1.id, templateCharacter('Reset'))).toThrow('started');
+  game.updateCharacter(p1.id, c1.id, templateCharacter('Future character'));
+  expect(game.members(c.id).find((m) => m.playerId === p1.id)!.character.name).toBe('Revised character');
+  expect(game.characters(p1.id)[0].name).toBe('Future character');
+});
 async function start(f: ReturnType<typeof fixture>) {
   f.game.start(f.c.id, f.host.id);
   await f.game.idle();
@@ -271,7 +299,7 @@ describe('roll and state integrity', () => {
 });
 
 describe('roguelike multiplayer lifecycle', () => {
-  it('enforces weapon choices and pauses each level-up for player allocation', async () => {
+  it('enforces equipment choices and pauses each level-up for a generated reward', async () => {
     const f = fixture({ resolve: async (ctx) => outcome({ xp: ctx.turn.number ? 40 : 0 }) });
     let turn = await start(f);
     for (let i = 0; i < 3; i++) {
@@ -279,9 +307,15 @@ describe('roguelike multiplayer lifecycle', () => {
       await f.game.idle();
       turn = f.game.snapshot(f.c.id, f.host.id).turn!;
     }
-    expect(f.game.members(f.c.id)[0].state).toMatchObject({ level: 2, xp: 20, statPoints: 5, maxHp: 25 });
-    expect(() => f.game.submit(f.c.id, f.p1.id, turn.id, 'Continue', false)).toThrow('Allocate');
-    f.game.manageCharacter(f.c.id, f.p1.id, { type: 'allocate', points: { STR: 1, DEX: 2, INT: 2 } });
+    expect(f.game.members(f.c.id)[0].state).toMatchObject({
+      level: 2,
+      xp: 20,
+      pendingLevelUps: 1,
+      maxHp: 25,
+    });
+    expect(() => f.game.submit(f.c.id, f.p1.id, turn.id, 'Continue', false)).toThrow('Choose');
+    f.draw.mockReturnValue(1);
+    await f.game.levelUp(f.c.id, f.p1.id, 'attributes');
     f.game.submit(f.c.id, f.p1.id, turn.id, 'Continue', false);
     expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('collecting');
   });
@@ -484,8 +518,8 @@ it('rewards a noncombat boss equivalent once and waits for level-up choices', as
   await f.game.idle();
   const s = f.game.snapshot(f.c.id, f.host.id);
   expect(s.scene.floor.cleared).toBe(true);
-  expect(s.members[0].state).toMatchObject({ level: 2, statPoints: 5, bosses: 1 });
-  expect(() => f.game.submit(f.c.id, f.p1.id, s.turn!.id, 'Next floor', false)).toThrow('Allocate');
+  expect(s.members[0].state).toMatchObject({ level: 2, pendingLevelUps: 1, bosses: 1 });
+  expect(() => f.game.submit(f.c.id, f.p1.id, s.turn!.id, 'Next floor', false)).toThrow('Choose');
 });
 
 it('does not award a floor challenge to a late arrival outside the frozen roster', async () => {
@@ -512,5 +546,142 @@ it('does not award a floor challenge to a late arrival outside the frozen roster
   submitBoth(f, turn.id);
   await f.game.idle();
   const m = f.game.members(f.c.id).find((m) => m.playerId === late.id)!;
-  expect(m.state).toMatchObject({ level: 1, xp: 0, statPoints: 0, bosses: 0 });
+  expect(m.state).toMatchObject({ level: 1, xp: 0, pendingLevelUps: 0, bosses: 0 });
+});
+
+it.each(['new-combat', 'new-utility', 'upgrade-combat', 'upgrade-utility', 'attributes'] as const)(
+  'generates and saves the %s reward once, using server dice and leaving the reusable template intact',
+  async (choice) => {
+    const levelUp = vi.fn(new PracticeGM().levelUp);
+    const f = fixture({ resolve: async () => outcome(), levelUp });
+    await start(f);
+    const before = f.game.members(f.c.id)[0];
+    before.state.pendingLevelUps = 2;
+    before.character.abilities.push({ ...before.character.abilities[0], name: 'Second combat technique' });
+    f.db
+      .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+      .run(JSON.stringify(before.character), JSON.stringify(before.state), before.id);
+    f.draw.mockReturnValue(2);
+    await f.game.levelUp(f.c.id, before.playerId, choice);
+    const after = f.game.members(f.c.id)[0];
+    const context = levelUp.mock.calls[0][0];
+    expect(levelUp).toHaveBeenCalledOnce();
+    expect(after.state.pendingLevelUps).toBe(1);
+    expect(after.state.lastLevelUp).toBeTruthy();
+    if (choice === 'attributes') {
+      expect(context.attributes).toEqual(['DEX', 'DEX']);
+      expect(after.state.stats).toEqual({ STR: 5, DEX: 7, INT: 5 });
+      expect(after.character.abilities).toEqual(before.character.abilities);
+    } else if (choice.startsWith('upgrade')) {
+      expect(context.target?.name).toBe(
+        choice === 'upgrade-combat' ? 'Second combat technique' : 'Keen observation',
+      );
+      expect(after.character.abilities).toHaveLength(3);
+      expect(after.character.abilities.find((a) => a.name === context.target!.name)?.level).toBe(2);
+      expect(after.character.abilities.filter((a) => a.name !== context.target!.name)).toEqual(
+        before.character.abilities.filter((a) => a.name !== context.target!.name),
+      );
+    } else {
+      expect(after.character.abilities).toHaveLength(4);
+      expect(after.character.abilities.at(-1)).toMatchObject({
+        kind: choice === 'new-combat' ? 'combat' : 'utility',
+        level: 1,
+      });
+    }
+    expect(f.game.characters(before.playerId)[0].abilities).toHaveLength(2);
+    const restored = new Game(f.db, () => new PracticeGM());
+    expect(restored.members(f.c.id)[0]).toEqual(after);
+  },
+);
+
+it('keeps a reward available after generation fails or returns an invalid reward and prevents double spending', async () => {
+  let release!: () => void;
+  let fail = true;
+  const levelUp = vi.fn(async (context: import('../server/game').LevelUpContext) => {
+    if (fail) throw new Error('Provider unavailable');
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return new PracticeGM().levelUp(context);
+  });
+  const f = fixture({ resolve: async () => outcome(), levelUp });
+  await start(f);
+  const member = f.game.members(f.c.id)[0];
+  member.state.pendingLevelUps = 1;
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(member.state), member.id);
+  await expect(f.game.levelUp(f.c.id, f.host.id, 'new-combat')).rejects.toThrow('Join');
+  await expect(f.game.levelUp(f.c.id, member.playerId, 'new-combat')).rejects.toThrow('Provider unavailable');
+  expect(f.game.members(f.c.id)[0]).toEqual(member);
+  fail = false;
+  const pending = f.game.levelUp(f.c.id, member.playerId, 'new-combat');
+  await expect(f.game.levelUp(f.c.id, member.playerId, 'new-utility')).rejects.toThrow('being generated');
+  release();
+  await pending;
+  expect(f.game.members(f.c.id)[0].state.pendingLevelUps).toBe(0);
+  await expect(f.game.levelUp(f.c.id, member.playerId, 'new-combat')).rejects.toThrow('No level-up');
+});
+
+it('rejects an upgrade in an empty category and invalid provider rewards without spending the reward', async () => {
+  const levelUp = vi.fn(async () => ({ ability: null, description: 'Invalid ability reward' }));
+  const f = fixture({ resolve: async () => outcome(), levelUp });
+  await start(f);
+  const member = f.game.members(f.c.id)[0];
+  member.state.pendingLevelUps = 1;
+  member.character.abilities = [];
+  f.db
+    .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+    .run(JSON.stringify(member.character), JSON.stringify(member.state), member.id);
+  await expect(f.game.levelUp(f.c.id, member.playerId, 'upgrade-combat')).rejects.toThrow(
+    'no current ability',
+  );
+  expect(levelUp).not.toHaveBeenCalled();
+  await expect(f.game.levelUp(f.c.id, member.playerId, 'new-combat')).rejects.toThrow('category and level');
+  expect(f.game.members(f.c.id)[0]).toEqual(member);
+});
+
+it('migrates existing equipment and pending stat points without resetting a campaign', async () => {
+  const filename = join(mkdtempSync(join(tmpdir(), 'gather-migration-')), 'game.db');
+  const f = fixture(undefined, filename);
+  const member = f.game.members(f.c.id)[0];
+  const { equipmentOptions: _options, selectedEquipmentIds: _selected, ...sheet } = member.character;
+  const legacySheet = {
+    ...sheet,
+    weaponOptions: [
+      { name: 'Legacy sword', stat: 'STR', description: '' },
+      { name: 'Legacy bow', stat: 'DEX', description: '' },
+      { name: 'Legacy wand', stat: 'INT', description: '' },
+    ],
+    abilities: sheet.abilities.map(({ level: _level, ...ability }) => ability),
+  };
+  const {
+    pendingLevelUps: _pending,
+    starterEquipment: _starters,
+    equipmentChosen: _chosen,
+    ...state
+  } = member.state;
+  const legacyState = { ...state, statPoints: 10, starterWeapons: [], weaponChosen: true };
+  f.db
+    .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+    .run(JSON.stringify(legacySheet), JSON.stringify(legacyState), member.id);
+  f.db
+    .prepare('UPDATE characters SET sheet = ? WHERE id = ?')
+    .run(JSON.stringify(legacySheet), member.characterId);
+  const unready = f.game.members(f.c.id)[1];
+  f.db
+    .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+    .run(JSON.stringify(legacySheet), JSON.stringify({ ...legacyState, weaponChosen: false }), unready.id);
+  f.db.pragma('user_version = 4');
+  f.db.close();
+  const restoredDb = openDatabase(filename);
+  cleanup.push(() => restoredDb.close());
+  const restored = new Game(restoredDb, () => new PracticeGM()).members(f.c.id)[0];
+  expect(restored.character.equipmentOptions).toHaveLength(5);
+  expect(restored.character.abilities.every((ability) => ability.level === 1)).toBe(true);
+  expect(restored.state.pendingLevelUps).toBe(2);
+  expect(restored.state.equipmentChosen).toBe(true);
+  expect(restored.state.equipment).toEqual(member.state.equipment);
+  expect(restored.state.inventory).toEqual(member.state.inventory);
+  const pending = new Game(restoredDb, () => new PracticeGM()).members(f.c.id)[1];
+  expect(pending.state.starterEquipment).toHaveLength(5);
+  expect(pending.state.starterEquipment.every((item) => item.id.startsWith(`${unready.id}-`))).toBe(true);
 });

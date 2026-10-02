@@ -10,13 +10,50 @@ import {
   type Slot,
   type Stat,
   type LootBlueprint,
+  type Ability,
   stats,
+  slots,
 } from './schema';
 
 export class RuleError extends Error {}
 
 export const RULESET = 'roguelike-v1';
 export const modifier = (score: number) => Math.floor((score - 5) / 2);
+export const abilityStrength = (ability: Ability) => ability.level - 1;
+export function abilityMechanics(ability: Ability): string {
+  const strength = abilityStrength(ability);
+  if (ability.kind === 'utility')
+    return `Advantage${strength ? ` and +${strength}` : ''} on a relevant ${ability.stat} check · Once per floor; safe rest restores use`;
+  const effect = {
+    strike: `2d6 + ${ability.stat} modifier${strength ? ` + ${strength * 2}` : ''} damage · Attack roll vs defense`,
+    mend: `1d6 + ${ability.stat} modifier${strength ? ` + ${strength * 2}` : ''} HP restored · ${ability.healing} healing · Self or ally`,
+    guard: `+${3 + strength} defense against the next enemy attack · Self or ally`,
+    assist: `Advantage${strength ? ` and +${strength}` : ''} on the next attack · Self or ally`,
+  }[ability.effect];
+  return `${effect} · Main action · Once per combat`;
+}
+export const equippedItems = (state: CharacterState) =>
+  Object.values(state.equipment).filter((item, i, all): item is Item =>
+    !!item && all.findIndex((other) => other?.id === item.id) === i);
+export const equipmentBonus = (state: CharacterState, stat: Stat, kind: 'attackBonus' | 'checkBonus') =>
+  equippedItems(state).filter((item) => item.scaling.includes(stat)).reduce((sum, item) => sum + (item[kind] ?? 0), 0);
+export function availableAbility(character: Character, state: CharacterState, name: string, kind: Ability['kind']): Ability {
+  const ability = character.abilities.find((ability) => ability.name === name && ability.kind === kind);
+  if (!ability) throw new RuleError('Choose a current ability for this kind of action.');
+  if ((state.abilityUses?.[ability.name] ?? 0) >= 1) throw new RuleError('That ability has already been used.');
+  return ability;
+}
+export function spendAbility(state: CharacterState, ability: Ability) {
+  state.abilityUses = { ...state.abilityUses, [ability.name]: 1 };
+}
+export function resetAbilities(character: Character, state: CharacterState, kind: Ability['kind']) {
+  state.abilityUses = Object.fromEntries(Object.entries(state.abilityUses ?? {})
+    .filter(([name]) => !character.abilities.some((ability) => ability.name === name && ability.kind === kind)));
+  if (kind === 'combat') {
+    delete state.abilityGuard;
+    delete state.abilityAssist;
+  }
+}
 export function startingStats(character: Character): Record<Stat, number> {
   const result = { STR: 5, DEX: 5, INT: 5 };
   if (new Set(character.traits.map((t) => t.id)).size !== character.traits.length)
@@ -62,19 +99,44 @@ export function startingStats(character: Character): Record<Stat, number> {
     throw new RuleError('Trait bonuses cannot stack beyond +1 defense, +1 regeneration, or ±4 HP.');
   if (new Set(all.map((t) => t.healing).filter((x) => x !== 'normal')).size > 1)
     throw new RuleError('Choose a single compatible healing mode.');
-  if (['left', 'right'].every((slot) => all.some((t) => t.blocked.includes(slot as Slot))))
-    throw new RuleError('Leave at least one hand slot usable for your starting equipment.');
-  if (new Set(character.weaponOptions.map((w) => w.stat)).size !== 3)
-    throw new RuleError('Provide one starting weapon for each stat.');
+  if (slots.every((slot) => all.some((t) => t.blocked.includes(slot))))
+    throw new RuleError('Leave at least one equipment slot usable for starting equipment.');
   return result;
 }
-export const normalizeCharacter = (character: Character): Character => ({
-  ...character,
-  role: character.species,
-  stats: startingStats(character),
-  abilities: [],
-  equipment: [],
-});
+export function normalizeCharacter(character: Character): Character {
+  const result = { ...character, role: character.species, stats: startingStats(character), equipment: [] };
+  if (
+    new Set(result.equipmentOptions.map((item) => item.id)).size !== 5 ||
+    result.equipmentOptions.some((item) => !usableSlots(result, result.stats, item).length)
+  )
+    throw new RuleError('Provide five distinct, equippable starting equipment choices.');
+  if (
+    result.equipmentOptions.some(
+      (item) =>
+        item.rarity !== 'Common' ||
+        item.hands !== 1 ||
+        item.healing !== 0 ||
+        item.initiativePenalty !== 0 ||
+        Object.values(item.requirements).some((n) => n !== 0) ||
+        item.damage !== (item.kind === 'weapon' ? '1d6' : '1d4') ||
+        item.defense !== (['armour', 'helmet', 'boots', 'shield'].includes(item.kind) ? 1 : 0) ||
+        item.attackBonus !== (item.kind === 'focus' ? 1 : 0) ||
+        item.checkBonus !== (item.kind === 'relic' ? 1 : 0),
+    )
+  )
+    throw new RuleError('Starting equipment must use common, level-one power.');
+  if (new Set(result.abilities.map((ability) => ability.name.toLowerCase())).size !== result.abilities.length)
+    throw new RuleError('Ability names must be unique.');
+  const selected = result.selectedEquipmentIds;
+  if (
+    selected.length &&
+    (selected.length !== 2 ||
+      new Set(selected).size !== 2 ||
+      selected.some((id) => !result.equipmentOptions.some((item) => item.id === id)))
+  )
+    throw new RuleError('Choose exactly two different starting equipment pieces.');
+  return result;
+}
 export const maxHp = (character: Character, state: Pick<CharacterState, 'stats' | 'level'>) =>
   Math.max(
     5,
@@ -95,6 +157,7 @@ export function defense(character: Character, state: CharacterState) {
   return (
     10 +
     (state.guarding ? 2 : 0) +
+    (state.abilityGuard ?? 0) +
     (armour ? scaling(state, armour) : modifier(state.stats.DEX)) +
     character.traits.reduce((n, t) => n + (t.defense ?? 0), 0) +
     Object.values(state.equipment)
@@ -115,16 +178,77 @@ export const baseItem = (id: string, name: string, kind: Item['kind']): Item => 
   defense: 0,
   initiativePenalty: 0,
   healing: 0,
+  attackBonus: 0,
+  checkBonus: 0,
   description: '',
 });
-export function starterWeapons(seed: string, character: Character): Item[] {
-  return character.weaponOptions.map((option, i) => ({
-    ...baseItem(`${seed}-${i}`, option.name, 'weapon'),
-    scaling: [option.stat],
-    light: option.stat === 'DEX',
-    damage: '1d6',
-    description: option.description,
-  }));
+export function usableSlots(character: Character, scores: Record<Stat, number>, item: Item): Slot[] {
+  if (stats.some((stat) => scores[stat] < item.requirements[stat])) return [];
+  if (
+    character.traits.some((t) => t.heavyRestricted) &&
+    item.scaling.includes('STR') &&
+    (item.kind === 'armour' || (item.kind === 'weapon' && item.hands === 2))
+  )
+    return [];
+  const blocked = new Set(character.traits.flatMap((t) => t.blocked));
+  if (['weapon', 'shield', 'focus', 'relic'].includes(item.kind)) {
+    if (item.hands === 2 && (blocked.has('left') || blocked.has('right'))) return [];
+    return (['right', 'left'] as Slot[]).filter((slot) => !blocked.has(slot));
+  }
+  const slot = ({ armour: 'body', helmet: 'head', boots: 'boots' } as Partial<Record<Item['kind'], Slot>>)[
+    item.kind
+  ];
+  return slot && !blocked.has(slot) ? [slot] : [];
+}
+export function rollStartingEquipment(character: Character, draw: (sides: number) => number): Item[] {
+  const scores = startingStats(character);
+  const candidates: Item[] = [];
+  for (const kind of ['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'relic'] as const) {
+    for (const stat of ['weapon', 'armour', 'focus', 'relic'].includes(kind) ? stats : [null]) {
+      const item = {
+        ...baseItem('candidate', `${character.name}’s ${kind}`, kind),
+        scaling: stat ? [stat] : [],
+        light: kind === 'weapon' && stat === 'DEX',
+        damage: kind === 'weapon' ? '1d6' : '1d4',
+        defense: ['armour', 'helmet', 'boots', 'shield'].includes(kind) ? 1 : 0,
+        attackBonus: kind === 'focus' ? 1 : 0,
+        checkBonus: kind === 'relic' ? 1 : 0,
+      };
+      if (usableSlots(character, scores, item).length) candidates.push(item);
+    }
+  }
+  if (!candidates.length) throw new RuleError('This character cannot equip starting equipment.');
+  const kinds = [...new Set(candidates.map((item) => item.kind))];
+  const pick = <T>(values: T[]) => values[values.length === 1 ? 0 : draw(values.length) - 1];
+  return Array.from({ length: 5 }, (_, i) => {
+    const kind = pick(kinds);
+    const item = pick(candidates.filter((item) => item.kind === kind));
+    return { ...item, id: `starter-${i}`, name: `${item.name} ${i + 1}` };
+  });
+}
+export function chooseStartingEquipment(character: Character, state: CharacterState, ids: string[]) {
+  if (state.equipmentChosen) throw new RuleError('Your starting equipment is already chosen.');
+  if (
+    ids.length !== 2 ||
+    new Set(ids).size !== 2 ||
+    ids.some((id) => !state.starterEquipment.some((item) => item.id === id))
+  )
+    throw new RuleError('Choose exactly two different starting equipment pieces.');
+  const copy = structuredClone(state);
+  for (const id of ids) {
+    const item = copy.starterEquipment.find((item) => item.id === id)!;
+    const available = usableSlots(character, copy.stats, item);
+    if (!available.length) throw new RuleError('This starting item cannot be equipped by your character.');
+    addItem(character, copy, item);
+    const empty = available.find(
+      (slot) =>
+        !copy.equipment[slot] && (item.hands !== 2 || (!copy.equipment.left && !copy.equipment.right)),
+    );
+    if (empty) equip(character, copy, item.id, empty);
+  }
+  copy.equipmentChosen = true;
+  copy.starterEquipment = [];
+  Object.assign(state, copy);
 }
 export function initialState(character: Character, seed: string): CharacterState {
   const stats = startingStats(character);
@@ -140,20 +264,27 @@ export function initialState(character: Character, seed: string): CharacterState
     stats,
     level: 1,
     xp: 0,
-    statPoints: 0,
+    pendingLevelUps: 0,
+    abilityUses: {},
     gold: 0,
     inventory: [{ ...potion, quantity: 1 }],
     equipment: { left: null, right: null, body: null, head: null, boots: null },
     conditions: [],
     conditionTurns: {},
-    starterWeapons: starterWeapons(seed, character),
-    weaponChosen: false,
+    starterEquipment: character.equipmentOptions.map((item) => ({ ...item, id: `${seed}-${item.id}` })),
+    equipmentChosen: false,
     kills: 0,
     bosses: 0,
     deathReason: null,
     restedFloor: null,
   };
   state.hp = state.maxHp = maxHp(character, state);
+  if (character.selectedEquipmentIds.length)
+    chooseStartingEquipment(
+      character,
+      state,
+      character.selectedEquipmentIds.map((id) => `${seed}-${id}`),
+    );
   return state;
 }
 export function naturalWeapon(character: Character): Item {
@@ -221,6 +352,11 @@ export function equip(character: Character, state: CharacterState, itemId: strin
     throw new RuleError('Your character’s anatomy prevents using that equipment slot.');
   const item = state.inventory.find((i) => i.id === itemId);
   if (!item) throw new RuleError('That item is not in your backpack.');
+  if (
+    item.hands === 2 &&
+    character.traits.some((t) => t.blocked.includes('left') || t.blocked.includes('right'))
+  )
+    throw new RuleError('Your character’s anatomy prevents using a two-handed item.');
   for (const stat of stats)
     if (state.stats[stat] < item.requirements[stat])
       throw new RuleError(`This item requires ${item.requirements[stat]} ${stat}.`);
@@ -284,21 +420,16 @@ export function grantXp(character: Character, state: CharacterState, amount: num
   while (state.xp >= 100) {
     state.xp -= 100;
     state.level++;
-    state.statPoints += 5;
+    state.pendingLevelUps++;
     state.maxHp = maxHp(character, state);
     state.hp = Math.min(state.maxHp, state.hp + 5);
   }
 }
-export function allocate(character: Character, state: CharacterState, points: Record<Stat, number>) {
-  if (
-    !state.statPoints ||
-    Object.values(points).some((n) => !Number.isInteger(n) || n < 0) ||
-    stats.reduce((n, s) => n + points[s], 0) !== state.statPoints
-  )
-    throw new RuleError('Allocate all available stat points between STR, DEX, and INT.');
+export function gainAttributes(character: Character, state: CharacterState, attributes: Stat[]) {
+  if (attributes.length !== 2 || attributes.some((stat) => !stats.includes(stat)))
+    throw new RuleError('Gain exactly two attribute points.');
   const oldMax = state.maxHp;
-  for (const stat of stats) state.stats[stat] += points[stat];
-  state.statPoints = 0;
+  for (const stat of attributes) state.stats[stat]++;
   state.maxHp = maxHp(character, state);
   state.hp = Math.min(state.maxHp, state.hp + state.maxHp - oldMax);
 }
@@ -362,6 +493,8 @@ export function randomLoot(
       ? Math.min(3, 1 + Math.floor(rank / 2))
       : 0,
     healing: blueprint.kind === 'consumable' ? Math.min(12, 6 + rank * 2) : 0,
+    attackBonus: blueprint.kind === 'focus' ? Math.min(3, 1 + Math.floor(rank / 2)) : 0,
+    checkBonus: blueprint.kind === 'relic' ? Math.min(3, 1 + Math.floor(rank / 2)) : 0,
     initiativePenalty: blueprint.kind === 'armour' && blueprint.scaling.includes('STR') ? -2 : 0,
   };
   if (rarity === 'Cursed') {
@@ -383,6 +516,14 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
   for (const id of ids)
     if (!members.some((m) => m.id === id && m.state.hp > 0))
       throw new RuleError('Combat action references an unavailable character.');
+  for (const action of input.actions) {
+    if ((action.main === 'ability') !== !!action.abilityName)
+      throw new RuleError('An ability action must name the chosen ability.');
+    if (action.abilityName) {
+      const member = members.find((member) => member.id === action.memberId)!;
+      availableAbility(member.character, member.state, action.abilityName, 'combat');
+    }
+  }
   for (const target of input.enemyTargets)
     if (
       !encounter.enemies.some((e) => e.id === target.enemyId) ||
@@ -394,9 +535,11 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
     target: Enemy,
     offhand = false,
     slot?: 'left' | 'right' | 'natural' | null,
+    ability?: Ability,
   ) => {
     const primary =
-      slot === 'natural'
+      ability ? { ...baseItem('ability', ability.name, 'weapon'), scaling: [ability.stat], damage: '2d6' }
+      : slot === 'natural'
         ? naturalWeapon(member.character)
         : slot
           ? member.state.equipment[slot]
@@ -412,15 +555,23 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
       throw new RuleError('Equip a weapon or use your natural attack.');
     if (offhand && (!weapon.light || !primary?.light || primary.id === weapon.id))
       throw new RuleError('An off-hand attack requires two distinct light one-handed weapons.');
-    const mod = scaling(member.state, weapon) - (member.state.conditions.includes('Weakened') ? 2 : 0);
-    const die = roll(
+    const stat = weapon.scaling[0] ?? 'STR';
+    const assist = member.state.abilityAssist;
+    const mod = scaling(member.state, weapon) + equipmentBonus(member.state, stat, 'attackBonus') +
+      (assist ?? 0) - (member.state.conditions.includes('Weakened') ? 2 : 0);
+    let die = roll(
       20,
       `${member.character.name}: ${offhand ? 'off-hand ' : ''}attack`,
       member.id,
-      weapon.scaling[0] ?? 'STR',
+      stat,
       mod,
       target.defense,
     );
+    if (assist !== undefined) {
+      die = Math.max(die, roll(20, `${member.character.name}: assisted attack`, member.id, stat, mod, target.defense));
+      delete member.state.abilityAssist;
+      logs.push(`${member.character.name} attacks with advantage${assist ? ` and +${assist}` : ''}.`);
+    }
     if (die === 1) {
       const harm = roll(4, 'Catastrophic attack backlash', member.id, 'STR');
       damage(member.state, harm, 'A catastrophic attack failure.');
@@ -432,7 +583,7 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
         weapon,
         roll,
         member.id,
-        offhand ? 0 : scaling(member.state, weapon),
+        offhand ? 0 : scaling(member.state, weapon) + (ability ? abilityStrength(ability) * 2 : 0),
         die === 20,
       );
       target.hp = Math.max(0, target.hp - dealt);
@@ -472,6 +623,36 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
           logs.push(`${member.character.name} cannot escape.`);
           if (die === 1) damage(member.state, 4, 'Catastrophic failed escape.');
         }
+      } else if (action.main === 'ability') {
+        const ability = availableAbility(member.character, member.state, action.abilityName!, 'combat');
+        if (ability.effect === 'strike') {
+          const target = encounter.enemies.find((enemy) => enemy.id === action.targetId && enemy.hp > 0 && !enemy.withdrawn);
+          if (!target) logs.push(`${member.character.name}'s ability target is unavailable; the use is preserved.`);
+          else {
+            spendAbility(member.state, ability);
+            attack(member, target, false, null, ability);
+          }
+        } else {
+          const target = action.targetId === null ? member : members.find((ally) => ally.id === action.targetId && ally.state.hp > 0 && !fled.has(ally.id));
+          if (!target) throw new RuleError('Choose yourself or a living ally for this ability.');
+          const strength = abilityStrength(ability);
+          if (ability.effect === 'mend') {
+            const mode = target.character.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal';
+            if (mode !== ability.healing) throw new RuleError('This healing ability is incompatible with the target.');
+            if (target.state.hp >= target.state.maxHp) throw new RuleError('The target is already at full health.');
+            const healing = Math.max(1, roll(6, `${ability.name}: healing`, member.id, ability.stat) + modifier(member.state.stats[ability.stat]) + strength * 2);
+            const restored = Math.min(healing, target.state.maxHp - target.state.hp);
+            target.state.hp += restored;
+            logs.push(`${member.character.name} uses ${ability.name}: ${target.character.name} recovers ${restored} HP (${ability.healing} healing).`);
+          } else if (ability.effect === 'guard') {
+            target.state.abilityGuard = Math.max(target.state.abilityGuard ?? 0, 3 + strength);
+            logs.push(`${member.character.name} uses ${ability.name}: ${target.character.name} gains +${target.state.abilityGuard} defense against the next enemy attack.`);
+          } else {
+            target.state.abilityAssist = Math.max(target.state.abilityAssist ?? 0, strength);
+            logs.push(`${member.character.name} uses ${ability.name}: ${target.character.name} gains advantage${strength ? ` and +${strength}` : ''} on their next attack.`);
+          }
+          spendAbility(member.state, ability);
+        }
       } else {
         const target = encounter.enemies.find((e) => e.id === action.targetId && e.hp > 0 && !e.withdrawn);
         if (!target) {
@@ -480,7 +661,8 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
           );
         } else if (action.main === 'attack') attack(member, target, false, action.weaponSlot);
         else {
-          const mod = modifier(member.state.stats[action.stat]);
+          const mod = modifier(member.state.stats[action.stat]) +
+            (action.effect === 'influence' ? 0 : equipmentBonus(member.state, action.stat, 'attackBonus'));
           const dc = Math.max(action.effect === 'influence' ? 15 : 5, action.dc ?? 10);
           const die = roll(
             20,
@@ -546,6 +728,7 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
         enemy.attack,
         targetDefense,
       );
+      delete target.state.abilityGuard;
       if (die === 1) {
         enemy.hp = Math.max(0, enemy.hp - 2);
         logs.push(`${enemy.name} catastrophically fails and suffers 2 damage.`);
@@ -608,6 +791,8 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
   if (encounter.victory || encounter.escaped)
     for (const member of members) {
       member.state.guarding = false;
+      delete member.state.abilityGuard;
+      delete member.state.abilityAssist;
       member.state.conditions = member.state.conditions.filter((c) => c !== 'Escaped');
       delete member.state.conditionTurns.Escaped;
     }

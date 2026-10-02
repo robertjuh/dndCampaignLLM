@@ -25,6 +25,12 @@ import {
   combatSchema,
   lootSchema,
   type LootBlueprint,
+  type Ability,
+  type LevelUpChoice,
+  type LevelUpReward,
+  levelUpChoiceSchema,
+  levelUpRewardSchema,
+  stats,
 } from '../shared/schema';
 import {
   normalizeCharacter,
@@ -33,7 +39,14 @@ import {
   modifier,
   maxHp,
   grantXp,
-  allocate,
+  gainAttributes,
+  abilityMechanics,
+  abilityStrength,
+  equipmentBonus,
+  availableAbility,
+  spendAbility,
+  resetAbilities,
+  chooseStartingEquipment,
   equip,
   unequip,
   removeItem,
@@ -92,6 +105,39 @@ type Draft = { members: Member[]; scene: Scene; receipts: Record<string, unknown
 export interface GameMaster {
   resolve(context: GMContext, roll: GameTools): Promise<Outcome>;
   generate?(concept: string, signal?: AbortSignal): Promise<Character>;
+  levelUp?(context: LevelUpContext): Promise<LevelUpReward>;
+}
+export type LevelUpContext = {
+  config: CampaignConfig;
+  character: Character;
+  state: CharacterState;
+  choice: LevelUpChoice;
+  target: Ability | null;
+  attributes: Stat[];
+};
+export function validateLevelUpReward(context: LevelUpContext, input: unknown): LevelUpReward {
+  const reward = levelUpRewardSchema.parse(input);
+  if (context.choice === 'attributes') {
+    if (reward.ability) throw new GameError('An attribute reward cannot also grant an ability.');
+  } else {
+    const kind = context.choice.endsWith('combat') ? 'combat' : 'utility';
+    if (
+      !reward.ability ||
+      reward.ability.kind !== kind ||
+      reward.ability.level !== (context.target ? context.target.level + 1 : 1)
+    )
+      throw new GameError('The ability must match the chosen category and level.');
+    if (
+      context.target
+        ? reward.ability.name !== context.target.name
+        : context.character.abilities.some((a) => a.name.toLowerCase() === reward.ability!.name.toLowerCase())
+    )
+      throw new GameError('Upgrade the selected ability, or give a new ability a unique name.');
+    if (context.target && (reward.ability.effect !== context.target.effect ||
+      reward.ability.stat !== context.target.stat || reward.ability.healing !== context.target.healing))
+      throw new GameError('An upgrade must preserve the ability’s effect, attribute, and healing type.');
+  }
+  return reward;
 }
 export type ProviderFactory = (ownerId: string, config: CampaignConfig) => GameMaster;
 const json = JSON.stringify;
@@ -103,6 +149,7 @@ export class Game {
   private running = new Map<string, Promise<void>>();
   private mechanicalIndex = new Map<string, number>();
   private listeners = new Map<string, Set<() => void>>();
+  private leveling = new Set<string>();
   constructor(
     public db: DB,
     private providers: ProviderFactory,
@@ -148,6 +195,36 @@ export class Game {
       .prepare('INSERT INTO characters(id, owner_id, sheet) VALUES(?, ?, ?)')
       .run(id, ownerId, json(sheet));
     return { id, ...sheet };
+  }
+  updateCharacter(ownerId: string, id: string, input: unknown) {
+    const sheet = normalizeCharacter(characterSchema.parse(input));
+    const result = this.db
+      .prepare('UPDATE characters SET sheet = ? WHERE id = ? AND owner_id = ?')
+      .run(json(sheet), id, ownerId);
+    if (!result.changes) throw new GameError('Character not found in your library.', 404);
+    return { id, ...sheet };
+  }
+  editLobbyCharacter(id: string, playerId: string, input: unknown) {
+    const saved = this.db.transaction(() => {
+      if (this.campaign(id).status !== 'lobby')
+        throw new GameError(
+          'The story has started. Edit your library template for a future campaign instead.',
+          409,
+        );
+      const member = this.db
+        .prepare('SELECT id, character_id FROM members WHERE campaign_id = ? AND player_id = ?')
+        .get(id, playerId) as { id: string; character_id: string } | undefined;
+      if (!member) throw new GameError('Join this campaign first.', 403);
+      const updated = this.updateCharacter(playerId, member.character_id, input);
+      const { id: _id, ...sheet } = updated;
+      this.db
+        .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+        .run(json(sheet), json(initialState(sheet, randomUUID())), member.id);
+      this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
+      return updated;
+    })();
+    this.emit(id);
+    return saved;
   }
   list(playerId: string) {
     return (
@@ -265,12 +342,14 @@ export class Game {
           text: string;
           passed: number;
           accepts_lethal_risk: number;
+          ability_name: string | null;
         }[]
       ).map((a) => ({
         memberId: a.member_id,
         text: a.text,
         passed: !!a.passed,
         acceptsLethalRisk: !!a.accepts_lethal_risk,
+        ...(a.ability_name ? { abilityName: a.ability_name } : {}),
       })),
       rolls: (
         this.db.prepare('SELECT result FROM rolls WHERE turn_id = ? ORDER BY rowid').all(row.id) as {
@@ -325,8 +404,8 @@ export class Game {
       if (c.status !== 'lobby') throw new GameError('This campaign has already started.', 409);
       if (!this.members(id).some((m) => m.active))
         throw new GameError('At least one player needs to join first.');
-      if (this.members(id).some((m) => m.active && !m.state.weaponChosen))
-        throw new GameError('Every player must choose their starting weapon first.');
+      if (this.members(id).some((m) => m.active && !m.state.equipmentChosen))
+        throw new GameError('Every player must choose two starting equipment pieces first.');
       this.db.prepare("UPDATE campaigns SET status = 'active' WHERE id = ?").run(id);
       this.newTurn(id, 0, 'queued');
     })();
@@ -340,6 +419,7 @@ export class Game {
     text: string,
     passed: boolean,
     acceptsLethalRisk = false,
+    abilityName: string | null = null,
   ) {
     this.db.transaction(() => {
       const row = this.pending(id);
@@ -349,14 +429,20 @@ export class Game {
       if (!member || !(JSON.parse(row.roster) as string[]).includes(member.id))
         throw new GameError('You join the action from the next turn.', 403);
       if (member.state.hp <= 0) throw new GameError('This character’s run has ended.');
-      if (member.state.statPoints > 0)
-        throw new GameError('Allocate your level-up points before taking another action.');
-      if (!member.state.weaponChosen) throw new GameError('Choose your starting weapon first.');
+      if (member.state.pendingLevelUps > 0)
+        throw new GameError('Choose your level-up reward before taking another action.');
+      if (!member.state.equipmentChosen) throw new GameError('Choose two starting equipment pieces first.');
+      if (passed && abilityName) throw new GameError('Passing cannot use an ability.');
+      if (abilityName) {
+        const scene: Scene = JSON.parse(this.campaign(id).scene!);
+        const inCombat = scene.encounter && !scene.encounter.victory && !scene.encounter.escaped;
+        availableAbility(member.character, member.state, abilityName, inCombat ? 'combat' : 'utility');
+      }
       this.db
         .prepare(
-          'INSERT INTO actions(turn_id, member_id, text, passed, accepts_lethal_risk) VALUES(?, ?, ?, ?, ?) ON CONFLICT(turn_id, member_id) DO UPDATE SET text = excluded.text, passed = excluded.passed, accepts_lethal_risk = excluded.accepts_lethal_risk',
+          'INSERT INTO actions(turn_id, member_id, text, passed, accepts_lethal_risk, ability_name) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(turn_id, member_id) DO UPDATE SET text = excluded.text, passed = excluded.passed, accepts_lethal_risk = excluded.accepts_lethal_risk, ability_name = excluded.ability_name',
         )
-        .run(turnId, member.id, passed ? '' : text, +passed, +acceptsLethalRisk);
+        .run(turnId, member.id, passed ? '' : text, +passed, +acceptsLethalRisk, abilityName);
       this.queueIfReady(id);
     })();
     this.emit(id);
@@ -415,67 +501,53 @@ export class Game {
     const check = checkSchema.parse(input);
     const row = this.pending(id);
     if (!row || row.id !== turnId || row.phase !== 'resolving') throw new GameError('No active resolution.');
-    // One check per character in this first ruleset. Rephrasing a request cannot reroll it.
-    const scene = this.snapshot(id, this.campaign(id).owner_id).scene;
-    if (scene.encounter && !scene.encounter.victory && !scene.encounter.escaped)
-      throw new GameError('Use resolve_combat to adjudicate a combat round.');
-    if (
-      check.lethal &&
-      (!scene.lethalWarning ||
-        !this.turn(row).actions.some((a) => a.memberId === check.memberId && a.acceptsLethalRisk))
-    )
-      throw new GameError('Lethal risk must be warned about and explicitly accepted before a fatal check.');
-    const key = check.memberId;
-    const prior = this.db
-      .prepare('SELECT parameters, result FROM rolls WHERE turn_id = ? AND check_key = ?')
-      .get(turnId, key) as { parameters: string; result: string } | undefined;
+    const turn = this.turn(row);
+    const action = turn.actions.find((action) => action.memberId === check.memberId && !action.passed);
+    if (!action || turn.number === 0 || !turn.roster.includes(check.memberId))
+      throw new GameError('Only a character acting this turn can make a check.');
+    if ((action.abilityName ?? null) !== (check.abilityName ?? null))
+      throw new GameError('Use exactly the ability selected by the player.');
+    // One immutable check per character. Retries reuse its dice and consumed ability use.
+    const prior = this.db.prepare('SELECT parameters, result FROM rolls WHERE turn_id = ? AND check_key = ?')
+      .get(turnId, check.memberId) as { parameters: string; result: string } | undefined;
     if (prior) {
       const original = JSON.parse(prior.parameters) as Check;
-      if (
-        original.stat !== check.stat ||
-        original.dc !== check.dc ||
-        original.mode !== check.mode ||
-        original.lethal !== check.lethal
-      )
+      if (original.stat !== check.stat || original.dc !== check.dc || original.mode !== check.mode ||
+          original.lethal !== check.lethal || (original.abilityName ?? null) !== (check.abilityName ?? null))
         throw new GameError('A check is already locked for this character. Use its saved result.');
       return JSON.parse(prior.result);
     }
-    const member = this.members(id).find((m) => m.id === check.memberId);
-    const turn = this.turn(row);
-    if (
-      !member ||
-      !turn.roster.includes(member.id) ||
-      turn.number === 0 ||
-      !turn.actions.some((a) => a.memberId === member.id && !a.passed)
-    )
-      throw new GameError('Only a character acting this turn can make a check.');
-    const dice = Array.from({ length: check.mode === 'normal' ? 1 : 2 }, () => this.die(id, 20));
-    if (dice.some((n) => !Number.isInteger(n) || n < 1 || n > 20))
-      throw new Error('Random source returned an invalid die.');
-    const selected = check.mode === 'disadvantage' ? Math.min(...dice) : Math.max(...dice);
-    const bonus = modifier(member.state.stats[check.stat]);
-    const total = selected + bonus;
-    const result: Roll = {
-      ...check,
-      id: randomUUID(),
-      dice,
-      modifier: bonus,
-      total,
-      success: selected !== 1 && (selected === 20 || total >= check.dc),
-      critical: selected === 1 ? 'failure' : selected === 20 ? 'success' : undefined,
-      source: this.source(id),
-    };
-    this.db.transaction(() => {
-      this.db
-        .prepare('INSERT INTO rolls VALUES(?, ?, ?, ?, ?)')
-        .run(result.id, turnId, key, json(check), json(result));
-      if (check.lethal && selected === 1)
-        this.withDraft(id, turnId, (draft) => {
-          const target = draft.members.find((m) => m.id === member.id)!;
-          damage(target.state, target.state.hp, `Catastrophic failure: ${check.reason}`);
-          return null;
-        });
-    })();
+    const result = this.withDraft(id, turnId, (draft) => {
+      const scene = draft.scene;
+      if (scene.encounter && !scene.encounter.victory && !scene.encounter.escaped)
+        throw new GameError('Use resolve_combat to adjudicate a combat round.');
+      if (check.lethal && (!scene.lethalWarning || !action.acceptsLethalRisk))
+        throw new GameError('Lethal risk must be warned about and explicitly accepted before a fatal check.');
+      const member = draft.members.find((member) => member.id === check.memberId)!;
+      const ability = check.abilityName ? availableAbility(member.character, member.state, check.abilityName, 'utility') : null;
+      if (ability && ability.stat !== check.stat)
+        throw new GameError('This ability must use its saved attribute for the relevant check.');
+      const mode = ability ? (check.mode === 'disadvantage' ? 'normal' : 'advantage') : check.mode;
+      const dice = Array.from({ length: mode === 'normal' ? 1 : 2 }, () => this.die(id, 20));
+      if (dice.some((die) => !Number.isInteger(die) || die < 1 || die > 20))
+        throw new Error('Random source returned an invalid die.');
+      const selected = mode === 'disadvantage' ? Math.min(...dice) : Math.max(...dice);
+      const bonus = modifier(member.state.stats[check.stat]) + equipmentBonus(member.state, check.stat, 'checkBonus') +
+        (ability ? abilityStrength(ability) : 0);
+      const total = selected + bonus;
+      const result: Roll = {
+        ...check, mode, id: randomUUID(), dice, modifier: bonus, total,
+        success: selected !== 1 && (selected === 20 || total >= check.dc),
+        critical: selected === 1 ? 'failure' : selected === 20 ? 'success' : undefined,
+        source: this.source(id),
+        ...(ability ? { label: `${member.character.name} · ${ability.name} · ${check.stat}` } : {}),
+      };
+      this.db.prepare('INSERT INTO rolls VALUES(?, ?, ?, ?, ?)')
+        .run(result.id, turnId, check.memberId, json(check), json(result));
+      if (ability) spendAbility(member.state, ability);
+      if (check.lethal && selected === 1) damage(member.state, member.state.hp, `Catastrophic failure: ${check.reason}`);
+      return result;
+    });
     this.emit(id);
     return result;
   }
@@ -555,6 +627,9 @@ export class Game {
     this.mechanicalIndex.set(turnId, 0);
     return this.withDraft(id, turnId, (draft) => {
       if (draft.receipts.startCombat) return draft.receipts.startCombat;
+      const turn = this.turn(this.pending(id)!);
+      if (turn.actions.some((action) => action.abilityName && !turn.rolls.some((roll) => roll.memberId === action.memberId && roll.abilityName === action.abilityName)))
+        throw new GameError('Resolve the selected utility ability checks before starting combat.');
       if (draft.scene.encounter && !draft.scene.encounter.victory && !draft.scene.encounter.escaped)
         throw new GameError('Combat is already active.');
       if (
@@ -594,6 +669,7 @@ export class Game {
         victory: false,
         escaped: false,
       };
+      for (const member of draft.members) resetAbilities(member.character, member.state, 'combat');
       draft.scene.safeRest = false;
       draft.receipts.startCombat = structuredClone(draft.scene.encounter);
       return draft.receipts.startCombat;
@@ -616,6 +692,11 @@ export class Game {
         throw new GameError(
           'Interpret exactly the submitted non-pass actions; never invent player decisions.',
         );
+      for (const action of parsed.actions) {
+        const selected = turn.actions.find((submitted) => submitted.memberId === action.memberId)!.abilityName ?? null;
+        if ((action.abilityName ?? null) !== selected || (action.main === 'ability') !== !!selected)
+          throw new GameError('Resolve exactly the combat ability selected by the player.');
+      }
       const active = draft.members.filter(
         (m) => turn.roster.includes(m.id) || m.state.conditions.includes('Escaped'),
       );
@@ -748,6 +829,11 @@ export class Game {
           'Combat state comes from the rules engine; do not apply narrative changes again.',
         );
       const budgets = new Map<string, number>();
+      const submitted = this.turn(row);
+      if (submitted.actions.some((action) => action.abilityName &&
+        draft.members.find((member) => member.id === action.memberId)?.character.abilities.find((ability) => ability.name === action.abilityName)?.kind === 'utility' &&
+        !submitted.rolls.some((roll) => roll.memberId === action.memberId && roll.abilityName === action.abilityName)))
+        throw new GameError('Resolve each selected utility ability with its relevant check before narrating.');
       for (const change of outcome.changes) {
         const member = draft.members.find((m) => m.id === change.memberId);
         if (!member || !(JSON.parse(row.roster) as string[]).includes(member.id))
@@ -789,8 +875,8 @@ export class Game {
         }
       }
       if (outcome.nextFloor) {
-        if (draft.members.some((m) => m.active && m.state.hp > 0 && m.state.statPoints > 0))
-          throw new GameError('Allocate all level-up points before changing floors.');
+        if (draft.members.some((m) => m.active && m.state.hp > 0 && m.state.pendingLevelUps > 0))
+          throw new GameError('Choose all level-up rewards before changing floors.');
         if (combatActive)
           throw new GameError('The party cannot leave an active combat through a narrative update.');
         if (row.number > 0 && !draft.scene.floor.cleared)
@@ -805,6 +891,7 @@ export class Game {
         draft.scene.usedRest = false;
         draft.scene.safeRest = false;
         draft.scene.loot = [];
+        for (const member of draft.members) resetAbilities(member.character, member.state, 'utility');
       }
       if (outcome.safeRest && !combatActive) {
         draft.scene.safeRest = true;
@@ -835,7 +922,7 @@ export class Game {
   manageCharacter(
     id: string,
     playerId: string,
-    action: { type: string; itemId?: string; slot?: Slot; points?: Record<Stat, number> },
+    action: { type: string; itemId?: string; itemIds?: string[]; slot?: Slot },
   ) {
     this.db.transaction(() => {
       const c = this.campaign(id);
@@ -843,6 +930,7 @@ export class Game {
       if (row && row.phase !== 'collecting') throw new GameError('Wait until this round finishes.');
       const member = this.members(id).find((m) => m.playerId === playerId);
       if (!member) throw new GameError('Join this campaign first.', 403);
+      if (this.leveling.has(member.id)) throw new GameError('Your level-up reward is being generated.', 409);
       if (member.state.hp <= 0) throw new GameError('This character’s run has ended.');
       if (row && this.turn(row).actions.some((a) => a.memberId === member.id))
         throw new GameError('You already submitted this turn. Equipment and stats are locked.');
@@ -852,21 +940,8 @@ export class Game {
       if (inCombat && ['equip', 'unequip', 'heal', 'rest', 'take', 'drop'].includes(action.type))
         throw new GameError('During combat, describe this as your main or minor action in chat.');
       if (action.type === 'starter') {
-        if (state.weaponChosen) throw new GameError('Your starting weapon is already chosen.');
-        const item = state.starterWeapons.find((i) => i.id === action.itemId);
-        if (!item) throw new GameError('Choose one of your starting weapons.');
-        addItem(member.character, state, item);
-        equip(
-          member.character,
-          state,
-          item.id,
-          member.character.traits.some((t) => t.blocked.includes('right')) ? 'left' : 'right',
-        );
-        state.weaponChosen = true;
-        state.starterWeapons = [];
-      } else if (action.type === 'allocate' && action.points)
-        allocate(member.character, state, action.points);
-      else if (action.type === 'equip' && action.itemId && action.slot)
+        chooseStartingEquipment(member.character, state, action.itemIds ?? []);
+      } else if (action.type === 'equip' && action.itemId && action.slot)
         equip(member.character, state, action.itemId, action.slot);
       else if (action.type === 'unequip' && action.slot) unequip(member.character, state, action.slot);
       else if (action.type === 'heal' && action.itemId) healWithItem(member.character, state, action.itemId);
@@ -884,6 +959,7 @@ export class Game {
           throw new GameError('A safe rest is not available.');
         state.hp = Math.min(state.maxHp, state.hp + Math.ceil(state.maxHp / 4));
         state.restedFloor = scene.floor.number;
+        resetAbilities(member.character, state, 'utility');
       } else throw new GameError('Unknown character action.');
       this.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(json(state), member.id);
       this.db
@@ -892,6 +968,76 @@ export class Game {
     })();
     this.emit(id);
     return this.snapshot(id, playerId);
+  }
+  async levelUp(id: string, playerId: string, input: unknown) {
+    const choice = levelUpChoiceSchema.parse(input);
+    const campaign = this.campaign(id);
+    const member = this.members(id).find((m) => m.playerId === playerId);
+    if (!member) throw new GameError('Join this campaign first.', 403);
+    const pending = this.pending(id);
+    if (
+      campaign.status !== 'active' ||
+      !pending ||
+      pending.phase !== 'collecting' ||
+      this.turn(pending).actions.some((a) => a.memberId === member.id)
+    )
+      throw new GameError('Wait until this round finishes before choosing a reward.');
+    if (member.state.hp <= 0 || member.state.pendingLevelUps < 1)
+      throw new GameError('No level-up reward is available.');
+    if (this.leveling.has(member.id)) throw new GameError('Your level-up reward is being generated.', 409);
+    const config: CampaignConfig = JSON.parse(campaign.config);
+    const provider = this.providers(campaign.owner_id, config);
+    if (!provider.levelUp) throw new GameError('Level-up generation is not available.');
+    this.leveling.add(member.id);
+    try {
+      if (this.diceFor) await this.diceFor(config).prepare();
+      const kind = choice.endsWith('combat') ? 'combat' : 'utility';
+      const candidates = member.character.abilities
+        .map((a, i) => ({ ...a, index: i }))
+        .filter((a) => a.kind === kind);
+      if (choice.startsWith('upgrade') && !candidates.length)
+        throw new GameError('There is no current ability in that category to upgrade.');
+      const targetIndex = choice.startsWith('upgrade')
+        ? candidates[candidates.length === 1 ? 0 : this.die(id, candidates.length) - 1].index
+        : -1;
+      const context: LevelUpContext = {
+        config,
+        character: member.character,
+        state: member.state,
+        choice,
+        target: member.character.abilities[targetIndex] ?? null,
+        attributes: choice === 'attributes' ? [stats[this.die(id, 3) - 1], stats[this.die(id, 3) - 1]] : [],
+      };
+      const reward = validateLevelUpReward(context, await provider.levelUp(structuredClone(context)));
+      this.db.transaction(() => {
+        const current = this.members(id).find((m) => m.id === member.id)!;
+        const turn = this.pending(id);
+        if (
+          !turn ||
+          turn.id !== pending.id ||
+          turn.phase !== 'collecting' ||
+          json(current.state) !== json(member.state) ||
+          json(current.character) !== json(member.character)
+        )
+          throw new GameError('Your character changed while generating this reward. Please try again.', 409);
+        if (reward.ability) {
+          if (targetIndex < 0) current.character.abilities.push(reward.ability);
+          else current.character.abilities[targetIndex] = reward.ability;
+        } else gainAttributes(current.character, current.state, context.attributes);
+        current.state.pendingLevelUps--;
+        current.state.lastLevelUp = reward.ability
+          ? `${reward.ability.name} · Level ${reward.ability.level}: ${abilityMechanics(reward.ability)}. ${reward.description}`
+          : `${context.attributes.map((stat) => `+1 ${stat}`).join(', ')}: ${reward.description}`;
+        this.db
+          .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+          .run(json(current.character), json(current.state), member.id);
+        this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
+      })();
+      this.emit(id);
+      return this.snapshot(id, playerId);
+    } finally {
+      this.leveling.delete(member.id);
+    }
   }
   kick(id: string) {
     if (this.running.has(id)) return;

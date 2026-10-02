@@ -40,10 +40,13 @@ import {
   type Snapshot,
   type CharacterState,
   type Slot,
-  type Stat,
+  levelUpChoices,
+  type LevelUpChoice,
 } from '../shared/schema';
 import { modifier, defense, capacity, occupiedSlots } from '../shared/rules';
+import { Abilities, CharacterSheet, EquipmentChoices, ItemDetails } from './CharacterSheet';
 import { CharacterEditor } from './CharacterEditor';
+import { ModelSelect } from './ModelSelect';
 import { api } from './api';
 import './style.css';
 
@@ -54,7 +57,7 @@ type Me = {
   characters: SavedCharacter[];
   campaigns: { id: string; config: CampaignConfig; status: string; isHost: boolean }[];
 };
-type Auth = { connected: boolean; email: string | null; usageUrl: string };
+type Auth = { connected: boolean; shared: boolean; email: string | null; usageUrl: string };
 const defaultCampaign: CampaignConfig = {
   ruleset: 'roguelike-v1',
   name: '',
@@ -567,10 +570,13 @@ function CreateCampaign() {
               <span>
                 A scripted scene with real rolls.
                 <br />
-                No AI connection needed.
+                No AI usage or credits needed.
               </span>
             </label>
           </div>
+          {config.provider === 'chatgpt' && (
+            <ModelSelect value={config.model} onChange={(value) => change('model', value)} disabled={busy} />
+          )}
         </div>
         <ErrorBox error={error} />
         <div className="form-actions">
@@ -588,6 +594,7 @@ function CreateCampaign() {
 
 function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
   const [draft, setDraft] = useState<Character | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   return (
     <div className="page">
       <div className="page-heading">
@@ -595,18 +602,27 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
           <div className="eyebrow">YOUR CHARACTERS, YOUR STORIES</div>
           <h1>Character library</h1>
           <p>
-            Create a custom template, generate from a concept, or adapt a saved character for another
-            campaign.
+            Describe a concept to discover your character, or reuse a saved character for another campaign.
           </p>
+          <a className="text-link" href="/settings">
+            Use Google sign-in to find your characters on another device
+          </a>
         </div>
-        <Button onClick={() => setDraft(templateCharacter('', ''))}>
+        <Button
+          onClick={() => {
+            setEditingId(null);
+            setDraft(templateCharacter('', ''));
+          }}
+        >
           <Plus {...icon} />
           Create a character
         </Button>
       </div>
       {draft && (
         <CharacterEditor
+          key={editingId ?? 'new'}
           initial={draft}
+          saveUrl={editingId ? `/api/characters/${editingId}` : undefined}
           onCancel={() => setDraft(null)}
           onSave={async () => {
             setDraft(null);
@@ -635,10 +651,25 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
                 <b>{t.name}</b> · {t.description}
               </p>
             ))}
+            <Abilities character={c} />
+            <Button
+              secondary
+              onClick={() => {
+                const { id, ...sheet } = c;
+                setEditingId(id);
+                setDraft(sheet);
+              }}
+            >
+              Review saved character
+            </Button>
+            <p className="small muted">
+              Regenerate from a concept for future games, or review your character before starting.
+            </p>
             <Button
               secondary
               onClick={() => {
                 const { id: _id, ...sheet } = c;
+                setEditingId(null);
                 setDraft(sheet);
               }}
             >
@@ -694,6 +725,7 @@ function Join({ code, me }: { code: string; me: Me }) {
         <Users size={45} strokeWidth={1} />
       </div>
       <ErrorBox error={error} />
+      <ProfileAccess name={me.name} />
       {invite && (
         <>
           <form className="form-panel join-form" onSubmit={join}>
@@ -751,6 +783,93 @@ function Join({ code, me }: { code: string; me: Me }) {
   );
 }
 
+function ProfileAccess({ name }: { name: string }) {
+  const [account, setAccount] = useState<{
+    configured: boolean;
+    signedIn: boolean;
+    email: string | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(
+    new URLSearchParams(location.search).has('googleError')
+      ? 'Google sign-in was cancelled or could not be verified. Your current profile is unchanged. Please try again.'
+      : '',
+  );
+  useEffect(() => {
+    api<typeof account>('/api/player-auth')
+      .then(setAccount)
+      .catch((e) => setError(errorText(e)));
+  }, []);
+  return (
+    <section className="form-panel profile-access">
+      <h2>Your player account</h2>
+      <p>
+        Playing as <b>{name}</b>
+        {account?.signedIn ? ` · ${account.email}` : ' · saved in this browser'}.
+      </p>
+      <p>
+        Sign in with the same Google account on your phone or laptop to open your characters and campaign seat
+        on this host.
+      </p>
+      {!account?.signedIn && (
+        <p className="small muted">
+          First time? Sign in on the browser containing your characters to attach this profile. If your Google
+          account already has a profile here, signing in opens that library instead; libraries are not merged.
+        </p>
+      )}
+      {account && !account.configured && (
+        <p role="status">
+          Google sign-in needs host setup: an OAuth web client and an HTTPS callback address. See the Google
+          sign-in section in README.md. You can keep playing with this browser profile meanwhile.
+        </p>
+      )}
+      <Button
+        secondary
+        disabled={busy || !account?.configured}
+        onClick={async () => {
+          setBusy(true);
+          setError('');
+          try {
+            const result = await api<{ url: string }>('/api/player-auth/google', {
+              returnTo: location.pathname,
+            });
+            location.assign(result.url);
+          } catch (e) {
+            setError(errorText(e));
+            setBusy(false);
+          }
+        }}
+      >
+        {account?.signedIn ? 'Switch Google account' : 'Continue with Google'}
+      </Button>
+      {account?.signedIn && (
+        <Button
+          secondary
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError('');
+            try {
+              await api('/api/player-auth/logout', {});
+              location.assign('/settings');
+            } catch (e) {
+              setError(errorText(e));
+              setBusy(false);
+            }
+          }}
+        >
+          Sign out of this device
+        </Button>
+      )}
+      <p className="small muted">
+        Google identifies your player profile. The host’s ChatGPT connection still runs the game. Characters
+        are stored on this host, not in Google Drive.
+      </p>
+      <ErrorBox error={error} />
+    </section>
+  );
+}
+
 function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
   const [auth, setAuth] = useState<Auth | null>(null);
   const [name, setName] = useState(me.name);
@@ -805,45 +924,57 @@ function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
             <h2>ChatGPT</h2>
             <p>Bring your subscription to the table.</p>
           </div>
-          <Badge green={!!auth?.connected}>{auth?.connected ? 'Connected' : 'Not connected'}</Badge>
+          <Badge green={!!auth?.connected}>
+            {auth?.connected ? (auth.shared ? 'Host signed in' : 'Signed in') : 'Not connected'}
+          </Badge>
         </div>
         <p>
-          Eligible requests use your ChatGPT plan and its usage limits. Gather has no API-key billing
+          Eligible requests use the connected ChatGPT plan and its usage limits. Gather has no API-key billing
           fallback.
         </p>
         {auth?.connected ? (
           <>
             <div className="connected-account">
               <CheckCheck size={20} />
-              {auth.email}
+              {auth.shared ? 'Using the host’s ChatGPT connection' : auth.email}
               <span>Using ChatGPT plan</span>
             </div>
+            <p className="muted small">
+              Sign-in is confirmed. AI requests can still be blocked by usage limits; signing in does not
+              confirm that generation is available.
+            </p>
             {models.length > 0 && (
               <p className="muted small">
-                Available models: {models.map((m) => m.name).join(', ')}. New campaigns use the first
-                available model.
+                Available models: {models.map((m) => m.name).join(', ')}. Choose a model when creating a
+                campaign. Automatic uses the first available model, regardless of price.
               </p>
             )}
-            <div className="button-row">
-              <a className="button secondary" href={auth.usageUrl} target="_blank" rel="noreferrer">
-                Manage usage
-                <ArrowRight size={16} />
-              </a>
-              <Button
-                secondary
-                onClick={async () => {
-                  try {
-                    const result = await api<{ message: string }>('/api/chatgpt/disconnect', {});
-                    setNotice(result.message);
-                    setAuth({ ...auth, connected: false });
-                  } catch (e) {
-                    setError(errorText(e));
-                  }
-                }}
-              >
-                Disconnect
-              </Button>
-            </div>
+            {auth.shared ? (
+              <p className="muted small">
+                The host provides ChatGPT for character creation and game turns. You do not need to sign in.
+              </p>
+            ) : (
+              <div className="button-row">
+                <a className="button secondary" href={auth.usageUrl} target="_blank" rel="noreferrer">
+                  Manage usage
+                  <ArrowRight size={16} />
+                </a>
+                <Button
+                  secondary
+                  onClick={async () => {
+                    try {
+                      const result = await api<{ message: string }>('/api/chatgpt/disconnect', {});
+                      setNotice(result.message);
+                      setAuth({ ...auth, connected: false });
+                    } catch (e) {
+                      setError(errorText(e));
+                    }
+                  }}
+                >
+                  Disconnect
+                </Button>
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -895,6 +1026,7 @@ function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
           campaigns.
         </p>
       </form>
+      <ProfileAccess name={me.name} />
     </div>
   );
 }
@@ -936,10 +1068,10 @@ function MemberCard({
         <span className={`ready-state ${ready ? 'ready' : ''}`}>
           {dead
             ? 'RUN ENDED'
-            : !state.weaponChosen
-              ? 'Choosing weapon'
-              : state.statPoints
-                ? `${state.statPoints} points to spend`
+            : !state.equipmentChosen
+              ? 'Choosing equipment'
+              : state.pendingLevelUps
+                ? `${state.pendingLevelUps} level-up rewards`
                 : !member.active
                   ? 'Sitting out'
                   : !current
@@ -991,6 +1123,8 @@ function MemberCard({
               <small>{t.description}</small>
             </p>
           ))}
+          <h4>Abilities</h4>
+          <Abilities character={member.character} />
           <h4>Equipment</h4>
           <ul>
             {Object.entries(state.equipment).map(([slot, item]) => (
@@ -1091,34 +1225,6 @@ function WorldStatus({ snapshot: s }: { snapshot: Snapshot }) {
   );
 }
 
-function ItemDetails({ item }: { item: Item }) {
-  const requirements = stats
-    .filter((stat) => item.requirements[stat] > 0)
-    .map((stat) => `${item.requirements[stat]} ${stat}`)
-    .join(', ');
-  const details = [
-    item.rarity,
-    item.kind,
-    item.kind === 'weapon' &&
-      `${item.damage}${item.scaling.length ? ` + ${item.scaling.join('/')} modifier` : ''}`,
-    item.kind === 'armour' && item.scaling.length > 0 && `${item.scaling.join('/')} defense`,
-    item.defense > 0 && `+${item.defense} defense`,
-    item.healing > 0 && `Heal ${item.healing} HP`,
-    item.hands === 2 && 'Two-handed',
-    item.light && 'Light',
-    item.initiativePenalty < 0 && `${item.initiativePenalty} initiative`,
-    requirements && `Requires ${requirements}`,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  return (
-    <>
-      <small>{details}</small>
-      {item.description && <small>{item.description}</small>}
-    </>
-  );
-}
-
 function CharacterControls({
   member,
   snapshot: s,
@@ -1130,13 +1236,15 @@ function CharacterControls({
   busy: boolean;
   command: (route: string, body: unknown) => Promise<void>;
 }) {
-  const [points, setPoints] = useState<Record<Stat, number>>({ STR: 0, DEX: 0, INT: 0 });
+  const [selected, setSelected] = useState<string[]>([]);
+  const [rewardBusy, setRewardBusy] = useState(false);
   const [gear, setGear] = useState(false);
   const manage = (body: unknown) => command('character', body);
   const state = member.state;
   const inCombat = s.scene.encounter && !s.scene.encounter.victory && !s.scene.encounter.escaped;
   const locked =
     busy ||
+    rewardBusy ||
     (!!s.turn && s.turn.phase !== 'collecting') ||
     !!s.turn?.actions.some((a) => a.memberId === member.id);
   if (state.hp <= 0)
@@ -1153,71 +1261,64 @@ function CharacterControls({
     );
   return (
     <div className="character-controls">
-      {!state.weaponChosen && (
+      {!state.equipmentChosen && (
         <section>
-          <span className="eyebrow">YOUR NEW LIFE</span>
-          <h2>
-            {member.character.name}, {member.character.species}
-          </h2>
-          <p>{member.character.appearance}</p>
-          <p>{member.character.background}</p>
-          <div className="trait-list">
-            {member.character.traits.map((t) => (
-              <div key={t.id}>
-                <b>{t.name}</b>
-                <p>{t.description}</p>
-              </div>
-            ))}
-          </div>
-          <h3>Choose your starting weapon</h3>
-          <div className="weapon-choices">
-            {state.starterWeapons.map((item) => (
-              <button
-                key={item.id}
-                disabled={busy}
-                onClick={() => manage({ type: 'starter', itemId: item.id })}
-              >
-                <Swords size={18} />
-                <b>{item.name}</b>
-                <span>
-                  {item.damage} + {item.scaling.join('/')} modifier
-                </span>
-                <small>{item.description}</small>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-      {state.statPoints > 0 && (
-        <section className="level-up">
-          <span className="eyebrow">LEVEL {state.level}</span>
-          <h3>You have {state.statPoints} stat points to spend</h3>
-          <p>The adventure waits for your choice. Your maximum HP has increased.</p>
-          <div className="stat-inputs">
-            {stats.map((stat) => (
-              <Field key={stat} label={`${stat} (${state.stats[stat]})`}>
-                <input
-                  type="number"
-                  min={0}
-                  max={state.statPoints}
-                  value={points[stat]}
-                  onChange={(e) => setPoints({ ...points, [stat]: Number(e.target.value) })}
-                />
-              </Field>
-            ))}
-          </div>
+          <CharacterSheet character={member.character} />
+          <EquipmentChoices
+            items={state.starterEquipment}
+            selected={selected}
+            onChange={setSelected}
+            disabled={locked}
+          />
           <Button
-            disabled={locked || Object.values(points).reduce((a, b) => a + b, 0) !== state.statPoints}
-            onClick={async () => {
-              await manage({ type: 'allocate', points });
-              setPoints({ STR: 0, DEX: 0, INT: 0 });
-            }}
+            disabled={locked || selected.length !== 2}
+            onClick={() => manage({ type: 'starter', itemIds: selected })}
           >
-            Allocate points
+            Confirm starting equipment
           </Button>
         </section>
       )}
-      {state.weaponChosen && (
+      {state.pendingLevelUps > 0 && (
+        <section className="level-up">
+          <span className="eyebrow">LEVEL {state.level}</span>
+          <h3>Choose your level-up reward</h3>
+          <p>
+            {state.pendingLevelUps} {state.pendingLevelUps === 1 ? 'reward' : 'rewards'} available. Your
+            maximum HP has increased.
+          </p>
+          <div className="level-up-choices">
+            {(Object.entries(levelUpChoices) as [LevelUpChoice, string][]).map(([choice, label]) => {
+              const kind = choice.endsWith('combat') ? 'combat' : 'utility';
+              const unavailable =
+                choice.startsWith('upgrade') && !member.character.abilities.some((a) => a.kind === kind);
+              return (
+                <Button
+                  key={choice}
+                  secondary
+                  disabled={locked || unavailable}
+                  title={unavailable ? 'Gain an ability in this category first.' : undefined}
+                  onClick={async () => {
+                    setRewardBusy(true);
+                    try {
+                      await command('level-up', { choice });
+                    } finally {
+                      setRewardBusy(false);
+                    }
+                  }}
+                >
+                  {label}
+                </Button>
+              );
+            })}
+          </div>
+          {rewardBusy && (
+            <p role="status">Generating and saving your reward… This can take up to two minutes.</p>
+          )}
+        </section>
+      )}
+      {state.lastLevelUp && <p className="reward-result">{state.lastLevelUp}</p>}
+      <Abilities character={member.character} />
+      {state.equipmentChosen && (
         <>
           <button className="text-link" onClick={() => setGear(!gear)}>
             <Shield size={15} />
@@ -1397,6 +1498,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [acceptsLethalRisk, setAcceptsLethalRisk] = useState(false);
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     let events: EventSource | undefined;
     let disposed = false;
@@ -1457,8 +1559,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     turn.phase === 'collecting' &&
     !!myCharacter &&
     myCharacter.state.hp > 0 &&
-    myCharacter.state.statPoints === 0 &&
-    myCharacter.state.weaponChosen;
+    myCharacter.state.pendingLevelUps === 0 &&
+    myCharacter.state.equipmentChosen;
   const latest = s.history.at(-1);
   const submitted = turn?.actions.length ?? 0;
   const expected = turn?.roster.length ?? 0;
@@ -1523,6 +1625,86 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
         </div>
       </div>
       <ErrorBox error={error} />
+      {screen && (
+        <section className="form-panel">
+          <b>Shared screen · viewing only</b>
+          <p>
+            Review characters and choose equipment from your player view. The campaign creator starts the
+            story from their leader view.
+          </p>
+          <a className="button secondary" href={`/campaign/${id}`}>
+            Open player / leader controls
+          </a>
+          <p className="small">
+            If this device does not remember you, restore your profile in <a href="/settings">Settings</a>.
+          </p>
+        </section>
+      )}
+      {!screen && !s.isHost && !myCharacter && (
+        <section className="form-panel">
+          <h2>This browser is viewing the table</h2>
+          <p>
+            Your player profile is not signed in here. Open the invitation to join, or restore your existing
+            profile in Settings.
+          </p>
+          <a className="button secondary" href="/settings">
+            Find my player profile
+          </a>
+        </section>
+      )}
+      {s.status === 'lobby' && (
+        <section className="form-panel lobby-setup">
+          <h2>{!screen && myCharacter ? 'Prepare your character' : 'Party readiness'}</h2>
+          <ul aria-label="Party readiness">
+            {s.members.map((m) => (
+              <li key={m.id}>
+                <b>{m.character.name}</b> ·{' '}
+                {!m.active
+                  ? 'Sitting out'
+                  : m.state.equipmentChosen
+                    ? 'Ready to begin'
+                    : 'Needs to choose two starting equipment pieces on their player device'}
+              </li>
+            ))}
+          </ul>
+          {!s.members.length && <p>Invite at least one player to join with a character.</p>}
+          {!screen && myCharacter && (
+            <>
+              <p>
+                You control <b>{myCharacter.character.name}</b>. Regenerating replaces your starting equipment
+                and also saves your library template.
+              </p>
+              <Button secondary disabled={busy} onClick={() => setEditing(!editing)}>
+                Review my character
+              </Button>
+              {editing ? (
+                <CharacterEditor
+                  campaignId={id}
+                  initial={myCharacter.character}
+                  saveUrl={`/api/campaigns/${id}/template`}
+                  onCancel={() => setEditing(false)}
+                  onSave={async () => {
+                    setEditing(false);
+                    setS(await api<Snapshot>(`/api/campaigns/${id}`));
+                  }}
+                />
+              ) : (
+                <CharacterControls member={myCharacter} snapshot={s} busy={busy} command={command} />
+              )}
+            </>
+          )}
+          {!screen && !host && myCharacter?.state.equipmentChosen && (
+            <p role="status">You are ready. Waiting for the campaign leader to begin the story.</p>
+          )}
+          {host && (
+            <p>
+              {s.members.some((m) => m.active && !m.state.equipmentChosen)
+                ? 'Waiting for the players listed above to choose two equipment pieces. Then Begin the story will unlock.'
+                : 'When your party is ready, select Begin the story below.'}
+            </p>
+          )}
+        </section>
+      )}
       {s.status === 'ended' && (
         <div className="run-ended">
           <h2>RUN ENDED</h2>
@@ -1554,7 +1736,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
               )}
               <Button
                 disabled={
-                  busy || !s.members.length || s.members.some((m) => m.active && !m.state.weaponChosen)
+                  busy || !s.members.length || s.members.some((m) => m.active && !m.state.equipmentChosen)
                 }
                 onClick={() => command('start', {})}
               >
@@ -1636,7 +1818,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     <h2>The table is set.</h2>
                     <p>
                       {s.members.length
-                        ? 'Your companions are gathering. The leader can begin when everyone has chosen a starting weapon.'
+                        ? 'Your companions are gathering. The leader can begin when everyone has chosen two starting equipment pieces.'
                         : 'Invite your companions and choose your characters. Every adventure starts with the people around the table.'}
                     </p>
                     {s.config.premise && <blockquote>{s.config.premise}</blockquote>}
@@ -1776,7 +1958,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   )}
                 </div>
               )}
-              {!screen && myCharacter && (
+              {!screen && myCharacter && s.status !== 'lobby' && (
                 <CharacterControls member={myCharacter} snapshot={s} busy={busy} command={command} />
               )}
               {!screen && s.myMemberId && turn && (

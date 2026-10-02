@@ -11,6 +11,7 @@ it('preserves the exact subscription sharing error rather than replacing every 4
   );
   const error = await readResponseStream(response).catch((e) => e);
   expect(error).toBeInstanceOf(ProviderError);
+  expect(error.status).toBe(429);
   expect(error.message).toContain('overall plan may still have usage remaining');
   expect(error.diagnostics).toEqual({
     code: 'subscription_sharing_usage_limit_exceeded',
@@ -42,5 +43,6 @@ it('preserves subscription errors arriving inside a successful HTTP stream', asy
     code: 'subscription_sharing_usage_limit_exceeded',
     upstreamStatus: 200,
   });
+  expect(error.status).toBe(429);
   expect(error.message).not.toContain('Private upstream details');
 });

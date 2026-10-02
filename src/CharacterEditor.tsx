@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { blankTrait, slots, stats, templateCharacter, type Character, type Trait } from '../shared/schema';
-import { startingStats } from '../shared/rules';
-import { api } from './api';
+import { type Character } from '../shared/schema';
+import { CharacterSheet, EquipmentChoices } from './CharacterSheet';
+import { api, ApiError } from './api';
+import { ModelSelect } from './ModelSelect';
 
 const Field = ({ label, children }: { label: string; children: ReactNode }) => (
   <label className="field">
@@ -13,19 +14,25 @@ const Field = ({ label, children }: { label: string; children: ReactNode }) => (
 export function CharacterEditor({
   initial,
   code,
+  campaignId,
+  saveUrl = '/api/characters',
   onSave,
   onCancel,
 }: {
   initial?: Character;
   code?: string;
-  onSave: (saved: Character & { id: string }) => void;
+  campaignId?: string;
+  saveUrl?: string;
+  onSave: (saved: Character & { id: string }) => void | Promise<void>;
   onCancel: () => void;
 }) {
-  const [sheet, setSheet] = useState<Character>(initial ?? templateCharacter('', ''));
+  const [sheet, setSheet] = useState<Character | null>(initial?.name ? initial : null);
   const [concept, setConcept] = useState(initial?.concept ?? '');
+  const [model, setModel] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [generationError, setGenerationError] = useState('');
+  const [usageLimited, setUsageLimited] = useState(false);
   const [generationStarted, setGenerationStarted] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const generation = useRef<AbortController | null>(null);
@@ -38,21 +45,6 @@ export function CharacterEditor({
     );
     return () => window.clearInterval(timer);
   }, [generationStarted]);
-  const update = <K extends keyof Character>(key: K, value: Character[K]) =>
-    setSheet((s) => ({ ...s, [key]: value, ...(key === 'species' ? { role: value as string } : {}) }));
-  const trait = (index: number, patch: Partial<Trait>) =>
-    update(
-      'traits',
-      sheet.traits.map((t, i) => (i === index ? { ...t, ...patch } : t)),
-    );
-  let calculated = sheet.stats;
-  let balanceError = '';
-  try {
-    calculated = startingStats(sheet);
-  } catch (e) {
-    balanceError = (e as Error).message;
-  }
-
   async function generate() {
     const controller = new AbortController();
     generation.current = controller;
@@ -64,15 +56,19 @@ export function CharacterEditor({
     setElapsed(0);
     setGenerationStarted(Date.now());
     setGenerationError('');
+    setUsageLimited(false);
     setError('');
     try {
       const result = await api<Character>(
         '/api/characters/generate',
-        { concept, ...(code ? { code } : {}) },
+        { concept, model, ...(code ? { code } : {}), ...(campaignId ? { campaignId } : {}) },
         controller.signal,
       );
-      if (!controller.signal.aborted) setSheet(result);
+      if (!controller.signal.aborted) setSheet({ ...result, concept, selectedEquipmentIds: [] });
     } catch (e) {
+      setUsageLimited(
+        e instanceof ApiError && e.providerCode === 'subscription_sharing_usage_limit_exceeded',
+      );
       setGenerationError(
         controller.signal.aborted
           ? controller.signal.reason?.name === 'TimeoutError'
@@ -89,12 +85,11 @@ export function CharacterEditor({
   }
   async function save(e: FormEvent) {
     e.preventDefault();
+    if (!sheet || sheet.selectedEquipmentIds.length !== 2) return;
     setBusy(true);
     setError('');
     try {
-      onSave(
-        await api<Character & { id: string }>('/api/characters', { ...sheet, stats: calculated, concept }),
-      );
+      await onSave(await api<Character & { id: string }>(saveUrl, sheet));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -104,7 +99,7 @@ export function CharacterEditor({
   return (
     <form className="form-panel character-editor" onSubmit={save}>
       <div className="editor-heading">
-        <h2>Your character template</h2>
+        <h2>Create your character</h2>
         <button className="text-link" type="button" onClick={onCancel}>
           Cancel
         </button>
@@ -120,6 +115,7 @@ export function CharacterEditor({
             rows={2}
           />
         </Field>
+        {!code && !campaignId && <ModelSelect value={model} onChange={setModel} disabled={busy} />}
         <button type="button" className="button secondary" disabled={busy} onClick={generate}>
           {generationStarted !== null
             ? 'Generating…'
@@ -140,284 +136,52 @@ export function CharacterEditor({
         {generationError && (
           <div className="error" role="alert">
             {generationError}
+            {usageLimited && (
+              <>
+                <p>
+                  <a
+                    className="text-link"
+                    href="https://chatgpt.com/settings/usage"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Manage ChatGPT usage
+                  </a>
+                </p>
+                <p>
+                  The host can review Gather’s app limit there before retrying. Your generated character is
+                  preserved. Retry when generation is available.
+                </p>
+              </>
+            )}
           </div>
         )}
         <p className="muted small">
-          Review and edit the result before saving. In a session, generation uses the leader's connected
-          ChatGPT plan.
+          Describe your concept, discover your character, and choose two starting pieces. Players use the
+          host’s connected ChatGPT plan; no separate sign-in is needed.
         </p>
       </div>
-      <div className="two-columns">
-        <Field label="Character name">
-          <input
-            required
-            maxLength={60}
-            value={sheet.name}
-            onChange={(e) => update('name', e.target.value)}
+      {sheet && (
+        <>
+          <CharacterSheet character={sheet} />
+          <EquipmentChoices
+            items={sheet.equipmentOptions}
+            selected={sheet.selectedEquipmentIds}
+            disabled={busy}
+            onChange={(selectedEquipmentIds) => setSheet({ ...sheet, selectedEquipmentIds })}
           />
-        </Field>
-        <Field label="Species or form">
-          <input
-            required
-            maxLength={80}
-            value={sheet.species}
-            onChange={(e) => update('species', e.target.value)}
-            placeholder="Invent any species or combination"
-          />
-        </Field>
-      </div>
-      <Field label="Appearance">
-        <textarea
-          value={sheet.appearance}
-          maxLength={1000}
-          onChange={(e) => update('appearance', e.target.value)}
-          rows={2}
-        />
-      </Field>
-      <Field label="Backstory">
-        <textarea
-          value={sheet.background}
-          maxLength={1500}
-          onChange={(e) => update('background', e.target.value)}
-          rows={3}
-        />
-      </Field>
-      <div className="two-columns">
-        <Field label="Motivation">
-          <input
-            value={sheet.motivation}
-            maxLength={500}
-            onChange={(e) => update('motivation', e.target.value)}
-          />
-        </Field>
-        <Field label="Weakness">
-          <input
-            value={sheet.weakness}
-            maxLength={500}
-            onChange={(e) => update('weakness', e.target.value)}
-          />
-        </Field>
-      </div>
-      <h3>Traits & balanced stats</h3>
-      <p className="muted small">
-        Each stat starts at 5. Custom traits add strengths and drawbacks within a shared balance budget.
-      </p>
-      <div className="small-stats">
-        {stats.map((s) => (
-          <div key={s}>
-            <span>{s}</span>
-            <b>{calculated[s]}</b>
-          </div>
-        ))}
-      </div>
-      {sheet.traits.map((t, i) => (
-        <section className="trait-editor" key={i}>
-          <Field label={`Trait ${i + 1} name`}>
-            <input
-              required
-              maxLength={80}
-              value={t.name}
-              onChange={(e) => trait(i, { name: e.target.value })}
-            />
-          </Field>
-          <Field label="Benefit and drawback">
-            <textarea
-              required
-              maxLength={700}
-              value={t.description}
-              onChange={(e) => trait(i, { description: e.target.value })}
-            />
-          </Field>
-          <div className="stat-inputs">
-            {stats.map((s) => (
-              <Field key={s} label={`${s} adjustment`}>
-                <input
-                  type="number"
-                  min={-3}
-                  max={4}
-                  value={t.stats[s]}
-                  onChange={(e) => trait(i, { stats: { ...t.stats, [s]: Number(e.target.value) } })}
-                />
-              </Field>
-            ))}
-          </div>
-          <details>
-            <summary>Physical traits & equipment restrictions</summary>
-            <div className="two-columns">
-              <Field label="HP adjustment">
-                <input
-                  type="number"
-                  min={-4}
-                  max={4}
-                  value={t.hp}
-                  onChange={(e) => trait(i, { hp: Number(e.target.value) })}
-                />
-              </Field>
-              <Field label="Defense bonus">
-                <input
-                  type="number"
-                  min={0}
-                  max={1}
-                  value={t.defense}
-                  onChange={(e) => trait(i, { defense: Number(e.target.value) })}
-                />
-              </Field>
-              <Field label="Healing type">
-                <select
-                  value={t.healing}
-                  onChange={(e) => trait(i, { healing: e.target.value as Trait['healing'] })}
-                >
-                  <option value="normal">Normal healing</option>
-                  <option value="repair">Repair only</option>
-                  <option value="necrotic">Necrotic only</option>
-                </select>
-              </Field>
-              <Field label="HP recovered after combat">
-                <input
-                  type="number"
-                  min={0}
-                  max={1}
-                  value={t.regeneration}
-                  onChange={(e) => trait(i, { regeneration: Number(e.target.value) })}
-                />
-              </Field>
-            </div>
-            <div className="trait-toggles">
-              {(['natural', 'heavyRestricted', 'lifesteal'] as const).map((key) => (
-                <label key={key}>
-                  <input
-                    type="checkbox"
-                    checked={t[key]}
-                    onChange={(e) => trait(i, { [key]: e.target.checked })}
-                  />
-                  {
-                    {
-                      natural: 'd6 natural attack',
-                      heavyRestricted: 'Cannot use heavy STR equipment',
-                      lifesteal: 'Natural attacks heal 1 HP',
-                    }[key]
-                  }
-                </label>
-              ))}
-            </div>
-            <p className="small">Unusable equipment slots</p>
-            <div className="trait-toggles">
-              {slots.map((slot) => (
-                <label key={slot}>
-                  <input
-                    type="checkbox"
-                    checked={t.blocked.includes(slot)}
-                    onChange={(e) =>
-                      trait(i, {
-                        blocked: e.target.checked
-                          ? [...t.blocked, slot]
-                          : t.blocked.filter((s) => s !== slot),
-                      })
-                    }
-                  />
-                  {slot}
-                </label>
-              ))}
-            </div>
-            <p className="small">Immunities</p>
-            <div className="trait-toggles">
-              {(['Bleeding', 'Burning', 'Poisoned', 'Stunned', 'Weakened'] as const).map((condition) => (
-                <label key={condition}>
-                  <input
-                    type="checkbox"
-                    checked={t.immunities.includes(condition)}
-                    onChange={(e) =>
-                      trait(i, {
-                        immunities: e.target.checked
-                          ? [...t.immunities, condition]
-                          : t.immunities.filter((c) => c !== condition),
-                      })
-                    }
-                  />
-                  {condition}
-                </label>
-              ))}
-            </div>
-          </details>
-          <button
-            type="button"
-            className="text-link"
-            onClick={() =>
-              update(
-                'traits',
-                sheet.traits.filter((_, n) => n !== i),
-              )
-            }
-          >
-            Remove trait
-          </button>
-        </section>
-      ))}
-      <button
-        type="button"
-        className="text-link"
-        disabled={sheet.traits.length >= 3}
-        onClick={() =>
-          update('traits', [
-            ...sheet.traits,
-            { ...blankTrait(), id: `trait-${Date.now()}-${sheet.traits.length}` },
-          ])
-        }
-      >
-        + Add custom trait
-      </button>
-      <h3>Starting equipment choices</h3>
-      <p className="muted small">
-        Name three weapons for your character. Each starts at d6 damage; you choose one when joining a
-        campaign.
-      </p>
-      {sheet.weaponOptions.map((w, i) => (
-        <div className="two-columns" key={w.stat}>
-          <Field label={`${w.stat} weapon name`}>
-            <input
-              required
-              maxLength={100}
-              value={w.name}
-              onChange={(e) =>
-                update(
-                  'weaponOptions',
-                  sheet.weaponOptions.map((x, n) => (n === i ? { ...x, name: e.target.value } : x)),
-                )
-              }
-            />
-          </Field>
-          <Field label={`${w.stat} weapon description`}>
-            <input
-              maxLength={500}
-              value={w.description}
-              onChange={(e) =>
-                update(
-                  'weaponOptions',
-                  sheet.weaponOptions.map((x, n) => (n === i ? { ...x, description: e.target.value } : x)),
-                )
-              }
-            />
-          </Field>
-        </div>
-      ))}
-      <Field label="Starting healing item name">
-        <input
-          required
-          maxLength={100}
-          value={sheet.healingItemName}
-          onChange={(e) => update('healingItemName', e.target.value)}
-        />
-      </Field>
-      {(error || balanceError) && (
+        </>
+      )}
+      {error && (
         <div className="error" role="alert">
-          {error || balanceError}
+          {error}
         </div>
       )}
       <div className="form-actions">
         <span className="muted small">
           Saved templates can be reused. Every campaign gets independent HP, equipment, and progress.
         </span>
-        <button className="button" disabled={busy || !!balanceError}>
+        <button className="button" disabled={busy || !sheet || sheet.selectedEquipmentIds.length !== 2}>
           Save character
         </button>
       </div>

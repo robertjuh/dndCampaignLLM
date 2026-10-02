@@ -10,7 +10,10 @@ import {
 } from '../shared/schema';
 import {
   addItem,
-  allocate,
+  gainAttributes,
+  rollStartingEquipment,
+  chooseStartingEquipment,
+  usableSlots,
   baseItem,
   damage,
   defense,
@@ -34,9 +37,9 @@ function member(name = 'Test hero'): Member {
   const character = normalizeCharacter(templateCharacter(name, 'A custom form'));
   const id = randomUUID();
   const state = initialState(character, id);
-  addItem(character, state, state.starterWeapons[0]);
-  equip(character, state, state.starterWeapons[0].id, 'right');
-  state.weaponChosen = true;
+  addItem(character, state, state.starterEquipment[0]);
+  equip(character, state, state.starterEquipment[0].id, 'right');
+  state.equipmentChosen = true;
   return {
     id,
     playerId: randomUUID(),
@@ -143,16 +146,16 @@ describe('customized roguelike mechanics', () => {
     expect(m.state.inventory.filter((i) => i.id === 'great')).toHaveLength(1);
     expect(defense(m.character, m.state)).toBe(11);
   });
-  it('averages hybrid modifiers and grants five points and HP on every level', () => {
+  it('averages hybrid modifiers and grants a reward choice and HP on every level', () => {
     const m = member();
     m.state.stats = { STR: 9, DEX: 4, INT: 5 };
     expect(scaling(m.state, { ...baseItem('hybrid', 'Hybrid', 'weapon'), scaling: ['STR', 'DEX'] })).toBe(0);
     m.state.stats = { STR: 5, DEX: 5, INT: 5 };
     grantXp(m.character, m.state, 230);
-    expect(m.state).toMatchObject({ level: 3, xp: 30, statPoints: 10, hp: 30, maxHp: 30 });
-    expect(() => allocate(m.character, m.state, { STR: 3, DEX: 1, INT: 1 })).toThrow('all available');
-    allocate(m.character, m.state, { STR: 2, DEX: 4, INT: 4 });
-    expect(m.state).toMatchObject({ statPoints: 0, hp: 32, maxHp: 32 });
+    expect(m.state).toMatchObject({ level: 3, xp: 30, pendingLevelUps: 2, hp: 30, maxHp: 30 });
+    expect(() => gainAttributes(m.character, m.state, ['STR'])).toThrow('exactly two');
+    gainAttributes(m.character, m.state, ['STR', 'STR']);
+    expect(m.state).toMatchObject({ pendingLevelUps: 2, hp: 32, maxHp: 32 });
   });
   it('cannot heal, award XP to, or damage a dead character again', () => {
     const m = member();
@@ -172,7 +175,7 @@ describe('customized roguelike mechanics', () => {
     runCombat([m], e, input(m), () => dice.shift()!);
     expect(e.victory).toBe(true);
     expect(m.state.level).toBe(2);
-    expect(m.state.statPoints).toBe(5);
+    expect(m.state.pendingLevelUps).toBe(1);
     expect(dice).toEqual([]);
   });
   it('resolves a natural 1 as failure despite a high attack bonus', () => {
@@ -288,4 +291,64 @@ it('does not alter the inventory when stacking would exceed capacity', () => {
   expect(() => addItem(m.character, m.state, { ...potion, id: 'extra-drop' })).toThrow('Backpack full');
   expect(m.state.inventory[0].quantity).toBe(3);
   expect(occupiedSlots(m.state)).toBe(8);
+});
+
+it('rolls five independent equipment types, allows repeated types, and selects exactly two usable pieces', () => {
+  const character = templateCharacter('Spectre');
+  character.traits = [{ ...blankTrait('Incorporeal'), blocked: ['body', 'head'], heavyRestricted: true }];
+  const allWeapons = rollStartingEquipment(character, () => 1);
+  expect(allWeapons.map((item) => item.kind)).toEqual(Array(5).fill('weapon'));
+  for (let roll = 1; roll <= 5; roll++) {
+    const items = rollStartingEquipment(character, (sides) => Math.min(roll, sides));
+    expect(items).toHaveLength(5);
+    expect(items.every((item) => usableSlots(character, character.stats, item).length > 0)).toBe(true);
+    expect(items.some((item) => ['armour', 'helmet'].includes(item.kind))).toBe(false);
+  }
+  const corporeal = templateCharacter();
+  const draws = [2, 1, 2, 1, 2, 1, 2, 1, 5];
+  corporeal.equipmentOptions = rollStartingEquipment(corporeal, () => draws.shift()!);
+  expect(corporeal.equipmentOptions.map((item) => item.kind)).toEqual([
+    'armour',
+    'armour',
+    'armour',
+    'armour',
+    'shield',
+  ]);
+  const state = initialState(corporeal, 'test');
+  const ids = state.starterEquipment.slice(0, 2).map((item) => item.id);
+  const before = structuredClone(state);
+  for (const invalid of [
+    [],
+    [ids[0]],
+    [ids[0], ids[0]],
+    [ids[0], 'forged'],
+    [...ids, state.starterEquipment[2].id],
+  ]) {
+    expect(() => chooseStartingEquipment(corporeal, state, invalid)).toThrow('exactly two');
+    expect(state).toEqual(before);
+  }
+  chooseStartingEquipment(corporeal, state, ids);
+  expect(state.equipmentChosen).toBe(true);
+  expect(state.equipment.body?.id).toBe(ids[0]);
+  expect(state.inventory.find((item) => item.id === ids[1])).toBeDefined();
+  expect(() => chooseStartingEquipment(corporeal, state, ids)).toThrow('already chosen');
+  const bootsOnly = templateCharacter();
+  bootsOnly.traits = [{ ...blankTrait(), blocked: ['left', 'right', 'body', 'head'] }];
+  expect(
+    rollStartingEquipment(bootsOnly, () => {
+      throw new Error('Only one choice; no die needed');
+    }).every((item) => item.kind === 'boots'),
+  ).toBe(true);
+});
+
+it('preserves generated abilities and equips saved picks when a new campaign begins', () => {
+  const character = templateCharacter();
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  const normalized = normalizeCharacter(character);
+  expect(normalized.abilities).toEqual(character.abilities);
+  const state = initialState(normalized, 'campaign');
+  expect(state.equipmentChosen).toBe(true);
+  expect([state.equipment.right?.name, state.equipment.left?.name]).toEqual(
+    character.equipmentOptions.slice(0, 2).map((item) => item.name),
+  );
 });

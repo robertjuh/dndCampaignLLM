@@ -27,7 +27,7 @@ type Account = {
   expires: number;
   scopes: string[];
 };
-type Store = { hostId: string; accounts: Record<string, Account> };
+type Store = { hostId: string; hostOwner?: string; accounts: Record<string, Account> };
 type Pending = {
   owner: string;
   state: string;
@@ -58,6 +58,18 @@ export class ChatGPTAuth {
       this.store = { hostId: `urn:uuid:${randomUUID()}`, accounts: {} };
       this.save();
     }
+    // Adopt an existing single host connection when upgrading an older install.
+    if (!this.store.hostOwner) {
+      const connected = Object.keys(this.store.accounts).filter((id) => this.store.accounts[id].accessToken);
+      if (connected.length === 1) {
+        this.store.hostOwner = connected[0];
+        this.save();
+      }
+    }
+  }
+  private inferenceOwner(owner: string) {
+    if (this.store.accounts[owner]?.accessToken) return owner;
+    return this.store.hostOwner ?? owner;
   }
   private save() {
     const temporary = `${this.filename}.${randomUUID()}.tmp`;
@@ -65,10 +77,13 @@ export class ChatGPTAuth {
     renameSync(temporary, this.filename);
   }
   status(owner: string) {
-    const a = this.store.accounts[owner];
+    const source = this.inferenceOwner(owner);
+    const a = this.store.accounts[source];
+    const shared = source !== owner;
     return {
       connected: !!a?.accessToken,
-      email: a?.email ?? null,
+      shared,
+      email: shared ? null : (a?.email ?? null),
       usageUrl: 'https://chatgpt.com/settings/usage',
     };
   }
@@ -161,6 +176,7 @@ export class ChatGPTAuth {
       expires: Date.now() + tokens.expires_in * 1000,
       scopes: granted,
     };
+    this.store.hostOwner = p.owner;
     this.save();
     return p.owner;
   }
@@ -181,6 +197,7 @@ export class ChatGPTAuth {
     return tokens;
   }
   async accessToken(owner: string): Promise<string> {
+    owner = this.inferenceOwner(owner);
     const a = this.store.accounts[owner];
     if (!a?.accessToken)
       throw new GameError('Connect the leader’s ChatGPT account in Settings before starting a live session.');

@@ -7,7 +7,9 @@ import { ChatGPTAuth } from './auth';
 import { ChatGPTGM, PracticeGM, ProviderError } from './providers';
 import { RuleError } from '../shared/rules';
 import { localDice } from './random';
-import { characterSchema, stats, slots } from '../shared/schema';
+import { characterSchema, levelUpChoiceSchema, slots } from '../shared/schema';
+import type { GoogleAuth } from './google';
+import { tokenHash } from './game';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -21,6 +23,7 @@ const actionInput = z
     text: z.string().trim().max(2000),
     passed: z.boolean(),
     acceptsLethalRisk: z.boolean().default(false),
+    abilityName: z.string().min(1).max(80).nullable().default(null),
   })
   .strict()
   .refine((a) => a.passed || a.text.length > 0, 'Write an action or choose Pass.');
@@ -32,6 +35,7 @@ export async function createApp(options: {
   port?: number;
   providers?: ProviderFactory;
   partyOrigins?: string[];
+  google?: GoogleAuth;
 }) {
   const app = Fastify({ logger: false, bodyLimit: 100_000 });
   const providers: ProviderFactory =
@@ -41,6 +45,16 @@ export async function createApp(options: {
   const game = new Game(options.db, providers, undefined, () => localDice);
   const streams = new Set<() => void>();
   const requests = new Map<string, { start: number; count: number }>();
+  const googleOrigin = options.google ? new URL(options.google.config.redirectUri).origin : undefined;
+  const sessionCookie = (request: FastifyRequest) => ({
+    path: '/',
+    httpOnly: true,
+    sameSite: 'strict' as const,
+    maxAge: 60 * 60 * 24 * 365,
+    secure:
+      request.protocol === 'https' ||
+      (googleOrigin?.startsWith('https:') === true && new URL(googleOrigin).host === request.headers.host),
+  });
   await app.register(cookie);
   app.decorateRequest('player');
   app.addHook('onRequest', async (request, reply) => {
@@ -60,14 +74,7 @@ export async function createApp(options: {
       for (const [key, value] of requests) if (now - value.start > 60_000) requests.delete(key);
     const player = game.identify(request.cookies.gather_session);
     request.player = { id: player.id, name: player.name };
-    if (player.token)
-      reply.setCookie('gather_session', player.token, {
-        path: '/',
-        httpOnly: true,
-        sameSite: 'strict',
-        maxAge: 60 * 60 * 24 * 365,
-        secure: request.protocol === 'https',
-      });
+    if (player.token) reply.setCookie('gather_session', player.token, sessionCookie(request));
   });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError)
@@ -106,12 +113,87 @@ export async function createApp(options: {
     game.rename(request.player.id, name);
     return { ok: true };
   });
+  app.get(
+    '/api/player-auth',
+    async (request) =>
+      options.google?.status(request.player.id) ?? {
+        configured: false,
+        signedIn: false,
+        email: null,
+      },
+  );
+  app.post('/api/player-auth/google', async (request, reply) => {
+    if (!options.google) throw new GameError('The host needs to configure Google sign-in first.', 503);
+    const { returnTo } = z
+      .object({
+        returnTo: z
+          .string()
+          .max(300)
+          .regex(/^\/(?:settings|characters|join\/[a-fA-F0-9]{12}|campaign\/[a-f0-9-]{36})?$/)
+          .default('/settings'),
+      })
+      .strict()
+      .parse(request.body);
+    if (!request.cookies.gather_session) throw new GameError('Reload this page before signing in.', 400);
+    const allowed = [
+      googleOrigin,
+      ...(options.partyOrigins ?? []),
+      `http://127.0.0.1:${options.port ?? 3000}`,
+      `http://localhost:${options.port ?? 3000}`,
+    ];
+    const origin =
+      request.headers.origin ?? allowed.find((o) => o && new URL(o).host === request.headers.host);
+    if (!origin || !allowed.includes(origin))
+      throw new GameError(
+        'Open Gather using the host’s configured invitation address before signing in.',
+        400,
+      );
+    const result = options.google.begin(request.player.id, request.cookies.gather_session, origin, returnTo);
+    reply.setCookie('gather_google_state', result.browserSecret, {
+      path: '/auth/google',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: origin.startsWith('https:'),
+      maxAge: 600,
+    });
+    return { url: result.url };
+  });
+  app.post('/api/player-auth/logout', async (request, reply) => {
+    if (request.cookies.gather_session)
+      options.db
+        .prepare('DELETE FROM sessions WHERE hash = ?')
+        .run(tokenHash(request.cookies.gather_session));
+    const fresh = game.identify();
+    reply.setCookie('gather_session', fresh.token!, sessionCookie(request));
+    return { ok: true };
+  });
+  app.get('/auth/google/callback', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!options.google) throw new GameError('Google sign-in is not configured.', 503);
+    return reply.redirect(await options.google.callback(z.record(z.string()).parse(request.query)));
+  });
+  app.get('/auth/google/finish', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!options.google) throw new GameError('Google sign-in is not configured.', 503);
+    const { state } = z.object({ state: z.string().max(100) }).parse(request.query);
+    const result = options.google.finish(state, request.cookies.gather_google_state);
+    reply.clearCookie('gather_google_state', { path: '/auth/google' });
+    if (result.token) reply.setCookie('gather_session', result.token, sessionCookie(request));
+    return reply.redirect(result.url);
+  });
   app.post('/api/characters', async (request) => game.saveCharacter(request.player.id, request.body));
+  app.post('/api/characters/:id', async (request) =>
+    game.updateCharacter(request.player.id, campaignId(request), request.body),
+  );
+  app.post('/api/campaigns/:id/template', async (request) =>
+    game.editLobbyCharacter(campaignId(request), request.player.id, request.body),
+  );
   app.post('/api/characters/generate', async (request, reply) => {
-    const { concept, model, code } = z
+    const { concept, model, code, campaignId } = z
       .object({
         concept: z.string().trim().max(1000),
         model: z.string().max(100).default(''),
+        campaignId: z.string().uuid().optional(),
         code: z
           .string()
           .regex(/^[a-fA-F0-9]{12}$/)
@@ -121,9 +203,9 @@ export async function createApp(options: {
       .parse(request.body);
     let provider = new ChatGPTGM(options.auth, request.player.id, model) as import('./game').GameMaster;
     let context = concept || 'Surprise me with a completely randomized protagonist.';
-    if (code) {
-      const invite = game.invite(code);
-      const campaign = game.campaign(invite.id);
+    if (code || campaignId) {
+      if (campaignId) game.canRead(campaignId, request.player.id);
+      const campaign = game.campaign(campaignId ?? game.invite(code!).id);
       provider = providers(campaign.owner_id, JSON.parse(campaign.config));
       context = JSON.stringify({ playerConcept: context, campaign: JSON.parse(campaign.config) });
     }
@@ -181,7 +263,7 @@ export async function createApp(options: {
   app.post('/api/campaigns/:id/action', async (request) => {
     const id = campaignId(request);
     const action = actionInput.parse(request.body);
-    game.submit(id, request.player.id, action.turnId, action.text, action.passed, action.acceptsLethalRisk);
+    game.submit(id, request.player.id, action.turnId, action.text, action.passed, action.acceptsLethalRisk, action.abilityName);
     return snap(id, request);
   });
   app.post('/api/campaigns/:id/pause', async (request) => {
@@ -202,21 +284,18 @@ export async function createApp(options: {
   app.post('/api/campaigns/:id/character', async (request) => {
     const action = z
       .object({
-        type: z.enum(['starter', 'allocate', 'equip', 'unequip', 'heal', 'drop', 'take', 'rest']),
+        type: z.enum(['starter', 'equip', 'unequip', 'heal', 'drop', 'take', 'rest']),
         itemId: z.string().optional(),
+        itemIds: z.array(z.string()).length(2).optional(),
         slot: z.enum(slots).optional(),
-        points: z
-          .object({
-            STR: z.number().int().min(0),
-            DEX: z.number().int().min(0),
-            INT: z.number().int().min(0),
-          })
-          .strict()
-          .optional(),
       })
       .strict()
       .parse(request.body);
     return game.manageCharacter(campaignId(request), request.player.id, action);
+  });
+  app.post('/api/campaigns/:id/level-up', async (request) => {
+    const { choice } = z.object({ choice: levelUpChoiceSchema }).strict().parse(request.body);
+    return game.levelUp(campaignId(request), request.player.id, choice);
   });
   app.post('/api/campaigns/:id/retry', async (request) => {
     const id = campaignId(request);
@@ -266,7 +345,11 @@ export async function createApp(options: {
       );
     return { url: options.auth.begin(request.player.id, options.port ?? 3000) };
   });
-  app.post('/api/chatgpt/disconnect', async (request) => options.auth.disconnect(request.player.id));
+  app.post('/api/chatgpt/disconnect', async (request) => {
+    if (!loopback(request.ip) || options.auth.status(request.player.id).shared)
+      throw new GameError('Only the connected host can disconnect ChatGPT.', 403);
+    return options.auth.disconnect(request.player.id);
+  });
   app.get('/auth/callback', async (request, reply) => {
     const html = (message: string) =>
       `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Gather · ChatGPT</title><body style="background:#111914;color:#eee9d7;font:18px system-ui;padding:10vw;max-width:700px"><h1>Gather</h1><p>${message}</p><p>You can close this tab and return to Gather.</p></body></html>`;

@@ -10,8 +10,15 @@ export const abilitySchema = z
     description: z.string().min(1).max(500),
     kind: z.enum(['combat', 'utility']),
     effect: z.enum(['strike', 'mend', 'assist', 'guard']),
+    level: z.number().int().min(1).default(1),
+    stat: statSchema.default('INT'),
+    healing: z.enum(['normal', 'repair', 'necrotic']).default('normal'),
   })
-  .strict();
+  .strict()
+  .superRefine((ability, ctx) => {
+    if (ability.kind === 'utility' && ability.effect !== 'assist')
+      ctx.addIssue({ code: 'custom', message: 'Out-of-combat abilities assist a relevant check.', path: ['effect'] });
+  });
 export const slots = ['left', 'right', 'body', 'head', 'boots'] as const;
 export type Slot = (typeof slots)[number];
 export const itemSchema = z
@@ -32,6 +39,8 @@ export const itemSchema = z
     defense: z.number().int().min(0).max(3),
     initiativePenalty: z.number().int().min(-3).max(0),
     healing: z.number().int().min(0).max(12),
+    attackBonus: z.number().int().min(0).max(3).default(0),
+    checkBonus: z.number().int().min(0).max(3).default(0),
     description: z.string().max(700),
   })
   .strict();
@@ -60,9 +69,29 @@ export const traitSchema = z
   })
   .strict();
 export type Trait = z.infer<typeof traitSchema>;
-export const weaponOptionSchema = z
-  .object({ name: z.string().min(1).max(100), stat: statSchema, description: z.string().max(500) })
+export type Ability = z.infer<typeof abilitySchema>;
+export const levelUpChoices = {
+  'new-combat': 'Gain a new in-combat ability',
+  'new-utility': 'Gain a new out-of-combat ability',
+  'upgrade-combat': 'Level up a random in-combat ability',
+  'upgrade-utility': 'Level up a random out-of-combat ability',
+  attributes: 'Gain 2 random attribute points',
+} as const;
+export const levelUpChoiceSchema = z.enum([
+  'new-combat',
+  'new-utility',
+  'upgrade-combat',
+  'upgrade-utility',
+  'attributes',
+]);
+export type LevelUpChoice = z.infer<typeof levelUpChoiceSchema>;
+export const levelUpRewardSchema = z
+  .object({
+    ability: abilitySchema.nullable(),
+    description: z.string().min(1).max(700),
+  })
   .strict();
+export type LevelUpReward = z.infer<typeof levelUpRewardSchema>;
 export const lootSchema = z
   .object({
     name: z.string().min(1).max(100),
@@ -81,7 +110,8 @@ export const characterSchema = z
     species: z.string().min(1).max(80),
     appearance: z.string().max(1000).default(''),
     traits: z.array(traitSchema).max(3),
-    weaponOptions: z.array(weaponOptionSchema).length(3),
+    equipmentOptions: z.array(itemSchema).length(5),
+    selectedEquipmentIds: z.array(z.string()).max(2).default([]),
     healingItemName: z.string().min(1).max(100),
     concept: z.string().max(1000),
     background: z.string().max(1500),
@@ -95,7 +125,7 @@ export const characterSchema = z
         INT: z.number().int().min(0).max(15),
       })
       .strict(),
-    abilities: z.array(abilitySchema).max(6),
+    abilities: z.array(abilitySchema),
     equipment: z.array(z.string().trim().min(1).max(80)).max(4),
   })
   .strict();
@@ -129,6 +159,7 @@ export const checkSchema = z
     reason: z.string().min(1).max(500),
     mode: z.enum(['normal', 'advantage', 'disadvantage']),
     lethal: z.boolean().default(false),
+    abilityName: z.string().min(1).max(80).nullable().optional(),
   })
   .strict();
 export type Check = z.infer<typeof checkSchema>;
@@ -203,19 +234,23 @@ export type CharacterState = {
   stats: Record<Stat, number>;
   level: number;
   xp: number;
-  statPoints: number;
+  pendingLevelUps: number;
+  lastLevelUp?: string;
   gold: number;
   inventory: (Item & { quantity: number })[];
   conditions: string[];
   conditionTurns: Record<string, number>;
   equipment: Record<Slot, Item | null>;
-  starterWeapons: Item[];
-  weaponChosen: boolean;
+  starterEquipment: Item[];
+  equipmentChosen: boolean;
   kills: number;
   bosses: number;
   deathReason: string | null;
   restedFloor: number | null;
   guarding?: boolean;
+  abilityUses?: Record<string, number>;
+  abilityGuard?: number;
+  abilityAssist?: number;
 };
 export const enemySchema = z
   .object({
@@ -266,7 +301,8 @@ export const combatSchema = z
         z
           .object({
             memberId: z.string().uuid(),
-            main: z.enum(['attack', 'defend', 'flee', 'creative']),
+            main: z.enum(['attack', 'defend', 'flee', 'creative', 'ability']),
+            abilityName: z.string().min(1).max(80).nullable().optional(),
             targetId: z.string().nullable(),
             stat: statSchema,
             description: z.string().max(500),
@@ -294,7 +330,7 @@ export type Member = {
   state: CharacterState;
   active: boolean;
 };
-export type Action = { memberId: string; text: string; passed: boolean; acceptsLethalRisk?: boolean };
+export type Action = { memberId: string; text: string; passed: boolean; acceptsLethalRisk?: boolean; abilityName?: string | null };
 export type Roll = Check & {
   id: string;
   dice: number[];
@@ -357,7 +393,7 @@ export function templateCharacter(name = 'New character', species = 'Custom spec
     role: species,
     species,
     appearance: '',
-    traits: [],
+    traits: [blankTrait('Instinct'), blankTrait('Resolve')],
     concept: '',
     background: '',
     personality: '',
@@ -365,11 +401,43 @@ export function templateCharacter(name = 'New character', species = 'Custom spec
     weakness: '',
     stats: { STR: 5, DEX: 5, INT: 5 },
     equipment: [],
-    abilities: [],
-    weaponOptions: stats.map((stat) => ({
-      name: `${stat} weapon`,
-      stat,
-      description: 'Name and describe this weapon to fit your character.',
+    abilities: [
+      {
+        name: 'Focused strike',
+        description: 'Channel your training into an attack.',
+        kind: 'combat',
+        effect: 'strike',
+        level: 1,
+        stat: 'STR',
+        healing: 'normal',
+      },
+      {
+        name: 'Keen observation',
+        description: 'Examine your surroundings for useful clues.',
+        kind: 'utility',
+        effect: 'assist',
+        level: 1,
+        stat: 'INT',
+        healing: 'normal',
+      },
+    ],
+    selectedEquipmentIds: [],
+    equipmentOptions: Array.from({ length: 5 }, (_, i) => ({
+      id: `starter-${i}`,
+      name: `Starting weapon ${i + 1}`,
+      kind: 'weapon' as const,
+      rarity: 'Common' as const,
+      scaling: [stats[i % stats.length]],
+      requirements: { STR: 0, DEX: 0, INT: 0 },
+      hands: 1 as const,
+      light: stats[i % stats.length] === 'DEX',
+      damage: '1d6',
+      defense: 0,
+      initiativePenalty: 0,
+      healing: 0,
+      attackBonus: 0,
+      checkBonus: 0,
+      description: 'A simple starting weapon.',
     })),
     healingItemName: 'Healing consumable',
   };

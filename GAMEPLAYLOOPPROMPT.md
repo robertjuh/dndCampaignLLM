@@ -309,14 +309,11 @@ The player begins at:
 
 When the player levels up:
 
-- Gain **5 Stat Points**
-- The player may distribute them between STR, DEX and INT however they wish.
+- Choose one reward: a new in-combat ability, a new out-of-combat ability, an upgrade to a random current in-combat ability, an upgrade to a random current out-of-combat ability, or two random attribute points.
 - Increase Maximum HP by 5.
 - Increase Current HP by 5.
 
-Never automatically spend stat points.
-
-Pause the adventure and ask the player how they want to distribute them.
+Pause the adventure for the player’s reward choice. The server uses internal dice to select an upgrade target or allocate the two attribute points (both may go to the same attribute). The LLM generates the chosen ability or upgrade and describes the reward; the server validates and saves it to the character. Do not choose the reward for the player.
 
 ---
 
@@ -1792,13 +1789,9 @@ Suggested actions can be shown, but free-form actions are always allowed.
 
 ---
 
-# 57. STARTING WEAPONS AND CHARACTER TRAITS
+# 57. STARTING EQUIPMENT AND CHARACTER TRAITS
 
-Normally generate three Level-1-compatible starter weapons and allow the player to select one.
-
-However, character traits may modify this rule.
-
-Powerful natural weapons or special starting equipment may partially or completely replace normal starter choices.
+Offer exactly five Level-1-compatible equipment pieces and let the player select exactly two. Roll each equipment type independently using internal dice, so repeated types are allowed (including five weapons or four armours and an off-hand item). Include weapons, armour, helmets, boots, shields, focuses, and relics only when the character can equip them. Respect blocked slots, anatomy, stat requirements, and heavy-equipment restrictions. Spare items sharing a slot go in the backpack.
 
 ---
 
@@ -1944,13 +1937,13 @@ Apply equipment restrictions.
 
 Apply inventory modifications.
 
-Apply starting abilities.
+Generate exactly two traits, one level-1 in-combat ability, and one level-1 out-of-combat ability, all fitting the player’s concept. Present the generated character as a read-only sheet.
 
 ---
 
 ## STEP 3 — Generate Starting Equipment
 
-Generate three Level-1-compatible starter weapons unless the character's traits alter this rule.
+Roll five equippable starting equipment offers as described in section 57. The player selects exactly two.
 
 Give the player basic clothing or a character-appropriate equivalent.
 
