@@ -3,7 +3,15 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { rollStartingEquipment } from '../shared/rules';
 import { localDice } from './random';
-import { abilitySchema, stats, type Character, type CharacterState, type Item, type Stat, type Scene } from '../shared/schema';
+import {
+  abilitySchema,
+  stats,
+  type Character,
+  type CharacterState,
+  type Item,
+  type Stat,
+  type Scene,
+} from '../shared/schema';
 
 export function openDatabase(filename: string) {
   if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
@@ -12,7 +20,7 @@ export function openDatabase(filename: string) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 6) throw new Error('This database was created by a newer Gather version.');
+  if (version > 7) throw new Error('This database was created by a newer Gather version.');
   if (version === 0)
     db.transaction(() => {
       db.exec(`
@@ -104,10 +112,12 @@ export function openDatabase(filename: string) {
   if (version < 6)
     db.transaction(() => {
       db.exec('ALTER TABLE actions ADD COLUMN ability_name TEXT;');
-      const bestStat = (scores: Record<Stat, number>) => stats.reduce((best, stat) => scores[stat] > scores[best] ? stat : best, 'INT' as Stat);
+      const bestStat = (scores: Record<Stat, number>) =>
+        stats.reduce((best, stat) => (scores[stat] > scores[best] ? stat : best), 'INT' as Stat);
       const migrateItem = <T extends Item>(item: T, fallback: Stat): T => {
         const power = { Common: 1, Uncommon: 1, Rare: 2, Epic: 2, Legendary: 3, Cursed: 2 }[item.rarity];
-        return { ...item,
+        return {
+          ...item,
           scaling: ['focus', 'relic'].includes(item.kind) && !item.scaling.length ? [fallback] : item.scaling,
           attackBonus: item.attackBonus ?? (item.kind === 'focus' ? power : 0),
           checkBonus: item.checkBonus ?? (item.kind === 'relic' ? power : 0),
@@ -115,11 +125,17 @@ export function openDatabase(filename: string) {
       };
       const migrateSheet = (sheet: Character) => {
         const stat = bestStat(sheet.stats);
-        sheet.abilities = sheet.abilities.map((ability) => abilitySchema.parse({ ...ability,
-          effect: ability.kind === 'utility' ? 'assist' : ability.effect,
-          stat: ability.stat ?? stat,
-          healing: ability.healing ?? sheet.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal',
-        }));
+        sheet.abilities = sheet.abilities.map((ability) =>
+          abilitySchema.parse({
+            ...ability,
+            effect: ability.kind === 'utility' ? 'assist' : ability.effect,
+            stat: ability.stat ?? stat,
+            healing:
+              ability.healing ??
+              sheet.traits.find((trait) => trait.healing !== 'normal')?.healing ??
+              'normal',
+          }),
+        );
         sheet.equipmentOptions = sheet.equipmentOptions.map((item) => migrateItem(item, stat));
         return sheet;
       };
@@ -134,14 +150,40 @@ export function openDatabase(filename: string) {
         }
         return state;
       };
-      const migrateScene = (scene: Scene) => ({ ...scene, loot: scene.loot.map((item) => migrateItem(item, 'INT')) });
-      for (const row of db.prepare('SELECT id, sheet FROM characters').all() as { id: string; sheet: string }[])
-        db.prepare('UPDATE characters SET sheet = ? WHERE id = ?').run(JSON.stringify(migrateSheet(JSON.parse(row.sheet))), row.id);
-      for (const row of db.prepare('SELECT id, sheet, state FROM members').all() as { id: string; sheet: string; state: string }[])
-        db.prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?').run(JSON.stringify(migrateSheet(JSON.parse(row.sheet))), JSON.stringify(migrateState(JSON.parse(row.state))), row.id);
-      for (const row of db.prepare('SELECT id, scene FROM campaigns WHERE scene IS NOT NULL').all() as { id: string; scene: string }[])
-        db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(migrateScene(JSON.parse(row.scene))), row.id);
-      for (const row of db.prepare('SELECT id, draft FROM turns WHERE draft IS NOT NULL').all() as { id: string; draft: string }[]) {
+      const migrateScene = (scene: Scene) => ({
+        ...scene,
+        loot: scene.loot.map((item) => migrateItem(item, 'INT')),
+      });
+      for (const row of db.prepare('SELECT id, sheet FROM characters').all() as {
+        id: string;
+        sheet: string;
+      }[])
+        db.prepare('UPDATE characters SET sheet = ? WHERE id = ?').run(
+          JSON.stringify(migrateSheet(JSON.parse(row.sheet))),
+          row.id,
+        );
+      for (const row of db.prepare('SELECT id, sheet, state FROM members').all() as {
+        id: string;
+        sheet: string;
+        state: string;
+      }[])
+        db.prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?').run(
+          JSON.stringify(migrateSheet(JSON.parse(row.sheet))),
+          JSON.stringify(migrateState(JSON.parse(row.state))),
+          row.id,
+        );
+      for (const row of db.prepare('SELECT id, scene FROM campaigns WHERE scene IS NOT NULL').all() as {
+        id: string;
+        scene: string;
+      }[])
+        db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(
+          JSON.stringify(migrateScene(JSON.parse(row.scene))),
+          row.id,
+        );
+      for (const row of db.prepare('SELECT id, draft FROM turns WHERE draft IS NOT NULL').all() as {
+        id: string;
+        draft: string;
+      }[]) {
         const draft = JSON.parse(row.draft);
         for (const member of draft.members) {
           member.character = migrateSheet(member.character);
@@ -151,6 +193,10 @@ export function openDatabase(filename: string) {
         db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(JSON.stringify(draft), row.id);
       }
       db.pragma('user_version = 6');
+    })();
+  if (version < 7)
+    db.transaction(() => {
+      db.exec('ALTER TABLE members ADD COLUMN replacement TEXT; PRAGMA user_version = 7;');
     })();
   // A model may have been interrupted after a roll. Keep its receipts and require a deliberate retry.
   db.prepare(

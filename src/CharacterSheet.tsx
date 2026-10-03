@@ -1,6 +1,15 @@
-import { type Character, type Item, stats } from '../shared/schema';
+import { type Character, type CharacterState, type Item, stats, slots } from '../shared/schema';
+import { abilityMechanics, chooseStartingEquipment, initialState } from '../shared/rules';
 
-export function ItemDetails({ item }: { item: Item }) {
+export const slotLabels = {
+  left: 'Left hand',
+  right: 'Right hand',
+  body: 'Body',
+  head: 'Head',
+  boots: 'Feet',
+};
+
+export function ItemDetails({ item, compact = false }: { item: Item; compact?: boolean }) {
   const requirements = stats
     .filter((stat) => item.requirements[stat] > 0)
     .map((stat) => `${item.requirements[stat]} ${stat}`)
@@ -13,6 +22,9 @@ export function ItemDetails({ item }: { item: Item }) {
     item.kind === 'armour' && item.scaling.length > 0 && `${item.scaling.join('/')} defense`,
     item.defense > 0 && `+${item.defense} defense`,
     item.healing > 0 && `Heal ${item.healing} HP`,
+    item.attackBonus > 0 && `+${item.attackBonus} ${item.scaling.join('/')} attack rolls while equipped`,
+    item.checkBonus > 0 &&
+      `+${item.checkBonus} ${item.scaling.join('/')} out-of-combat checks while equipped`,
     item.hands === 2 && 'Two-handed',
     item.light && 'Light',
     item.initiativePenalty < 0 && `${item.initiativePenalty} initiative`,
@@ -23,12 +35,34 @@ export function ItemDetails({ item }: { item: Item }) {
   return (
     <>
       <small>{details}</small>
-      {item.description && <small>{item.description}</small>}
+      {item.description &&
+        (compact ? (
+          <details className="item-description">
+            <summary>Description</summary>
+            <p>{item.description}</p>
+          </details>
+        ) : (
+          <small>{item.description}</small>
+        ))}
     </>
   );
 }
 
-export function Abilities({ character }: { character: Character }) {
+export function Abilities({
+  character,
+  state,
+  inCombat = false,
+  selected,
+  onSelect,
+  disabled = false,
+}: {
+  character: Character;
+  state?: CharacterState;
+  inCombat?: boolean;
+  selected?: string | null;
+  onSelect?: (name: string | null) => void;
+  disabled?: boolean;
+}) {
   return (
     <div className="ability-grid">
       {character.abilities.map((ability, i) => (
@@ -37,7 +71,30 @@ export function Abilities({ character }: { character: Character }) {
             {ability.kind === 'combat' ? 'In combat' : 'Out of combat'} · Level {ability.level}
           </span>
           <h4>{ability.name}</h4>
+          <p className="ability-mechanics">{abilityMechanics(ability)}</p>
           <p>{ability.description}</p>
+          {state && (
+            <small className="ability-uses">
+              {ability.kind === 'combat' && !inCombat
+                ? 'Ready for the next combat'
+                : `${(state.abilityUses?.[ability.name] ?? 0) >= 1 ? 0 : 1}/1 uses remaining`}
+            </small>
+          )}
+          {onSelect && (
+            <button
+              type="button"
+              className="button secondary"
+              aria-pressed={selected === ability.name}
+              disabled={
+                disabled ||
+                ability.kind !== (inCombat ? 'combat' : 'utility') ||
+                (state?.abilityUses?.[ability.name] ?? 0) >= 1
+              }
+              onClick={() => onSelect(selected === ability.name ? null : ability.name)}
+            >
+              {selected === ability.name ? 'Selected for your action' : 'Use ability'}
+            </button>
+          )}
         </article>
       ))}
     </div>
@@ -45,16 +102,34 @@ export function Abilities({ character }: { character: Character }) {
 }
 
 export function EquipmentChoices({
+  character,
+  state,
   items,
   selected,
   onChange,
   disabled = false,
 }: {
+  character: Character;
+  state?: CharacterState;
   items: Item[];
   selected: string[];
   onChange: (ids: string[]) => void;
   disabled?: boolean;
 }) {
+  let preview: CharacterState | null = null;
+  let previewError = '';
+  if (selected.length === 2) {
+    try {
+      preview = state
+        ? structuredClone(state)
+        : initialState({ ...character, selectedEquipmentIds: [] }, 'preview');
+      preview.starterEquipment = items;
+      chooseStartingEquipment(character, preview, selected);
+    } catch (error) {
+      preview = null;
+      previewError = (error as Error).message;
+    }
+  }
   return (
     <section className="equipment-selection">
       <h3>Choose your starting equipment</h3>
@@ -81,6 +156,32 @@ export function EquipmentChoices({
           </button>
         ))}
       </div>
+      {preview && (
+        <div className="starting-loadout" aria-label="Starting loadout preview">
+          <b>Your starting loadout</b>
+          {slots
+            .filter(
+              (slot) =>
+                preview!.equipment[slot] && !(slot === 'left' && preview!.equipment.left?.hands === 2),
+            )
+            .map((slot) => (
+              <p key={slot}>
+                {preview!.equipment[slot]!.hands === 2 ? 'Both hands' : slotLabels[slot]}:{' '}
+                {preview!.equipment[slot]!.name}
+              </p>
+            ))}
+          {preview.inventory
+            .filter((item) => selected.includes(item.id))
+            .map((item) => (
+              <p key={item.id}>Backpack: {item.name}</p>
+            ))}
+        </div>
+      )}
+      {previewError && (
+        <p className="gear-reason" role="status">
+          {previewError}
+        </p>
+      )}
     </section>
   );
 }

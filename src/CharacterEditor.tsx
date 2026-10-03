@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { type Character } from '../shared/schema';
+import { type CampaignConfig, type Character } from '../shared/schema';
 import { CharacterSheet, EquipmentChoices } from './CharacterSheet';
 import { api, ApiError } from './api';
 import { ModelSelect } from './ModelSelect';
@@ -15,6 +15,7 @@ export function CharacterEditor({
   initial,
   code,
   campaignId,
+  campaigns = [],
   saveUrl = '/api/characters',
   onSave,
   onCancel,
@@ -22,13 +23,18 @@ export function CharacterEditor({
   initial?: Character;
   code?: string;
   campaignId?: string;
+  campaigns?: { id: string; config: CampaignConfig }[];
   saveUrl?: string;
   onSave: (saved: Character & { id: string }) => void | Promise<void>;
   onCancel: () => void;
 }) {
   const [sheet, setSheet] = useState<Character | null>(initial?.name ? initial : null);
+  const [name, setName] = useState(initial?.name ?? '');
   const [concept, setConcept] = useState(initial?.concept ?? '');
   const [model, setModel] = useState('');
+  const [contextCampaignId, setContextCampaignId] = useState('');
+  const attachedCampaignId = campaignId || contextCampaignId;
+  const contextCampaign = campaigns.find((campaign) => campaign.id === attachedCampaignId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [generationError, setGenerationError] = useState('');
@@ -36,6 +42,7 @@ export function CharacterEditor({
   const [generationStarted, setGenerationStarted] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const generation = useRef<AbortController | null>(null);
+  const savedDraft = useRef<{ sheet: Character; character: Character & { id: string } } | null>(null);
   useEffect(() => () => generation.current?.abort(), []);
   useEffect(() => {
     if (generationStarted === null) return;
@@ -61,10 +68,17 @@ export function CharacterEditor({
     try {
       const result = await api<Character>(
         '/api/characters/generate',
-        { concept, model, ...(code ? { code } : {}), ...(campaignId ? { campaignId } : {}) },
+        {
+          concept,
+          ...(name.trim() ? { name: name.trim() } : {}),
+          model,
+          ...(code ? { code } : {}),
+          ...(attachedCampaignId ? { campaignId: attachedCampaignId } : {}),
+        },
         controller.signal,
       );
-      if (!controller.signal.aborted) setSheet({ ...result, concept, selectedEquipmentIds: [] });
+      if (!controller.signal.aborted)
+        setSheet({ ...result, name: name.trim() || result.name, concept, selectedEquipmentIds: [] });
     } catch (e) {
       setUsageLimited(
         e instanceof ApiError && e.providerCode === 'subscription_sharing_usage_limit_exceeded',
@@ -89,9 +103,22 @@ export function CharacterEditor({
     setBusy(true);
     setError('');
     try {
-      await onSave(await api<Character & { id: string }>(saveUrl, sheet));
+      const character =
+        savedDraft.current?.sheet === sheet
+          ? savedDraft.current.character
+          : await api<Character & { id: string }>(saveUrl, sheet);
+      savedDraft.current = { sheet, character };
+      await onSave(character);
     } catch (e) {
-      setError((e as Error).message);
+      const message =
+        e instanceof Error && e.message.trim()
+          ? e.message
+          : 'Could not save your character. Please try again.';
+      setError(
+        savedDraft.current?.sheet === sheet
+          ? `Your character was saved, but the next step could not finish. ${message}`
+          : message,
+      );
     } finally {
       setBusy(false);
     }
@@ -105,17 +132,59 @@ export function CharacterEditor({
         </button>
       </div>
       <div className="generate-box">
+        <Field label="Character name (optional)">
+          <input
+            value={name}
+            disabled={busy}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (sheet && e.target.value.trim()) setSheet({ ...sheet, name: e.target.value.trim() });
+            }}
+            maxLength={60}
+            placeholder="Leave blank for ChatGPT to choose"
+          />
+        </Field>
         <Field label="Character concept">
           <textarea
             value={concept}
             disabled={busy}
             onChange={(e) => setConcept(e.target.value)}
             maxLength={1000}
-            placeholder="A chaotic warlord elf-spider who casts unpredictable spells…"
+            placeholder="Concept/thema voor je karakter, schrijf wat je wilt en chatgpt doet de rest"
             rows={2}
           />
         </Field>
-        {!code && !campaignId && <ModelSelect value={model} onChange={setModel} disabled={busy} />}
+        {!code && !campaignId && (
+          <>
+            <Field label="Campaign context (optional)">
+              <select
+                value={contextCampaignId}
+                onChange={(e) => setContextCampaignId(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">No campaign context</option>
+                {campaigns.map((campaign) => (
+                  <option key={campaign.id} value={campaign.id}>
+                    {campaign.config.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <p className="muted small">
+              {contextCampaign
+                ? `${contextCampaign.config.setting} · ${contextCampaign.config.tone}.${contextCampaign.config.provider === 'practice' ? '' : ' Your character and equipment will fit this campaign’s theme.'}`
+                : 'Choose an existing campaign to guide your character’s background, abilities, and equipment.'}
+            </p>
+          </>
+        )}
+        {(code || attachedCampaignId) && (
+          <p className="muted small">
+            {contextCampaign?.config.provider === 'practice'
+              ? 'This practice campaign creates a scripted character without AI.'
+              : 'Campaign context is attached. Generation uses the campaign’s selected model.'}
+          </p>
+        )}
+        {!code && !attachedCampaignId && <ModelSelect value={model} onChange={setModel} disabled={busy} />}
         <button type="button" className="button secondary" disabled={busy} onClick={generate}>
           {generationStarted !== null
             ? 'Generating…'
@@ -157,14 +226,15 @@ export function CharacterEditor({
           </div>
         )}
         <p className="muted small">
-          Describe your concept, discover your character, and choose two starting pieces. Players use the
-          host’s connected ChatGPT plan; no separate sign-in is needed.
+          Enter a name to keep it exactly, describe your concept, and choose two starting pieces. Players use
+          the host’s connected ChatGPT plan; no separate sign-in is needed.
         </p>
       </div>
       {sheet && (
         <>
           <CharacterSheet character={sheet} />
           <EquipmentChoices
+            character={sheet}
             items={sheet.equipmentOptions}
             selected={sheet.selectedEquipmentIds}
             disabled={busy}

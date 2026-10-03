@@ -16,6 +16,11 @@ export async function api<T = unknown>(path: string, body?: unknown, signal?: Ab
   });
   const data = await response.json();
   if (!response.ok)
-    throw new ApiError(data.error ?? 'Something went wrong. Please try again.', data.provider?.code);
+    throw new ApiError(
+      typeof data?.error === 'string' && data.error.trim()
+        ? data.error
+        : 'Something went wrong. Please try again.',
+      data?.provider?.code,
+    );
   return data as T;
 }

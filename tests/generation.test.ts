@@ -146,6 +146,6 @@ it('corrects an invalid ability upgrade while keeping the server-selected target
   expect(result).toEqual(valid);
   const request = JSON.parse(fetcher.mock.calls[1][1]!.body as string);
   expect(JSON.parse(request.input[0].content).target).toEqual(target);
-  expect(request.input.at(-1).content).toContain('category and level');
+  expect(request.input.at(-1).content).toContain('Out-of-combat abilities assist');
   expect(target.level).toBe(1);
 });

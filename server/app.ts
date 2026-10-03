@@ -7,7 +7,7 @@ import { ChatGPTAuth } from './auth';
 import { ChatGPTGM, PracticeGM, ProviderError } from './providers';
 import { RuleError } from '../shared/rules';
 import { localDice } from './random';
-import { characterSchema, levelUpChoiceSchema, slots } from '../shared/schema';
+import { campaignLanguageSchema, characterSchema, levelUpChoiceSchema, slots } from '../shared/schema';
 import type { GoogleAuth } from './google';
 import { tokenHash } from './game';
 
@@ -22,6 +22,7 @@ const actionInput = z
     turnId: z.string().uuid(),
     text: z.string().trim().max(2000),
     passed: z.boolean(),
+    // Legacy clients may still send this field; it no longer gates resolution.
     acceptsLethalRisk: z.boolean().default(false),
     abilityName: z.string().min(1).max(80).nullable().default(null),
   })
@@ -189,9 +190,10 @@ export async function createApp(options: {
     game.editLobbyCharacter(campaignId(request), request.player.id, request.body),
   );
   app.post('/api/characters/generate', async (request, reply) => {
-    const { concept, model, code, campaignId } = z
+    const { concept, name, model, code, campaignId } = z
       .object({
         concept: z.string().trim().max(1000),
+        name: characterSchema.shape.name.optional(),
         model: z.string().max(100).default(''),
         campaignId: z.string().uuid().optional(),
         code: z
@@ -207,8 +209,12 @@ export async function createApp(options: {
       if (campaignId) game.canRead(campaignId, request.player.id);
       const campaign = game.campaign(campaignId ?? game.invite(code!).id);
       provider = providers(campaign.owner_id, JSON.parse(campaign.config));
-      context = JSON.stringify({ playerConcept: context, campaign: JSON.parse(campaign.config) });
-    }
+      context = JSON.stringify({
+        playerConcept: context,
+        ...(name ? { characterName: name } : {}),
+        campaign: JSON.parse(campaign.config),
+      });
+    } else if (name) context = JSON.stringify({ playerConcept: context, characterName: name });
     if (!provider.generate) throw new GameError('Character generation is not available.');
     const controller = new AbortController();
     const cancel = () => {
@@ -216,7 +222,8 @@ export async function createApp(options: {
     };
     reply.raw.on('close', cancel);
     try {
-      return characterSchema.parse(await provider.generate(context, controller.signal));
+      const character = await provider.generate(context, controller.signal);
+      return characterSchema.parse({ ...character, ...(name ? { name } : {}) });
     } finally {
       reply.raw.off('close', cancel);
     }
@@ -263,13 +270,27 @@ export async function createApp(options: {
   app.post('/api/campaigns/:id/action', async (request) => {
     const id = campaignId(request);
     const action = actionInput.parse(request.body);
-    game.submit(id, request.player.id, action.turnId, action.text, action.passed, action.acceptsLethalRisk, action.abilityName);
+    game.submit(
+      id,
+      request.player.id,
+      action.turnId,
+      action.text,
+      action.passed,
+      action.acceptsLethalRisk,
+      action.abilityName,
+    );
     return snap(id, request);
   });
   app.post('/api/campaigns/:id/pause', async (request) => {
     const id = campaignId(request);
     const { paused } = z.object({ paused: z.boolean() }).strict().parse(request.body);
     game.pause(id, request.player.id, paused);
+    return snap(id, request);
+  });
+  app.post('/api/campaigns/:id/language', async (request) => {
+    const id = campaignId(request);
+    const { language } = z.object({ language: campaignLanguageSchema }).strict().parse(request.body);
+    game.setLanguage(id, request.player.id, language);
     return snap(id, request);
   });
   app.post('/api/campaigns/:id/member', async (request) => {
@@ -281,13 +302,23 @@ export async function createApp(options: {
     game.setActive(id, request.player.id, memberId, active);
     return snap(id, request);
   });
+  app.post('/api/campaigns/:id/replacement', async (request) => {
+    const { characterId } = z
+      .object({ characterId: z.string().uuid().nullable() })
+      .strict()
+      .parse(request.body);
+    return game.queueReplacement(campaignId(request), request.player.id, characterId);
+  });
   app.post('/api/campaigns/:id/character', async (request) => {
     const action = z
       .object({
-        type: z.enum(['starter', 'equip', 'unequip', 'heal', 'drop', 'take', 'rest']),
+        type: z.enum(['starter', 'equip', 'unequip', 'heal', 'drop', 'take', 'take-equip', 'rest']),
         itemId: z.string().optional(),
+        targetId: z.string().uuid().optional(),
+        abilityName: z.string().min(1).max(80).optional(),
         itemIds: z.array(z.string()).length(2).optional(),
         slot: z.enum(slots).optional(),
+        dropItemIds: z.array(z.string().min(1).max(100)).max(8).optional(),
       })
       .strict()
       .parse(request.body);

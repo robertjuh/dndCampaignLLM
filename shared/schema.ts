@@ -17,7 +17,11 @@ export const abilitySchema = z
   .strict()
   .superRefine((ability, ctx) => {
     if (ability.kind === 'utility' && ability.effect !== 'assist')
-      ctx.addIssue({ code: 'custom', message: 'Out-of-combat abilities assist a relevant check.', path: ['effect'] });
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Out-of-combat abilities assist a relevant check.',
+        path: ['effect'],
+      });
   });
 export const slots = ['left', 'right', 'body', 'head', 'boots'] as const;
 export type Slot = (typeof slots)[number];
@@ -130,6 +134,7 @@ export const characterSchema = z
   })
   .strict();
 export type Character = z.infer<typeof characterSchema>;
+export const campaignLanguageSchema = z.enum(['English', 'Nederlands']);
 export const campaignSchema = z
   .object({
     ruleset: z.literal('roguelike-v1').default('roguelike-v1'),
@@ -137,7 +142,7 @@ export const campaignSchema = z
     setting: z.string().trim().min(1).max(500),
     premise: z.string().max(2500),
     tone: z.string().max(300),
-    language: z.enum(['English', 'Nederlands']),
+    language: campaignLanguageSchema,
     instructions: z.string().max(3000),
     custom: z
       .array(z.object({ key: z.string().trim().min(1).max(60), value: z.string().max(500) }).strict())
@@ -163,6 +168,15 @@ export const checkSchema = z
   })
   .strict();
 export type Check = z.infer<typeof checkSchema>;
+export const resourceUseSchema = z
+  .object({
+    memberId: z.string().uuid(),
+    itemId: z.string().min(1).max(100).nullable(),
+    abilityName: z.string().min(1).max(80).nullable(),
+    targetId: z.string().uuid().nullable(),
+  })
+  .strict();
+export type ResourceUse = z.infer<typeof resourceUseSchema>;
 export const changeSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -196,9 +210,10 @@ export const changeSchema = z.discriminatedUnion('type', [
     })
     .strict(),
 ]);
+export const maxNarrationLength = 24000;
 export const outcomeSchema = z
   .object({
-    narration: z.string().min(1).max(12000),
+    narration: z.string().min(1).max(maxNarrationLength),
     summary: z.string().min(1).max(2000),
     choices: z.array(z.string().min(1).max(500)).max(5),
     changes: z.array(changeSchema).max(30),
@@ -301,13 +316,15 @@ export const combatSchema = z
         z
           .object({
             memberId: z.string().uuid(),
-            main: z.enum(['attack', 'defend', 'flee', 'creative', 'ability']),
+            main: z.enum(['attack', 'defend', 'flee', 'creative', 'ability', 'move', 'interact']),
+            reengage: z.boolean().optional(),
             abilityName: z.string().min(1).max(80).nullable().optional(),
             targetId: z.string().nullable(),
             stat: statSchema,
             description: z.string().max(500),
             minor: z.enum(['none', 'heal', 'offhand', 'equip']),
             minorItemId: z.string().nullable(),
+            minorTargetId: z.string().uuid().nullable().optional(),
             minorSlot: z.enum(slots).nullable().default(null),
             dc: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]).optional(),
             effect: z.enum(['damage', 'stun', 'influence']).optional(),
@@ -329,8 +346,16 @@ export type Member = {
   character: Character;
   state: CharacterState;
   active: boolean;
+  replacement?: { characterId: string; character: Character } | null;
 };
-export type Action = { memberId: string; text: string; passed: boolean; acceptsLethalRisk?: boolean; abilityName?: string | null };
+export type Action = {
+  memberId: string;
+  text: string;
+  passed: boolean;
+  acceptsLethalRisk?: boolean;
+  abilityName?: string | null;
+  characterName?: string;
+};
 export type Roll = Check & {
   id: string;
   dice: number[];
@@ -351,6 +376,7 @@ export type Turn = {
   rolls: Roll[];
   result: Outcome | null;
   error: string | null;
+  equipmentChanges?: { memberId: string; characterName: string; description: string }[];
 };
 export type Snapshot = {
   id: string;

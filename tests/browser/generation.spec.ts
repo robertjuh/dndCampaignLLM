@@ -1,5 +1,153 @@
 import { test, expect } from '@playwright/test';
+import { baseItem } from '../../shared/rules';
 import { templateCharacter } from '../../shared/schema';
+
+for (const failure of ['save', 'refresh'] as const) {
+  test(`a failed character ${failure} keeps the draft and retries without duplicate saves`, async ({
+    page,
+  }) => {
+    const sheet = templateCharacter('Returning explorer');
+    await page.route('**/api/characters/generate', (route) => route.fulfill({ json: sheet }));
+    await page.goto('/characters');
+    await page.getByRole('button', { name: 'Create a character', exact: true }).click();
+    await page.getByLabel('Character concept').fill('An explorer returning to the party');
+    await page.getByRole('button', { name: 'Generate from my concept' }).click();
+    await page.locator('.equipment-choices button').nth(0).click();
+    await page.locator('.equipment-choices button').nth(1).click();
+    let saveRequests = 0;
+    let failed = false;
+    await page.route('**/api/characters', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      saveRequests++;
+      if (failure === 'save' && !failed) {
+        failed = true;
+        return route.fulfill({ status: 500, json: { error: '' } });
+      }
+      return route.continue();
+    });
+    await page.route('**/api/me', async (route) => {
+      if (failure === 'refresh' && !failed) {
+        failed = true;
+        return route.fulfill({ status: 500, json: { error: '' } });
+      }
+      return route.continue();
+    });
+    const save = page.getByRole('button', { name: 'Save character', exact: true });
+    await save.click();
+    await expect(page.getByRole('alert')).toContainText('Something went wrong. Please try again.');
+    if (failure === 'refresh')
+      await expect(page.getByRole('alert')).toContainText('Your character was saved');
+    await expect(page.getByRole('button', { name: 'Create a character', exact: true })).toBeDisabled();
+    await expect(page.locator('.character-sheet')).toContainText(sheet.name);
+    await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(2);
+    await save.click();
+    await expect(page.locator('.character-editor')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Create a character', exact: true })).toBeEnabled();
+    await expect(page.locator('.library-card')).toHaveCount(1);
+    await expect(page.locator('.library-card')).toContainText(sheet.name);
+    expect(saveRequests).toBe(failure === 'save' ? 2 : 1);
+    const me = await (await page.request.get('/api/me')).json();
+    expect(me.characters.filter((character: { name: string }) => character.name === sheet.name)).toHaveLength(
+      1,
+    );
+  });
+}
+
+test('an entered character name survives generation, regeneration, renaming, and saving', async ({
+  page,
+}) => {
+  const requests: Record<string, unknown>[] = [];
+  await page.route('**/api/characters/generate', async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({ json: templateCharacter(`Invented name ${requests.length}`) });
+  });
+  await page.goto('/characters');
+  await page.getByRole('button', { name: 'Create a character', exact: true }).click();
+  const name = page.getByLabel('Character name (optional)');
+  await name.fill('  Ária Starfall  ');
+  await page.getByLabel('Character concept').fill('A curious explorer with a clockwork heart');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.getByRole('button', { name: 'Generate from my concept' }).click();
+    await expect(page.getByRole('heading', { name: 'Ária Starfall', exact: true })).toBeVisible();
+    expect(requests[attempt].name).toBe('Ária Starfall');
+  }
+  await name.fill('Captain Ária');
+  await expect(page.getByRole('heading', { name: 'Captain Ária', exact: true })).toBeVisible();
+  await page.locator('.equipment-choices button').nth(0).click();
+  await page.locator('.equipment-choices button').nth(1).click();
+  await page.getByRole('button', { name: 'Save character', exact: true }).click();
+  await page.reload();
+  await expect(
+    page.locator('.library-card').getByRole('heading', { name: 'Captain Ária', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Review saved character', exact: true }).click();
+  await expect(name).toHaveValue('Captain Ária');
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  await expect(
+    page.locator('.character-sheet').getByRole('heading', { name: 'Captain Ária', exact: true }),
+  ).toBeVisible();
+  expect(requests[2].name).toBe('Captain Ária');
+});
+
+test('library creation can attach, switch, and remove an existing campaign context', async ({ page }) => {
+  const createCampaign = async (name: string, setting: string) => {
+    const response = await page.request.post('/api/campaigns', {
+      headers: { 'x-gather-request': '1' },
+      data: {
+        ruleset: 'roguelike-v1',
+        name,
+        setting,
+        premise: 'Discover your place in this world.',
+        tone: 'Mysterious',
+        language: 'English',
+        instructions: '',
+        custom: [],
+        provider: 'chatgpt',
+        model: '',
+      },
+    });
+    expect(response.ok()).toBe(true);
+    return response.json() as Promise<{ id: string }>;
+  };
+  const ocean = await createCampaign('The Sunken Court', 'A kingdom beneath the sea');
+  const stars = await createCampaign('The Starbound Court', 'An ancient city aboard a starship');
+  const requests: Record<string, unknown>[] = [];
+  await page.route('**/api/characters/generate', async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({ json: templateCharacter(`Themed explorer ${requests.length}`) });
+  });
+  await page.goto('/characters');
+  await page.getByRole('button', { name: 'Create a character', exact: true }).click();
+  const selector = page.getByRole('combobox', { name: 'Campaign context (optional)' });
+  await expect(selector).toHaveValue('');
+  await page.getByLabel('Character concept').fill('A curious explorer with a clockwork heart');
+  await selector.selectOption(ocean.id);
+  await expect(page.getByText(/A kingdom beneath the sea · Mysterious/)).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'ChatGPT model' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  await expect(page.getByRole('heading', { name: 'Themed explorer 1', exact: true })).toBeVisible();
+  expect(requests[0]).toMatchObject({
+    campaignId: ocean.id,
+    concept: 'A curious explorer with a clockwork heart',
+  });
+  await selector.selectOption(stars.id);
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  await expect(page.getByRole('heading', { name: 'Themed explorer 2', exact: true })).toBeVisible();
+  expect(requests[1].campaignId).toBe(stars.id);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/campaign-context-mobile.png', fullPage: true });
+  await selector.selectOption('');
+  await expect(page.getByRole('combobox', { name: 'ChatGPT model' })).toBeVisible();
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  await expect(page.getByRole('heading', { name: 'Themed explorer 3', exact: true })).toBeVisible();
+  expect(requests[2]).not.toHaveProperty('campaignId');
+  await page.locator('.equipment-choices button').nth(0).click();
+  await page.locator('.equipment-choices button').nth(1).click();
+  await page.getByRole('button', { name: 'Save character', exact: true }).click();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Themed explorer 3', exact: true })).toBeVisible();
+});
 
 test('character generation shows progress, populates the draft, and keeps failures beside Generate', async ({
   page,
@@ -12,20 +160,42 @@ test('character generation shows progress, populates the draft, and keeps failur
     release = resolve;
   });
   const sheet = templateCharacter('Generated warrior', 'Sea creature');
+  sheet.equipmentOptions[0] = {
+    ...baseItem('fork', 'Sighting fork', 'focus'),
+    scaling: ['INT'],
+    attackBonus: 1,
+  };
+  sheet.equipmentOptions[1] = {
+    ...baseItem('oath', 'Throne oath', 'relic'),
+    scaling: ['INT'],
+    checkBonus: 1,
+  };
   await page.route('**/api/characters/generate', async (route) => {
     await ready;
     await route.fulfill({ json: sheet });
   });
   await page.getByRole('button', { name: 'Generate from my concept' }).click();
-  await expect(page.getByRole('status')).toContainText('ChatGPT is creating your character');
+  await expect(
+    page.getByRole('status').filter({ hasText: 'ChatGPT is creating your character' }),
+  ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel generation' })).toBeVisible();
   release();
   await expect(page.getByRole('heading', { name: sheet.name, exact: true })).toBeVisible();
-  await expect(page.getByRole('status')).toHaveCount(0);
+  await expect(
+    page.getByRole('status').filter({ hasText: 'ChatGPT is creating your character' }),
+  ).toHaveCount(0);
   await expect(page.locator('.character-editor textarea')).toHaveCount(1);
-  await expect(page.locator('.character-editor input, .character-editor select')).toHaveCount(0);
+  await expect(page.locator('.character-sheet input, .character-sheet select')).toHaveCount(0);
   await expect(page.locator('.equipment-choices button')).toHaveCount(5);
   await expect(page.locator('.ability-card')).toHaveCount(2);
+  await expect(page.locator('.ability-mechanics').nth(0)).toContainText('2d6 + STR modifier');
+  await expect(page.locator('.ability-mechanics').nth(1)).toContainText('Advantage');
+  await expect(page.locator('.equipment-choices button').nth(0)).toContainText(
+    '+1 INT attack rolls while equipped',
+  );
+  await expect(page.locator('.equipment-choices button').nth(1)).toContainText(
+    '+1 INT out-of-combat checks while equipped',
+  );
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
   await page.locator('.equipment-choices button').nth(0).click();
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();

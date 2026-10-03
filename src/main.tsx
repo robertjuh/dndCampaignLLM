@@ -25,8 +25,10 @@ import {
   Settings2,
   Shield,
   Sparkles,
+  Square,
   Swords,
   Users,
+  Volume2,
   X,
 } from 'lucide-react';
 import {
@@ -39,14 +41,16 @@ import {
   type Roll,
   type Snapshot,
   type CharacterState,
-  type Slot,
   levelUpChoices,
   type LevelUpChoice,
 } from '../shared/schema';
-import { modifier, defense, capacity, occupiedSlots } from '../shared/rules';
-import { Abilities, CharacterSheet, EquipmentChoices, ItemDetails } from './CharacterSheet';
+import { modifier, defense, capacity, occupiedSlots, isDowned, isDead } from '../shared/rules';
+import { Abilities, CharacterSheet, EquipmentChoices } from './CharacterSheet';
 import { CharacterEditor } from './CharacterEditor';
 import { ModelSelect } from './ModelSelect';
+import { useNarration } from './useNarration';
+import { TurnImagePrompt } from './TurnImagePrompt';
+import { EquipmentPanel } from './EquipmentPanel';
 import { api } from './api';
 import './style.css';
 
@@ -289,8 +293,9 @@ function Dashboard({ me }: { me: Me }) {
             <span className="line" /> THE NEXT CHAPTER IS YOURS
           </span>
           <h2>
-            A world to explore.
-            <br />A story to share.
+            Enter the slop with ai slop lmao.
+            <br />
+            Prepare to cringe.
           </h2>
           <p>Your imagination, your companions, and a game master ready to follow you into the unknown.</p>
           <a href="/new" className="button light">
@@ -466,14 +471,19 @@ function CreateCampaign() {
             <Field label="Tone & themes">
               <input value={config.tone} maxLength={300} onChange={(e) => change('tone', e.target.value)} />
             </Field>
-            <Field label="Story language">
+            <Field label="GM output language">
               <select
+                aria-label="GM output language"
+                aria-describedby="gm-language-help"
                 value={config.language}
                 onChange={(e) => change('language', e.target.value as CampaignConfig['language'])}
               >
                 <option>English</option>
                 <option>Nederlands</option>
               </select>
+              <small id="gm-language-help">
+                GM text uses this language. Game mechanics terms stay in English.
+              </small>
             </Field>
           </div>
         </div>
@@ -609,6 +619,7 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
           </a>
         </div>
         <Button
+          disabled={!!draft}
           onClick={() => {
             setEditingId(null);
             setDraft(templateCharacter('', ''));
@@ -622,11 +633,12 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
         <CharacterEditor
           key={editingId ?? 'new'}
           initial={draft}
+          campaigns={me.campaigns}
           saveUrl={editingId ? `/api/characters/${editingId}` : undefined}
           onCancel={() => setDraft(null)}
           onSave={async () => {
-            setDraft(null);
             await refresh();
+            setDraft(null);
           }}
         />
       )}
@@ -654,6 +666,7 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
             <Abilities character={c} />
             <Button
               secondary
+              disabled={!!draft}
               onClick={() => {
                 const { id, ...sheet } = c;
                 setEditingId(id);
@@ -667,6 +680,7 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
             </p>
             <Button
               secondary
+              disabled={!!draft}
               onClick={() => {
                 const { id: _id, ...sheet } = c;
                 setEditingId(null);
@@ -1046,9 +1060,12 @@ function MemberCard({
 }) {
   const [open, setOpen] = useState(false);
   const state = member.state;
-  const dead = state.hp <= 0;
+  const dead = isDead(state);
+  const downed = isDowned(state);
   return (
-    <article className={`member-card ${!member.active || dead ? 'sitting-out' : ''}`}>
+    <article
+      className={`member-card ${!member.active || dead ? 'sitting-out' : ''} ${downed ? 'downed' : ''}`}
+    >
       <button className="member-heading" onClick={() => setOpen(!open)} aria-expanded={open}>
         <span className="avatar">{member.character.name[0]}</span>
         <span>
@@ -1065,20 +1082,22 @@ function MemberCard({
           {state.hp}
           <small> / {state.maxHp}</small>
         </span>
-        <span className={`ready-state ${ready ? 'ready' : ''}`}>
-          {dead
-            ? 'RUN ENDED'
-            : !state.equipmentChosen
-              ? 'Choosing equipment'
-              : state.pendingLevelUps
-                ? `${state.pendingLevelUps} level-up rewards`
-                : !member.active
-                  ? 'Sitting out'
-                  : !current
-                    ? 'Next turn'
-                    : ready
-                      ? 'Action submitted'
-                      : 'Considering…'}
+        <span className={`ready-state ${ready ? 'ready' : ''} ${downed ? 'downed-state' : ''}`}>
+          {downed
+            ? 'Downed · needs healing'
+            : dead
+              ? 'Fallen'
+              : !state.equipmentChosen
+                ? 'Choosing equipment'
+                : state.pendingLevelUps
+                  ? `${state.pendingLevelUps} level-up rewards`
+                  : !member.active
+                    ? 'Sitting out'
+                    : !current
+                      ? 'Next turn'
+                      : ready
+                        ? 'Action submitted'
+                        : 'Considering…'}
         </span>
       </div>
       <div className="hp-track">
@@ -1089,6 +1108,10 @@ function MemberCard({
         <span>DEF {defense(member.character, state)}</span>
         <span>{state.gold} gold</span>
       </div>
+      {downed && <p className="downed-hint">An ally can help with a healing item or ability.</p>}
+      {dead && member.replacement && (
+        <p className="replacement-ready">{member.replacement.character.name} joins next floor · Level 1</p>
+      )}
       <div className="small-stats">
         {stats.map((stat) => (
           <div key={stat}>
@@ -1156,7 +1179,7 @@ function MemberCard({
           )}
         </div>
       )}
-      {host && !dead && (
+      {host && state.hp > 0 && (
         <button className="sit-out" onClick={onActive}>
           {member.active ? 'Sit out player' : 'Rejoin next turn'}
         </button>
@@ -1177,12 +1200,6 @@ function WorldStatus({ snapshot: s }: { snapshot: Snapshot }) {
           {s.scene.floor.encounters} encounters completed · {s.scene.floor.hazard}
         </small>
       </div>
-      {s.scene.lethalWarning && (
-        <div className="error">
-          <b>WARNING: FAILURE HERE COULD BE FATAL.</b>
-          <p>{s.scene.lethalWarning}</p>
-        </div>
-      )}
       {encounter && (
         <section className="combat-panel">
           <div className="section-heading">
@@ -1225,38 +1242,147 @@ function WorldStatus({ snapshot: s }: { snapshot: Snapshot }) {
   );
 }
 
+function ReplacementPicker({
+  member,
+  busy,
+  command,
+}: {
+  member: Member;
+  busy: boolean;
+  command: (route: string, body: unknown) => Promise<Snapshot | undefined>;
+}) {
+  const [characters, setCharacters] = useState<SavedCharacter[]>([]);
+  const [characterId, setCharacterId] = useState(member.replacement?.characterId ?? '');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  async function load(signal?: AbortSignal) {
+    setLoading(true);
+    setError('');
+    try {
+      const me = await api<Me>('/api/me', undefined, signal);
+      setCharacters(me.characters.filter((character) => character.selectedEquipmentIds.length === 2));
+    } catch (e) {
+      if (!signal?.aborted) setError(errorText(e));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    setCharacterId(member.replacement?.characterId ?? '');
+  }, [member.replacement?.characterId]);
+  return (
+    <section className="replacement-picker" aria-label="Next-floor character">
+      <h3>Return with a new character</h3>
+      <p>
+        Choose a saved character with two starting pieces. They join when the surviving party reaches the next
+        floor, at level 1 with fresh equipment. Your fallen character stays here until then.
+      </p>
+      {member.replacement && (
+        <p className="replacement-ready" role="status">
+          <b>{member.replacement.character.name}</b> is ready for the next floor. Level 1 · Fresh starting
+          equipment.
+        </p>
+      )}
+      <Field label="Replacement character">
+        <select
+          value={characterId}
+          onChange={(e) => setCharacterId(e.target.value)}
+          disabled={busy || loading}
+        >
+          <option value="">{loading ? 'Loading saved characters…' : 'Choose a character'}</option>
+          {characters.map((character) => (
+            <option key={character.id} value={character.id}>
+              {character.name} · {character.species}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {!loading && !characters.length && (
+        <p>Save a character and choose their two starting pieces in the character library first.</p>
+      )}
+      <ErrorBox error={error} />
+      <div className="button-row">
+        <Button
+          disabled={busy || loading || !characterId || characterId === member.replacement?.characterId}
+          onClick={() => command('replacement', { characterId })}
+        >
+          {member.replacement ? 'Change next-floor character' : 'Join on next floor'}
+        </Button>
+        {member.replacement && (
+          <Button secondary disabled={busy} onClick={() => command('replacement', { characterId: null })}>
+            Cancel replacement
+          </Button>
+        )}
+      </div>
+      <div className="replacement-library">
+        <a className="text-link" href="/characters" target="_blank" rel="noreferrer">
+          Create a character <ArrowRight size={14} />
+        </a>
+        <button className="text-link" disabled={busy || loading} onClick={() => load()}>
+          <RefreshCw size={14} /> Refresh saved characters
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function CharacterControls({
   member,
   snapshot: s,
   busy,
   command,
+  selectedAbility,
+  onAbilitySelect,
 }: {
   member: Member;
   snapshot: Snapshot;
   busy: boolean;
-  command: (route: string, body: unknown) => Promise<void>;
+  command: (route: string, body: unknown) => Promise<Snapshot | undefined>;
+  selectedAbility?: string | null;
+  onAbilitySelect?: (name: string | null) => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [rewardBusy, setRewardBusy] = useState(false);
-  const [gear, setGear] = useState(false);
   const manage = (body: unknown) => command('character', body);
   const state = member.state;
   const inCombat = s.scene.encounter && !s.scene.encounter.victory && !s.scene.encounter.escaped;
+  const downedAllies = s.members.filter((ally) => ally.id !== member.id && isDowned(ally.state));
   const locked =
     busy ||
     rewardBusy ||
     (!!s.turn && s.turn.phase !== 'collecting') ||
     !!s.turn?.actions.some((a) => a.memberId === member.id);
-  if (state.hp <= 0)
+  if (isDowned(state))
+    return (
+      <div className="downed-report" role="status">
+        <h2>DOWNED · {member.character.name}</h2>
+        <p>
+          {s.status === 'ended'
+            ? 'No party member remains able to help. This run has ended in defeat.'
+            : 'You cannot act while downed. An ally can help you up with a healing item or ability. You can keep watching the party until you recover.'}
+        </p>
+      </div>
+    );
+  if (isDead(state))
     return (
       <div className="run-ended">
-        <h2>RUN ENDED · {member.character.name}</h2>
+        <h2>FALLEN · {member.character.name}</h2>
         <p>{state.deathReason}</p>
         <p>
           Level {state.level} · Floor {s.scene.floor.number} · {state.kills} enemies defeated · {state.bosses}{' '}
           bosses defeated
         </p>
         <p>Your character's death is permanent. You can keep watching the surviving party.</p>
+        {s.status === 'active' ? (
+          <ReplacementPicker member={member} busy={busy} command={command} />
+        ) : s.status === 'ended' ? (
+          <p>The party has been defeated. Start a new campaign to play another character.</p>
+        ) : null}
       </div>
     );
   return (
@@ -1265,6 +1391,8 @@ function CharacterControls({
         <section>
           <CharacterSheet character={member.character} />
           <EquipmentChoices
+            character={member.character}
+            state={state}
             items={state.starterEquipment}
             selected={selected}
             onChange={setSelected}
@@ -1317,132 +1445,58 @@ function CharacterControls({
         </section>
       )}
       {state.lastLevelUp && <p className="reward-result">{state.lastLevelUp}</p>}
-      <Abilities character={member.character} />
-      {state.equipmentChosen && (
-        <>
-          <button className="text-link" onClick={() => setGear(!gear)}>
-            <Shield size={15} />
-            {gear ? 'Close equipment' : 'Equipment & backpack'}
-            <ChevronDown size={14} />
-          </button>
-          {gear && (
-            <section className="gear-panel">
-              <h3>Equipped</h3>
-              {Object.entries(state.equipment)
-                .filter(([slot, item]) => item && (slot !== 'right' || state.equipment.left?.id !== item.id))
-                .map(([slot, item]) => (
-                  <div className="gear-item" key={slot}>
-                    <div>
-                      <b>
-                        {slot}: {item!.name}
-                      </b>
-                      <ItemDetails item={item!} />
-                    </div>
-                    <Button
-                      secondary
-                      disabled={locked || !!inCombat}
-                      onClick={() => manage({ type: 'unequip', slot })}
-                    >
-                      Stow item
-                    </Button>
-                  </div>
-                ))}
-              <p>
-                Backpack: {occupiedSlots(state)}/{capacity(member.character)} slots. Equipped items use no
-                backpack space.
-              </p>
-              {state.inventory.map((item) => (
-                <div className="gear-item" key={item.id}>
-                  <div>
-                    <b>
-                      {item.name} ×{item.quantity}
-                    </b>
-                    <ItemDetails item={item} />
-                  </div>
-                  <div>
-                    {['weapon', 'shield', 'focus', 'relic'].includes(item.kind) && (
-                      <>
-                        <Button
-                          secondary
-                          disabled={locked || !!inCombat}
-                          onClick={() => manage({ type: 'equip', itemId: item.id, slot: 'right' })}
-                        >
-                          Right hand
-                        </Button>
-                        <Button
-                          secondary
-                          disabled={locked || !!inCombat}
-                          onClick={() => manage({ type: 'equip', itemId: item.id, slot: 'left' })}
-                        >
-                          Left hand
-                        </Button>
-                      </>
-                    )}
-                    {['armour', 'helmet', 'boots'].includes(item.kind) && (
-                      <Button
-                        secondary
-                        disabled={locked || !!inCombat}
-                        onClick={() =>
-                          manage({
-                            type: 'equip',
-                            itemId: item.id,
-                            slot: item.kind === 'armour' ? 'body' : item.kind === 'helmet' ? 'head' : 'boots',
-                          })
-                        }
-                      >
-                        Equip
-                      </Button>
-                    )}
-                    {item.healing > 0 && (
-                      <Button
-                        secondary
-                        disabled={locked || !!inCombat}
-                        onClick={() => manage({ type: 'heal', itemId: item.id })}
-                      >
-                        Use
-                      </Button>
-                    )}
-                    <Button
-                      secondary
-                      disabled={locked || !!inCombat}
-                      onClick={() => manage({ type: 'drop', itemId: item.id })}
-                    >
-                      Drop
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              {inCombat && (
-                <p className="muted small">
-                  Use the action chat for combat equipment or consumable decisions; they cost an action.
-                </p>
+      <Abilities
+        character={member.character}
+        state={state}
+        inCombat={!!inCombat}
+        selected={selectedAbility}
+        onSelect={onAbilitySelect}
+        disabled={locked || state.pendingLevelUps > 0 || !state.equipmentChosen}
+      />
+      {downedAllies.length > 0 && s.status === 'active' && (
+        <section>
+          <h3>Help a downed ally</h3>
+          <p>
+            {inCombat
+              ? 'Use your action chat to describe healing an ally with an item or select a healing ability. Include the ally’s name. A healing item uses your minor action; Mend uses your main action.'
+              : 'Use a healing item from Equipment & backpack, or use an available healing ability below.'}
+          </p>
+          {!inCombat &&
+            member.character.abilities
+              .filter((ability) => ability.effect === 'mend')
+              .flatMap((ability) =>
+                downedAllies.map((ally) => (
+                  <Button
+                    key={`${ability.name}-${ally.id}`}
+                    secondary
+                    disabled={locked || (state.abilityUses?.[ability.name] ?? 0) >= 1}
+                    onClick={() => manage({ type: 'heal', abilityName: ability.name, targetId: ally.id })}
+                  >
+                    {ability.name} · Help {ally.character.name}
+                  </Button>
+                )),
               )}
-            </section>
-          )}
-        </>
-      )}
-      {s.scene.loot.length > 0 && (
-        <section className="ground-loot">
-          <h3>Loot at the scene</h3>
-          <p>Taking an item is your choice. Make room in your backpack first.</p>
-          {s.scene.loot.map((item) => (
-            <div className="gear-item" key={item.id}>
-              <div>
-                <b>
-                  {item.name} ×{item.quantity}
-                </b>
-                <ItemDetails item={item} />
-              </div>
-              <Button
-                secondary
-                disabled={locked || !!inCombat}
-                onClick={() => manage({ type: 'take', itemId: item.id })}
-              >
-                Take item
-              </Button>
-            </div>
-          ))}
         </section>
+      )}
+      {state.equipmentChosen && (
+        <EquipmentPanel
+          member={member}
+          snapshot={s}
+          command={command}
+          lockReason={
+            busy || rewardBusy
+              ? 'Saving your changes…'
+              : s.status === 'archived' || s.status === 'ended'
+                ? 'Equipment changes are unavailable after this run.'
+                : inCombat
+                  ? 'Equipment changes are available outside combat. Describe consumable use in your action chat.'
+                  : s.turn && s.turn.phase !== 'collecting'
+                    ? 'Equipment is locked while this round finishes.'
+                    : s.turn?.actions.some((action) => action.memberId === member.id)
+                      ? 'Equipment is locked after submitting your action, until the next turn.'
+                      : ''
+          }
+        />
       )}
       {s.scene.safeRest && !inCombat && (
         <Button
@@ -1494,11 +1548,13 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const [error, setError] = useState('');
   const [connected, setConnected] = useState(false);
   const [tab, setTab] = useState('story');
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [action, setAction] = useState('');
+  const [abilityName, setAbilityName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [acceptsLethalRisk, setAcceptsLethalRisk] = useState(false);
   const [editing, setEditing] = useState(false);
+  const narration = useNarration(s?.config.language ?? 'English', !!s?.isHost || screen);
   useEffect(() => {
     let events: EventSource | undefined;
     let disposed = false;
@@ -1526,7 +1582,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   }, [id, screen]);
   useEffect(() => {
     setAction('');
-    setAcceptsLethalRisk(false);
+    setAbilityName(null);
   }, [s?.turn?.id]);
   async function command(route: string, body: unknown) {
     setBusy(true);
@@ -1534,6 +1590,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     try {
       const updated = await api<Snapshot>(`/api/campaigns/${id}/${route}`, body);
       setS((previous) => (!previous || updated.version >= previous.version ? updated : previous));
+      return updated;
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -1562,6 +1619,11 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     myCharacter.state.pendingLevelUps === 0 &&
     myCharacter.state.equipmentChosen;
   const latest = s.history.at(-1);
+  const selectedIndex = s.history.findIndex((t) => t.id === selectedTurnId);
+  const viewedIndex = selectedIndex < 0 ? s.history.length - 1 : selectedIndex;
+  const viewedTurn = s.history[viewedIndex];
+  const visibleHistory = viewedTurn ? [viewedTurn] : [];
+  const viewingCurrent = viewedIndex === s.history.length - 1;
   const submitted = turn?.actions.length ?? 0;
   const expected = turn?.roster.length ?? 0;
   const host = s.isHost && !screen;
@@ -1684,8 +1746,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   saveUrl={`/api/campaigns/${id}/template`}
                   onCancel={() => setEditing(false)}
                   onSave={async () => {
-                    setEditing(false);
                     setS(await api<Snapshot>(`/api/campaigns/${id}`));
+                    setEditing(false);
                   }}
                 />
               ) : (
@@ -1709,8 +1771,10 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
         <div className="run-ended">
           <h2>RUN ENDED</h2>
           <p>
-            The party has fallen. Their choices and discoveries remain in this chronicle. Begin a new campaign
-            for a new run.
+            {s.members.some((member) => isDowned(member.state))
+              ? 'The party has been defeated. No one remains able to help the downed members. '
+              : 'The party has fallen. '}
+            Their choices and discoveries remain in this chronicle. Begin a new campaign for a new run.
           </p>
           <a className="button" href="/new">
             Start a new run
@@ -1764,6 +1828,68 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
             </>
           )}
         </div>
+      )}
+      {(s.isHost || screen) && (
+        <section className="narration-controls" aria-label="Turn narration">
+          <div className="narration-toolbar">
+            {host && (
+              <label className="field">
+                <span>GM output language</span>
+                <select
+                  value={s.config.language}
+                  onChange={(e) => command('language', { language: e.target.value })}
+                  disabled={busy || turn?.phase === 'queued' || turn?.phase === 'resolving'}
+                >
+                  <option>English</option>
+                  <option>Nederlands</option>
+                </select>
+              </label>
+            )}
+            <label className="field">
+              <span>Narrator voice</span>
+              <select
+                value={narration.voiceId}
+                onChange={(e) => narration.setVoiceId(e.target.value)}
+                disabled={!narration.supported || narration.readingTurnId !== null}
+              >
+                <option value="">Automatic ({s.config.language})</option>
+                {narration.voices.map((voice) => (
+                  <option key={voice.id} value={voice.id}>
+                    {voice.name} ({voice.language})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              secondary
+              disabled={!narration.supported || !latest?.result?.narration.trim()}
+              onClick={() => latest?.result && narration.read(latest.id, latest.result.narration)}
+            >
+              <Volume2 size={16} />
+              Read latest turn
+            </Button>
+            {narration.readingTurnId !== null && (
+              <Button secondary onClick={narration.stop}>
+                <Square size={15} />
+                Stop reading
+              </Button>
+            )}
+          </div>
+          {host && (
+            <p className="small">
+              Future GM text uses this language. Game mechanics terms such as STR, DEX, attack, and strike
+              stay in English. Saved turns keep their original text.
+            </p>
+          )}
+          <p className="small" role="status">
+            {!narration.supported
+              ? 'Turn narration is unavailable in this browser.'
+              : narration.readingTurnId !== null
+                ? 'Reading aloud on this device…'
+                : 'Narration plays through this device’s speakers. Available voices depend on your browser.'}
+          </p>
+          <ErrorBox error={narration.error} />
+        </section>
       )}
       <div className="session-grid">
         <section className="story-column">
@@ -1832,7 +1958,37 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   </div>
                 </div>
               )}
-              {s.history.map((t) => (
+              {viewedTurn && (
+                <nav className="turn-navigation" aria-label="Turn history">
+                  <Button
+                    secondary
+                    disabled={viewedIndex <= 0}
+                    onClick={() => setSelectedTurnId(s.history[viewedIndex - 1].id)}
+                  >
+                    <ArrowLeft size={15} />
+                    Previous turn
+                  </Button>
+                  <span aria-live="polite">
+                    {viewedTurn.number === 0 ? 'Viewing opening scene' : `Viewing turn ${viewedTurn.number}`}
+                  </span>
+                  <Button
+                    secondary
+                    disabled={viewingCurrent}
+                    onClick={() =>
+                      setSelectedTurnId(
+                        viewedIndex + 1 === s.history.length - 1 ? null : s.history[viewedIndex + 1].id,
+                      )
+                    }
+                  >
+                    Next turn
+                    <ArrowRight size={15} />
+                  </Button>
+                  <Button secondary disabled={viewingCurrent} onClick={() => setSelectedTurnId(null)}>
+                    Current turn
+                  </Button>
+                </nav>
+              )}
+              {visibleHistory.map((t) => (
                 <article className="story-turn" key={t.id}>
                   <div className="turn-divider">
                     <span>
@@ -1845,8 +2001,13 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     <div className="past-actions">
                       {t.actions.map((a) => (
                         <div key={a.memberId}>
-                          <b>{s.members.find((m) => m.id === a.memberId)?.character.name}</b>
-                          <span>{a.passed ? 'Passed this turn.' : a.text}</span>
+                          <b>
+                            {a.characterName ?? s.members.find((m) => m.id === a.memberId)?.character.name}
+                          </b>
+                          <span>
+                            {a.passed ? 'Passed this turn.' : a.text}
+                            {a.abilityName && <small> · {a.abilityName}</small>}
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -1859,6 +2020,16 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     <small>
                       {s.config.provider === 'practice' ? 'Scripted scene' : 'Using ChatGPT plan'}
                     </small>
+                    {(s.isHost || screen) && (
+                      <button
+                        className="text-link"
+                        disabled={!narration.supported || !t.result?.narration.trim()}
+                        onClick={() => t.result && narration.read(t.id, t.result.narration)}
+                      >
+                        <Volume2 size={14} />
+                        {t.number === 0 ? 'Read opening scene' : `Read turn ${t.number}`}
+                      </button>
+                    )}
                   </div>
                   <div className="narration">
                     {t.result?.narration
@@ -1868,6 +2039,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                         <p key={i}>{p}</p>
                       ))}
                   </div>
+                  <TurnImagePrompt config={s.config} turn={t} />
                   {t.rolls.length > 0 && (
                     <div className="rolls">
                       {t.rolls.map((r) => (
@@ -1875,27 +2047,17 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       ))}
                     </div>
                   )}
-                  {latest?.id === t.id && (
+                  {t.result && (
                     <>
                       <div className="recap">
                         <b>The situation</b>
                         <p>{t.result?.summary}</p>
                       </div>
-                      <div className="choices">
-                        {t.result?.choices.map((choice, i) => (
-                          <button key={i} disabled={!canAct || screen} onClick={() => setAction(choice)}>
-                            <span>0{i + 1}</span>
-                            {choice}
-                            <ArrowRight size={14} />
-                          </button>
-                        ))}
-                      </div>
-                      <p className="free-action">Or follow your own path.</p>
                     </>
                   )}
                 </article>
               ))}
-              {turn && (
+              {viewingCurrent && turn && (
                 <div className="current-turn">
                   <div className="current-heading">
                     <span className="eyebrow">
@@ -1912,15 +2074,28 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   {turn.actions.map((a) => (
                     <div className="action-bubble" key={a.memberId}>
                       <span className="avatar mini">
-                        {s.members.find((m) => m.id === a.memberId)?.character.name[0]}
+                        {(a.characterName ?? s.members.find((m) => m.id === a.memberId)?.character.name)?.[0]}
                       </span>
                       <div>
-                        <b>{s.members.find((m) => m.id === a.memberId)?.character.name}</b>
-                        <p>{a.passed ? 'Passes this turn.' : a.text}</p>
+                        <b>{a.characterName ?? s.members.find((m) => m.id === a.memberId)?.character.name}</b>
+                        <p>
+                          <span>{a.passed ? 'Passes this turn.' : a.text}</span>
+                          {a.abilityName && <small> · {a.abilityName}</small>}
+                        </p>
                       </div>
                       <Check size={15} />
                     </div>
                   ))}
+                  {!!turn.equipmentChanges?.length && (
+                    <div className="turn-equipment-changes">
+                      <b>Equipment changes this turn</b>
+                      {turn.equipmentChanges.map((change, index) => (
+                        <p key={index}>
+                          {change.characterName}: {change.description}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   {turn.phase === 'collecting' && (
                     <p className="waiting-copy">
                       {s.paused
@@ -1958,68 +2133,95 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   )}
                 </div>
               )}
-              {!screen && myCharacter && s.status !== 'lobby' && (
-                <CharacterControls member={myCharacter} snapshot={s} busy={busy} command={command} />
+              {viewingCurrent && !screen && myCharacter && s.status !== 'lobby' && (
+                <CharacterControls
+                  member={myCharacter}
+                  snapshot={s}
+                  busy={busy}
+                  command={command}
+                  selectedAbility={abilityName}
+                  onAbilitySelect={
+                    canAct
+                      ? (name) => {
+                          setAbilityName(name);
+                          if (name && !action.trim()) setAction(`Use ${name}.`);
+                        }
+                      : undefined
+                  }
+                />
               )}
-              {!screen && s.myMemberId && turn && (
-                <form
-                  className="action-composer"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    command('action', { turnId: turn.id, text: action, passed: false, acceptsLethalRisk });
-                  }}
-                >
-                  <label htmlFor="action-input">
-                    {mine
-                      ? 'Your action is submitted. You can update it while the party decides.'
-                      : 'What does your character do?'}
-                  </label>
-                  <textarea
-                    id="action-input"
-                    aria-label="Your action"
-                    rows={3}
-                    value={action}
-                    onChange={(e) => setAction(e.target.value)}
-                    maxLength={2000}
-                    disabled={!canAct || busy}
-                    placeholder={
-                      canAct
-                        ? 'Describe your action. The world is listening…'
-                        : 'Your next action opens with the next turn.'
-                    }
-                  />
-                  {s.scene.lethalWarning && (
-                    <label className="risk-accept">
-                      <input
-                        type="checkbox"
-                        checked={acceptsLethalRisk}
-                        onChange={(e) => setAcceptsLethalRisk(e.target.checked)}
-                      />
-                      I accept the warned lethal risk for this action.
+              {viewingCurrent &&
+                !screen &&
+                s.myMemberId &&
+                turn &&
+                myCharacter &&
+                myCharacter.state.hp > 0 && (
+                  <form
+                    className="action-composer"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      command('action', {
+                        turnId: turn.id,
+                        text: action,
+                        passed: false,
+                        abilityName,
+                      });
+                    }}
+                  >
+                    <label htmlFor="action-input">
+                      {mine
+                        ? 'Your action is submitted. You can update it while the party decides.'
+                        : 'What does your character do?'}
                     </label>
-                  )}
-                  <div className="composer-bottom">
-                    <span>
-                      <Feather size={14} />
-                      Your action will appear on the shared screen.
-                    </span>
-                    <div>
-                      <Button
-                        type="button"
-                        secondary
-                        disabled={!canAct || busy}
-                        onClick={() => command('action', { turnId: turn.id, text: '', passed: true })}
-                      >
-                        Pass
-                      </Button>
-                      <Button disabled={!canAct || busy || !action.trim()}>
-                        <Send size={15} />
-                        {mine ? 'Update action' : 'Submit action'}
-                      </Button>
+                    {abilityName && (
+                      <p className="selected-ability">
+                        Using <b>{abilityName}</b>. Describe the situation and your intended target below.
+                        <button
+                          className="text-link"
+                          type="button"
+                          disabled={!canAct || busy}
+                          onClick={() => setAbilityName(null)}
+                        >
+                          Remove ability
+                        </button>
+                      </p>
+                    )}
+                    <textarea
+                      id="action-input"
+                      aria-label="Your action"
+                      rows={3}
+                      value={action}
+                      onChange={(e) => setAction(e.target.value)}
+                      maxLength={2000}
+                      disabled={!canAct || busy}
+                      placeholder={
+                        canAct
+                          ? 'Describe your action. The world is listening…'
+                          : 'Your next action opens with the next turn.'
+                      }
+                    />
+                    <div className="composer-bottom">
+                      <span>
+                        <Feather size={14} />
+                        Your action will appear on the shared screen.
+                      </span>
+                      <div>
+                        <Button
+                          type="button"
+                          secondary
+                          disabled={!canAct || busy}
+                          onClick={() => command('action', { turnId: turn.id, text: '', passed: true })}
+                        >
+                          Pass
+                        </Button>
+                        <Button disabled={!canAct || busy || !action.trim()}>
+                          <Send size={15} />
+                          {mine ? 'Update action' : 'Submit action'}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                </form>
-              )}
+                  </form>
+                )}
             </>
           )}
         </section>
