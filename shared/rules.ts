@@ -14,23 +14,104 @@ import {
   stats,
   slots,
 } from './schema';
+import { ailments, ailmentRules, conditionDuration, isAilment } from './ailments';
+
+type ConditionState = Pick<CharacterState, 'conditions' | 'conditionTurns'>;
+export function removeCondition(state: ConditionState, name: string) {
+  state.conditions = state.conditions.filter((condition) => condition !== name);
+  delete state.conditionTurns[name];
+}
+export function applyCondition(state: ConditionState, name: string, character?: Character) {
+  if (character?.traits.some((trait) => trait.immunities.some((immune) => immune === name))) return false;
+  if (!state.conditions.includes(name)) state.conditions.push(name);
+  state.conditionTurns[name] = conditionDuration(name);
+  return true;
+}
+export const matchingCures = (ability: Ability, state: ConditionState) =>
+  (ability.cures ?? []).filter((condition) => state.conditions.includes(condition));
+export function cureWithAbility(ability: Ability, state: ConditionState) {
+  const cured = matchingCures(ability, state);
+  for (const condition of cured) removeCondition(state, condition);
+  return cured;
+}
+export const incapacitatingCondition = (state: ConditionState) =>
+  state.conditions.find((condition) => ['Stunned', 'Frozen', 'Electrocuted'].includes(condition));
+export const ailmentCheckPenalty = (state: ConditionState, stat: Stat) =>
+  stat === 'DEX' && state.conditions.includes('Chilled') ? 2 : 0;
+const shockedDamage = (conditions: string[], amount: number) =>
+  Math.max(0, amount) + (amount > 0 && conditions.includes('Shocked') ? 1 : 0);
+export function tickConditions(member: Member, moving = false): string[] {
+  const logs: string[] = [];
+  const { state, character } = member;
+  if (isDead(state)) return logs;
+  const conditions = [...state.conditions];
+  for (const condition of conditions) {
+    if (condition === 'Downed' || condition === 'Escaped') continue;
+    const immune = character.traits.some((trait) => trait.immunities.some((name) => name === condition));
+    const amount =
+      !immune && isAilment(condition)
+        ? ailmentRules[condition].damage + (condition === 'Bleeding' && moving ? 1 : 0)
+        : 0;
+    if (amount) {
+      const hp = state.hp;
+      damage(state, amount, `${condition} damage.`);
+      if (hp > state.hp)
+        logs.push(
+          `${character.name} takes ${hp - state.hp} ${condition} damage${state.hp === 0 ? ` and ${isDowned(state) ? 'is downed' : 'dies'}` : ''}.`,
+        );
+    }
+  }
+  for (const condition of conditions) {
+    if (condition === 'Downed' || condition === 'Escaped') continue;
+    const immune = character.traits.some((trait) => trait.immunities.some((name) => name === condition));
+    state.conditionTurns[condition] = (state.conditionTurns[condition] ?? conditionDuration(condition)) - 1;
+    if (state.conditionTurns[condition] <= 0 || immune) removeCondition(state, condition);
+  }
+  return logs;
+}
 
 export class RuleError extends Error {}
 
 export const RULESET = 'roguelike-v1';
 export const modifier = (score: number) => Math.floor((score - 5) / 2);
 export const abilityStrength = (ability: Ability) => ability.level - 1;
+export const abilityDice = (ability: Ability) =>
+  ability.dice ?? (ability.effect === 'strike' ? '2d6' : '1d6');
+export const abilityBonus = (ability: Ability) =>
+  (ability.bonus ?? 0) + abilityStrength(ability) * (['strike', 'mend'].includes(ability.effect) ? 2 : 1);
 export function abilityMechanics(ability: Ability): string {
-  const strength = abilityStrength(ability);
+  const bonus = abilityBonus(ability);
   if (ability.kind === 'utility')
-    return `Advantage${strength ? ` and +${strength}` : ''} on a relevant ${ability.stat} check · Once per floor; safe rest restores use`;
+    return `Advantage${bonus ? ` and +${bonus}` : ''} on a relevant ${ability.stat} check`;
   const effect = {
-    strike: `2d6 + ${ability.stat} modifier${strength ? ` + ${strength * 2}` : ''} damage · Attack roll vs defense`,
-    mend: `1d6 + ${ability.stat} modifier${strength ? ` + ${strength * 2}` : ''} HP restored · ${ability.healing} healing · Self or ally`,
-    guard: `+${3 + strength} defense against the next enemy attack · Self or ally`,
-    assist: `Advantage${strength ? ` and +${strength}` : ''} on the next attack · Self or ally`,
+    strike: `${abilityDice(ability)} + ${ability.stat} modifier${bonus ? ` + ${bonus}` : ''} damage · Attack roll vs defense`,
+    mend: `${abilityDice(ability)} + ${ability.stat} modifier${bonus ? ` + ${bonus}` : ''} HP restored · ${ability.healing} healing · Self or ally`,
+    guard: `+${3 + bonus} defense against the next enemy attack · Self or ally`,
+    assist: `Advantage${bonus ? ` and +${bonus}` : ''} on the next attack · Self or ally`,
+    cleanse: 'Remove the listed ailments · Self or ally',
   }[ability.effect];
-  return `${effect} · Main action · Once per combat`;
+  const ailmentEffect = ability.inflicts
+    ? ` · Inflicts ${ability.inflicts} on hit (${conditionDuration(ability.inflicts)} turns)`
+    : ability.cures?.length
+      ? ` · Cures ${ability.cures.join(' and ')}`
+      : '';
+  return `${effect}${ailmentEffect} · Main action`;
+}
+export function abilityPowerSummary(ability: Ability, scores: Record<Stat, number>): string | null {
+  if (ability.kind !== 'combat' || !['strike', 'mend'].includes(ability.effect)) return null;
+  const [count, sides] = abilityDice(ability).split('d').map(Number);
+  const bonus = modifier(scores[ability.stat]) + abilityBonus(ability);
+  let totals = [0];
+  for (let i = 0; i < count; i++)
+    totals = totals.flatMap((total) => Array.from({ length: sides }, (_, face) => total + face + 1));
+  const amounts = totals.map((total) => Math.max(1, total + bonus));
+  // const average = Math.round((amounts.reduce((sum, value) => sum + value, 0) / amounts.length) * 10) / 10;
+  const deviation = Math.sqrt((count * (sides * sides - 1)) / 12);
+  //const consistency = deviation <= 2 ? 'Steady dice' : deviation <= 3 ? 'Balanced dice' : 'Swingy dice';
+  const unit = ability.effect === 'strike' ? 'damage' : 'HP';
+  // const scope = ability.effect === 'strike' ? 'on a normal hit' : 'before HP cap';
+  const scope = '';
+  return `${Math.min(...amounts)}–${Math.max(...amounts)} ${unit}`;
 }
 export const equippedItems = (state: CharacterState) =>
   Object.values(state.equipment).filter(
@@ -55,7 +136,9 @@ export function availableAbility(
   const ability = character.abilities.find((ability) => ability.name === name && ability.kind === kind);
   if (!ability) throw new RuleError('Choose a current ability for this kind of action.');
   if ((state.abilityUses?.[ability.name] ?? 0) >= 1)
-    throw new RuleError('That ability has already been used.');
+    throw new RuleError(
+      `${character.name}'s ${ability.name} has already been used. It recharges after a successful encounter.`,
+    );
   return ability;
 }
 export function spendAbility(state: CharacterState, ability: Ability) {
@@ -73,42 +156,14 @@ export function resetAbilities(character: Character, state: CharacterState, kind
   }
 }
 export function startingStats(character: Character): Record<Stat, number> {
-  const result = { STR: 5, DEX: 5, INT: 5 };
+  const result = { STR: 5, DEX: 5, INT: 5, CHA: 5, CON: 5, WIS: 5 };
   if (new Set(character.traits.map((t) => t.id)).size !== character.traits.length)
     throw new RuleError('A character cannot have a trait twice.');
   for (const trait of character.traits) for (const stat of stats) result[stat] += trait.stats[stat] ?? 0;
+  for (const stat of character.creationBonuses?.attributes ?? []) result[stat]++;
   if (Object.values(result).some((n) => n < 0 || n > 13))
-    throw new RuleError('This combination of traits has an invalid starting stat.');
+    throw new RuleError('Starting stats must be between 0 and 13 after all trait modifiers.');
   const all = character.traits;
-  const positive = all.reduce(
-    (n, t) =>
-      n +
-      Object.values(t.stats).reduce((sum, x) => sum + Math.max(0, x), 0) +
-      Math.max(0, t.hp) / 2 +
-      t.defense * 2 +
-      t.regeneration * 2 +
-      Number(t.natural) +
-      Number(t.lifesteal) * 2 +
-      t.immunities.length,
-    0,
-  );
-  const drawbacks = Math.min(
-    4,
-    all.reduce(
-      (n, t) =>
-        n +
-        Object.values(t.stats).reduce((sum, x) => sum + Math.max(0, -x), 0) +
-        Math.max(0, -t.hp) / 2 +
-        t.blocked.length +
-        Number(t.healing !== 'normal') +
-        Number(t.heavyRestricted),
-      0,
-    ),
-  );
-  if (positive - drawbacks > 6 || positive > 10)
-    throw new RuleError(
-      'Traits exceed the starting balance budget: at most 6 net benefit points and 10 before drawbacks.',
-    );
   if (
     all.reduce((n, t) => n + t.defense, 0) > 1 ||
     all.reduce((n, t) => n + t.regeneration, 0) > 1 ||
@@ -121,8 +176,202 @@ export function startingStats(character: Character): Record<Stat, number> {
     throw new RuleError('Leave at least one equipment slot usable for starting equipment.');
   return result;
 }
+export function characterDrawbacks(character: Character): { key: string; label: string; severity: 1 | 2 }[] {
+  const traits = character.traits;
+  const keys = [
+    ...slots.filter((slot) => traits.some((t) => t.blocked.includes(slot))).map((slot) => `slot:${slot}`),
+    ...stats
+      .filter((stat) => traits.reduce((n, t) => n + t.stats[stat], 0) < 0)
+      .map((stat) => `stat:${stat}`),
+    ...(traits.some((t) => t.heavyRestricted) ? ['heavy'] : []),
+    ...(traits.some((t) => t.healing !== 'normal') ? ['healing'] : []),
+    ...(traits.reduce((n, t) => n + t.hp, 0) < 0 ? ['hp'] : []),
+  ];
+  return keys.map((key) => {
+    if (key.startsWith('slot:')) {
+      const slot = key.slice(5);
+      const label = {
+        left: 'Left hand unavailable',
+        right: 'Right hand unavailable',
+        body: 'Cannot wear body armour',
+        head: 'Cannot wear helmets',
+        boots: 'Cannot wear boots',
+      }[slot as Slot];
+      return { key, label, severity: ['left', 'right', 'body'].includes(slot) ? 2 : 1 };
+    }
+    if (key.startsWith('stat:')) {
+      const stat = key.slice(5) as Stat;
+      const delta = traits.reduce((n, t) => n + t.stats[stat], 0);
+      return { key, label: `Reduced ${stat} (${delta})`, severity: delta <= -3 ? 2 : 1 };
+    }
+    if (key === 'hp') {
+      const hp = traits.reduce((n, t) => n + t.hp, 0);
+      return { key, label: `Reduced maximum HP (${hp})`, severity: hp <= -3 ? 2 : 1 };
+    }
+    return {
+      key,
+      label: key === 'heavy' ? 'Cannot use heavy equipment' : 'Requires compatible special healing',
+      severity: 1,
+    };
+  });
+}
+export const characterHandicaps = (character: Character) => characterDrawbacks(character).map((d) => d.key);
+
+// Mechanics use server dice; the model supplies the affinity and character-specific prose.
+export function rollCharacterCreation(
+  character: Character,
+  preferred: Ability['effect'],
+  handicapCount: number,
+  draw: (sides: number) => number,
+): Character {
+  if (characterHandicaps(character).length !== handicapCount || handicapCount > 2)
+    throw new RuleError(`Generate exactly ${handicapCount} mechanical drawbacks in total.`);
+  const options = character.abilities;
+  if (
+    options.length !== 4 ||
+    options.filter((a) => a.kind === 'combat').length !== 2 ||
+    options.filter((a) => a.kind === 'utility').length !== 2 ||
+    options.some((a) => a.level !== 1) ||
+    new Set(options.map((a) => a.name.toLowerCase())).size !== 4
+  )
+    throw new RuleError('Generate two distinct combat and two distinct utility ability offers at level 1.');
+  const pick = <T>(values: T[]) => values[values.length === 1 ? 0 : draw(values.length) - 1];
+  const scores = startingStats(character);
+  let pool = (['strike', 'mend', 'guard', 'assist', 'cleanse'] as const).flatMap((effect) =>
+    Array<Ability['effect']>(effect === preferred ? 5 : 1).fill(effect),
+  );
+  const abilityOptions = options.map((option): Ability => {
+    const effect = option.kind === 'utility' ? 'assist' : pick(pool);
+    if (option.kind === 'combat') pool = pool.filter((candidate) => candidate !== effect);
+    const power =
+      effect === 'strike'
+        ? pick([
+            { dice: '2d4', bonus: 2 },
+            { dice: '2d6', bonus: 0 },
+            { dice: '1d12', bonus: 0 },
+          ] as const)
+        : effect === 'mend'
+          ? pick([
+              { dice: '1d4', bonus: 2 },
+              { dice: '1d6', bonus: 1 },
+              { dice: '1d8', bonus: 0 },
+            ] as const)
+          : { dice: undefined, bonus: draw(3) === 3 ? 1 : 0 };
+    let candidates: Stat[] =
+      option.kind === 'utility' || effect === 'strike'
+        ? [option.stat, ...stats]
+        : effect === 'mend'
+          ? ['CON', 'WIS', 'INT']
+          : effect === 'guard'
+            ? ['CON', 'STR', 'DEX']
+            : ['CHA', 'WIS', 'INT'];
+    if (candidates.every((stat) => scores[stat] < 5)) candidates = [...stats];
+    const stat = candidates.reduce((best, stat) => (scores[stat] > scores[best] ? stat : best));
+    return {
+      ...option,
+      effect,
+      stat,
+      ...power,
+      healing: character.traits.find((t) => t.healing !== 'normal')?.healing ?? 'normal',
+    };
+  });
+  const result: Character = {
+    ...character,
+    abilities: [],
+    abilityOptions,
+    creationBonuses: { attributes: [], abilityPower: 0, version: 2 },
+  };
+  const severity = characterDrawbacks(character).reduce((sum, drawback) => sum + drawback.severity, 0);
+  for (let i = 0; i < severity; i++) {
+    if (draw(2) === 1) {
+      const current = startingStats(result);
+      // Award a whole modifier increase; keep reduced attributes below their baseline.
+      const eligible = stats.filter((stat) => {
+        const next = current[stat] + (current[stat] % 2 === 0 ? 1 : 2);
+        return next <= 13 && (current[stat] >= 5 || next < 5);
+      });
+      if (eligible.length) {
+        const stat = pick(eligible);
+        const points = current[stat] % 2 === 0 ? 1 : 2;
+        for (let j = 0; j < points; j++) result.creationBonuses!.attributes.push(stat);
+        continue;
+      }
+    }
+    result.creationBonuses!.abilityPower++;
+  }
+  for (const ability of abilityOptions)
+    if (ability.kind === 'combat')
+      ability.bonus = (ability.bonus ?? 0) + result.creationBonuses!.abilityPower;
+  for (const ability of abilityOptions) {
+    // Roll secondary mechanics after base power and compensation so existing rolls keep their order.
+    delete ability.inflicts;
+    delete ability.cures;
+    if (ability.kind !== 'combat') continue;
+    if (ability.effect === 'cleanse') ability.cures = [pick([...ailments])];
+    else if (draw(2) === 1) {
+      if (ability.effect === 'strike') ability.inflicts = pick([...ailments]);
+      else ability.cures = [pick([...ailments])];
+    }
+  }
+  result.stats = startingStats(result);
+  return result;
+}
+
+export function chooseStartingAbilities(character: Character, names: string[]): Ability[] {
+  const options = character.abilityOptions;
+  const chosen = names.map((name) => options?.find((ability) => ability.name === name));
+  if (
+    !options ||
+    names.length !== 2 ||
+    chosen.some((ability) => !ability) ||
+    new Set(chosen.map((ability) => ability!.kind)).size !== 2
+  )
+    throw new RuleError('Choose one offered in-combat ability and one offered out-of-combat ability.');
+  return chosen as Ability[];
+}
 export function normalizeCharacter(character: Character): Character {
   const result = { ...character, role: character.species, stats: startingStats(character), equipment: [] };
+  if (result.creationBonuses) {
+    const count = characterHandicaps(result).length;
+    const { attributes, abilityPower } = result.creationBonuses;
+    const severity = characterDrawbacks(result).reduce((sum, d) => sum + d.severity, 0);
+    const base = startingStats({ ...result, creationBonuses: undefined });
+    const modifierGains = stats.reduce(
+      (sum, stat) => sum + modifier(result.stats[stat]) - modifier(base[stat]),
+      0,
+    );
+    const validCompensation =
+      result.creationBonuses.version === 2
+        ? modifierGains + abilityPower === severity &&
+          attributes.length <= modifierGains * 2 &&
+          stats.every((stat) => base[stat] >= 5 || result.stats[stat] < 5)
+        : attributes.length + abilityPower >= count &&
+          attributes.length + abilityPower <= count * 2 &&
+          abilityPower <= count;
+    if (
+      count > 2 ||
+      !validCompensation ||
+      !result.abilityOptions ||
+      result.abilityOptions.some((a) => a.kind === 'combat' && (a.bonus ?? 0) < abilityPower)
+    )
+      throw new RuleError('New characters allow zero to two compensated mechanical drawbacks.');
+  }
+  if (result.abilityOptions) {
+    const options = result.abilityOptions;
+    if (
+      new Set(options.map((a) => a.name.toLowerCase())).size !== 4 ||
+      options.filter((a) => a.kind === 'combat').length !== 2 ||
+      options.filter((a) => a.kind === 'utility').length !== 2 ||
+      options.some((a) => a.level !== 1) ||
+      new Set(options.filter((a) => a.kind === 'combat').map((a) => a.effect)).size !== 2
+    )
+      throw new RuleError('Provide two distinct combat effects and two utility ability offers.');
+    if (result.abilities.length)
+      result.abilities = chooseStartingAbilities(
+        result,
+        result.abilities.map((a) => a.name),
+      );
+  }
   if (
     new Set(result.equipmentOptions.map((item) => item.id)).size !== 5 ||
     result.equipmentOptions.some((item) => !usableSlots(result, result.stats, item).length)
@@ -159,7 +408,7 @@ export const maxHp = (character: Character, state: Pick<CharacterState, 'stats' 
   Math.max(
     5,
     20 +
-      modifier(state.stats.STR) * 2 +
+      modifier(state.stats.CON) * 2 +
       (state.level - 1) * 5 +
       character.traits.reduce((n, t) => n + (t.hp ?? 0), 0),
   );
@@ -180,7 +429,8 @@ export function defense(character: Character, state: CharacterState) {
     character.traits.reduce((n, t) => n + (t.defense ?? 0), 0) +
     Object.values(state.equipment)
       .filter((item, i, all) => item && all.findIndex((x) => x?.id === item.id) === i)
-      .reduce((n, item) => n + (item?.defense ?? 0), 0)
+      .reduce((n, item) => n + (item?.defense ?? 0), 0) -
+    (state.conditions.includes('Chilled') ? 2 : 0)
   );
 }
 export const baseItem = (id: string, name: string, kind: Item['kind']): Item => ({
@@ -189,7 +439,7 @@ export const baseItem = (id: string, name: string, kind: Item['kind']): Item => 
   kind,
   rarity: 'Common',
   scaling: [],
-  requirements: { STR: 0, DEX: 0, INT: 0 },
+  requirements: { STR: 0, DEX: 0, INT: 0, CHA: 0, CON: 0, WIS: 0 },
   hands: 1,
   light: false,
   damage: '1d4',
@@ -294,7 +544,8 @@ export function initialState(character: Character, seed: string): CharacterState
     kills: 0,
     bosses: 0,
     deathReason: null,
-    restedFloor: null,
+    downedThisEncounter: false,
+    restedEncounter: null,
   };
   state.hp = state.maxHp = maxHp(character, state);
   if (character.selectedEquipmentIds.length)
@@ -459,8 +710,19 @@ export function takeItem(
 export const isDowned = (state: Pick<CharacterState, 'hp' | 'conditions'>) =>
   state.hp <= 0 && state.conditions.includes('Downed');
 export const isDead = (state: Pick<CharacterState, 'hp' | 'conditions'>) => state.hp <= 0 && !isDowned(state);
+export const isInCombat = (scene: Pick<Scene, 'encounter'>, state: Pick<CharacterState, 'conditions'>) =>
+  !!scene.encounter &&
+  !scene.encounter.victory &&
+  !scene.encounter.escaped &&
+  !state.conditions.includes('Escaped');
+export const canInteract = (
+  scene: Pick<Scene, 'encounter'>,
+  actor: Pick<CharacterState, 'conditions'>,
+  target: Pick<CharacterState, 'conditions'>,
+) => isInCombat(scene, actor) === isInCombat(scene, target);
 export function heal(state: CharacterState, amount: number) {
   if (isDead(state)) throw new RuleError('A dead character cannot be healed.');
+  if (isDowned(state)) state.downedThisEncounter = true;
   const hp = state.hp;
   state.hp = Math.min(state.maxHp, state.hp + Math.max(0, amount));
   if (state.hp > 0) {
@@ -469,6 +731,35 @@ export function heal(state: CharacterState, amount: number) {
     state.deathReason = null;
   }
   return state.hp - hp;
+}
+export function helpUp(state: CharacterState) {
+  if (!isDowned(state)) throw new RuleError('Choose a downed party member to help up.');
+  state.downedThisEncounter = true;
+  return heal(state, 1);
+}
+export function recoverAfterEncounter(members: Member[]) {
+  const logs: string[] = [];
+  for (const member of members) {
+    const { character, state } = member;
+    if (isDead(state)) continue;
+    const restored = heal(
+      state,
+      Math.max(1, state.stats.CON) + character.traits.reduce((sum, trait) => sum + trait.regeneration, 0),
+    );
+    if (restored) logs.push(`${character.name} recovers ${restored} HP after the successful encounter.`);
+    for (const ability of character.abilities) {
+      const used = state.abilityUses?.[ability.name] ?? 0;
+      if (used > 0) {
+        state.abilityUses = { ...state.abilityUses, [ability.name]: Math.max(0, used - 1) };
+        logs.push(`${character.name}'s ${ability.name} regains one charge.`);
+      }
+    }
+    state.downedThisEncounter = false;
+    state.guarding = false;
+    delete state.abilityGuard;
+    delete state.abilityAssist;
+  }
+  return logs;
 }
 export function healWithItem(
   character: Character,
@@ -500,18 +791,28 @@ export function mendWithAbility(
 ) {
   if (state.hp <= 0) throw new RuleError('An ally must be conscious to use a healing ability.');
   const ability = availableAbility(character, state, abilityName, 'combat');
-  if (ability.effect !== 'mend') throw new RuleError('Choose a healing ability.');
+  if (!['mend', 'cleanse'].includes(ability.effect))
+    throw new RuleError('Choose a healing or cleansing ability.');
   if (isDead(target.state)) throw new RuleError('A dead character cannot be healed.');
   const mode = target.character.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal';
-  if (mode !== ability.healing) throw new RuleError('This healing ability is incompatible with the target.');
-  if (target.state.hp >= target.state.maxHp) throw new RuleError('The target is already at full health.');
-  const amount = Math.max(
-    1,
-    roll(6, `${ability.name}: healing`, character.name, ability.stat) +
-      modifier(state.stats[ability.stat]) +
-      abilityStrength(ability) * 2,
-  );
+  if (ability.effect === 'mend' && mode !== ability.healing)
+    throw new RuleError('This healing ability is incompatible with the target.');
+  const cures = matchingCures(ability, target.state);
+  if (ability.effect === 'cleanse') {
+    if (!cures.length) throw new RuleError('The target has no matching ailment.');
+    cureWithAbility(ability, target.state);
+    spendAbility(state, ability);
+    return 0;
+  }
+  if (target.state.hp >= target.state.maxHp && !cures.length)
+    throw new RuleError('The target is already at full health.');
+  const [count, sides] = abilityDice(ability).split('d').map(Number);
+  let rolled = 0;
+  for (let i = 0; i < count; i++)
+    rolled += roll(sides, `${ability.name}: healing`, character.name, ability.stat);
+  const amount = Math.max(1, rolled + modifier(state.stats[ability.stat]) + abilityBonus(ability));
   const restored = heal(target.state, amount);
+  cureWithAbility(ability, target.state);
   spendAbility(state, ability);
   return restored;
 }
@@ -534,14 +835,16 @@ export function gainAttributes(character: Character, state: CharacterState, attr
   state.maxHp = maxHp(character, state);
   if (state.hp > 0) state.hp = Math.min(state.maxHp, state.hp + state.maxHp - oldMax);
 }
-export function damage(state: CharacterState, amount: number, cause: string, fatal = false) {
+export function damage(state: CharacterState, amount: number, cause: string, _fatal = false) {
   if (state.hp <= 0) return;
-  state.hp = Math.max(0, state.hp - Math.max(0, amount));
+  state.hp = Math.max(0, state.hp - shockedDamage(state.conditions, amount));
   if (state.hp === 0) {
     state.conditions = state.conditions.filter((condition) => condition !== 'Downed');
     delete state.conditionTurns.Downed;
-    if (!fatal) state.conditions.push('Downed');
-    state.deathReason = fatal ? cause : null;
+    const dead = state.downedThisEncounter === true;
+    if (!dead) state.conditions.push('Downed');
+    state.downedThisEncounter = true;
+    state.deathReason = dead ? cause : null;
     state.guarding = false;
     delete state.abilityGuard;
     delete state.abilityAssist;
@@ -549,7 +852,8 @@ export function damage(state: CharacterState, amount: number, cause: string, fat
 }
 export function initialScene(setting: string): Scene {
   return {
-    floor: { number: 1, biome: setting, atmosphere: '', hazard: '', encounters: 0, cleared: false },
+    location: { name: setting, atmosphere: '', hazard: '' },
+    encounters: 0,
     encounter: null,
     loot: [],
     lethalWarning: null,
@@ -574,24 +878,25 @@ export function weaponDamage(item: Item, roll: Dice, actor: string, bonus: numbe
 }
 export function randomLoot(
   seed: string,
-  floor: Scene['floor'],
+  level: number,
   roll: (sides: number) => number,
   blueprint: LootBlueprint,
+  rarity?: Item['rarity'],
 ): Item {
-  const draw = roll(100);
-  const rarity: Item['rarity'] =
-    draw === 1
-      ? 'Cursed'
-      : draw === 100
-        ? 'Legendary'
-        : draw > 95
-          ? 'Epic'
+  if (!rarity) {
+    const draw = roll(100);
+    rarity =
+      draw === 1
+        ? 'Cursed'
+        : draw === 100
+          ? 'Legendary'
           : draw > 80
             ? 'Rare'
             : draw > 55
               ? 'Uncommon'
               : 'Common';
-  const rank = { Common: 0, Uncommon: 1, Rare: 2, Epic: 3, Legendary: 4, Cursed: 2 }[rarity];
+  }
+  const rank = { Common: 0, Uncommon: 1, Rare: 2, Legendary: 4, Cursed: 2 }[rarity];
   const item: Item = {
     ...baseItem(seed, blueprint.name, blueprint.kind),
     ...blueprint,
@@ -613,27 +918,137 @@ export function randomLoot(
     item.description += ' Cursed: −3 initiative while equipped.';
   }
   if (['weapon', 'armour'].includes(item.kind))
-    for (const stat of item.scaling) item.requirements[stat] = 3 + Math.min(12, floor.number - 1 + rank);
+    for (const stat of item.scaling) item.requirements[stat] = 3 + Math.min(12, level - 1 + rank);
   return item;
+}
+
+export function rollEnemyLoot(
+  seed: string,
+  level: number,
+  enemy: Pick<Enemy, 'name' | 'tier' | 'damage' | 'description' | 'equipmentBlueprints'>,
+  roll: (sides: number, label: string) => number,
+  language = 'English',
+): Item[] {
+  const draw = (label: string) => roll(100, label);
+  const rarities: Item['rarity'][] = [];
+  switch (enemy.tier) {
+    case 'minor':
+      rarities.push(draw('guaranteed loot rarity') <= 50 ? 'Common' : 'Uncommon');
+      break;
+    case 'normal':
+      rarities.push(draw('guaranteed loot rarity') <= 50 ? 'Uncommon' : 'Rare');
+      if (draw('extra loot chance') <= 50) {
+        const rarity = draw('extra loot rarity');
+        rarities.push(rarity <= 60 ? 'Common' : rarity <= 90 ? 'Uncommon' : 'Rare');
+      }
+      break;
+    case 'elite':
+    case 'boss':
+      rarities.push(
+        enemy.tier === 'elite' ? 'Rare' : draw('guaranteed loot rarity') <= 50 ? 'Legendary' : 'Cursed',
+      );
+      for (let i = 0; i < (enemy.tier === 'elite' ? 2 : 3); i++) {
+        const rarity = draw('extra loot rarity');
+        rarities.push(
+          rarity <= 50 ? 'Common' : rarity <= 80 ? 'Uncommon' : rarity <= 95 ? 'Rare' : 'Legendary',
+        );
+      }
+      break;
+  }
+  const dutch = language === 'Nederlands';
+  const blueprints = enemy.equipmentBlueprints?.filter((item) => item.kind !== 'consumable') ?? [];
+  const items = rarities.map((rarity, index) => {
+    const suffix =
+      index === 0 ? (dutch ? ': wapen' : "'s weapon") : dutch ? `: trofee ${index}` : `'s trophy ${index}`;
+    const blueprint = blueprints[index % blueprints.length] ?? {
+      name: `${enemy.name}${suffix}`.slice(0, 100),
+      kind: index === 0 ? ('weapon' as const) : ('relic' as const),
+      scaling: index === 0 ? ['STR' as const] : [],
+      hands: 1 as const,
+      light: false,
+      description: enemy.description.slice(0, 500),
+    };
+    const item = randomLoot(
+      `${seed}-${index}`,
+      level,
+      (sides) => roll(sides, 'loot rarity'),
+      blueprint,
+      rarity,
+    );
+    if (item.kind === 'weapon') item.damage = enemy.damage;
+    return item;
+  });
+  if (draw('healing item chance') <= 50) {
+    const blueprint = enemy.equipmentBlueprints?.find((item) => item.kind === 'consumable') ?? {
+      name: `${enemy.name}${dutch ? ': genezend middel' : "'s healing item"}`.slice(0, 100),
+      kind: 'consumable' as const,
+      scaling: [],
+      hands: 1 as const,
+      light: false,
+      description: dutch ? 'Herstelt HP bij gebruik.' : 'Restores HP when used.',
+    };
+    items.push(
+      randomLoot(`${seed}-healing`, level, (sides) => roll(sides, 'loot rarity'), blueprint, 'Common'),
+    );
+  }
+  return items;
 }
 
 export function runCombat(members: Member[], encounter: Encounter, input: CombatInput, roll: Dice) {
   if (encounter.victory || encounter.escaped) throw new RuleError('This combat has already ended.');
   const logs: string[] = [];
+  const initiallyAvailableEnemies = new Set(
+    encounter.enemies.filter((enemy) => enemy.hp > 0 && !enemy.withdrawn).map((enemy) => enemy.id),
+  );
   const fled = new Set(members.filter((m) => m.state.conditions.includes('Escaped')).map((m) => m.id));
+  const moving = new Set<string>();
   const ids = input.actions.map((a) => a.memberId);
+  const unavailableAbilities = new Map<string, string>();
   if (new Set(ids).size !== ids.length)
     throw new RuleError('Each character gets one main and one minor action.');
   for (const id of ids)
     if (!members.some((m) => m.id === id && m.state.hp > 0))
       throw new RuleError('Combat action references an unavailable character.');
   for (const action of input.actions) {
+    if (['help-up', 'heal'].includes(action.main) && action.minor !== 'none')
+      throw new RuleError('Helping or healing an ally uses the entire turn.');
     if ((action.main === 'ability') !== !!action.abilityName)
       throw new RuleError('An ability action must name the chosen ability.');
     if (action.abilityName) {
       const member = members.find((member) => member.id === action.memberId)!;
-      availableAbility(member.character, member.state, action.abilityName, 'combat');
+      try {
+        availableAbility(
+          member.character,
+          member.state,
+          action.abilityName,
+          member.state.conditions.includes('Escaped') &&
+            !action.reengage &&
+            member.character.abilities.some(
+              (ability) => ability.name === action.abilityName && ability.kind === 'utility',
+            )
+            ? 'utility'
+            : 'combat',
+        );
+      } catch (error) {
+        if (
+          !(error instanceof RuleError) ||
+          !member.character.abilities.some((ability) => ability.name === action.abilityName)
+        )
+          throw error;
+        unavailableAbilities.set(member.id, error.message);
+      }
     }
+    const member = members.find((member) => member.id === action.memberId)!;
+    const strikes =
+      action.main === 'attack' ||
+      action.minor === 'offhand' ||
+      (action.main === 'ability' &&
+        member.character.abilities.find((ability) => ability.name === action.abilityName)?.effect ===
+          'strike');
+    if (strikes)
+      for (const targetId of [action.targetId, action.backupTargetId])
+        if (targetId != null && !encounter.enemies.some((enemy) => enemy.id === targetId))
+          throw new RuleError('Attack references an unknown enemy target.');
   }
   for (const target of input.enemyTargets)
     if (
@@ -641,6 +1056,10 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
       !members.some((m) => m.id === target.memberId && m.state.hp > 0)
     )
       throw new RuleError('Enemy target is not available.');
+  for (const enemy of encounter.enemies) {
+    enemy.conditions ??= [];
+    enemy.conditionTurns ??= {};
+  }
   const minorAction = (member: Member, resolve: () => void) => {
     try {
       resolve();
@@ -651,6 +1070,51 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
       );
     }
   };
+  const attackTarget = (
+    member: Member,
+    action: CombatInput['actions'][number],
+    offhand = false,
+    ability?: Ability,
+  ) => {
+    const original = encounter.enemies.find((enemy) => enemy.id === action.targetId);
+    if (original && original.hp > 0 && !original.withdrawn) return original;
+    if (action.targetId === null && action.allowRetarget !== false) {
+      const available = encounter.enemies.filter((enemy) => enemy.hp > 0 && !enemy.withdrawn);
+      if (available.length)
+        return available[
+          available.length === 1
+            ? 0
+            : roll(available.length, `${member.character.name}: random enemy`, member.id, action.stat) - 1
+        ];
+    }
+    const label = offhand ? 'off-hand attack' : (ability?.name ?? 'attack');
+    if (
+      (original && initiallyAvailableEnemies.has(original.id)) ||
+      (action.targetId === null && initiallyAvailableEnemies.size > 0)
+    ) {
+      const remaining = encounter.enemies.filter((enemy) => enemy.hp > 0 && !enemy.withdrawn);
+      if (!remaining.length) {
+        logs.push(
+          `${member.character.name} skips their ${label}: no enemies remain${ability ? '; the use is preserved' : ''}.`,
+        );
+        return;
+      }
+      if (original && action.allowRetarget !== false) {
+        const target = remaining.find((enemy) => enemy.id === action.backupTargetId) ?? remaining[0];
+        logs.push(
+          `${member.character.name} redirects their ${label} from ${original.name} to ${target.name} because ${original.name} ${original.hp <= 0 ? 'fell' : 'withdrew'} earlier this round.`,
+        );
+        return target;
+      }
+    }
+    logs.push(
+      offhand
+        ? `${member.character.name}'s off-hand target is unavailable; the minor action is spent.`
+        : ability
+          ? `${member.character.name}'s ${ability.name} target is unavailable; the main action is spent and the use is preserved.`
+          : `${member.character.name}'s target is no longer available; the main action is spent.`,
+    );
+  };
   const attack = (
     member: Member,
     target: Enemy,
@@ -659,7 +1123,11 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
     ability?: Ability,
   ) => {
     const primary = ability
-      ? { ...baseItem('ability', ability.name, 'weapon'), scaling: [ability.stat], damage: '2d6' }
+      ? {
+          ...baseItem('ability', ability.name, 'weapon'),
+          scaling: [ability.stat],
+          damage: abilityDice(ability),
+        }
       : slot === 'natural'
         ? naturalWeapon(member.character)
         : ([
@@ -693,40 +1161,47 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
       equipmentBonus(member.state, weapon.scaling.length ? weapon.scaling : ['STR'], 'attackBonus') +
       (assist ?? 0) -
       (member.state.conditions.includes('Weakened') ? 2 : 0);
+    const targetDefense = target.defense - (target.conditions!.includes('Chilled') ? 2 : 0);
     let die = roll(
       20,
       `${member.character.name}: ${offhand ? 'off-hand ' : ''}attack with ${weapon.name}`,
       member.id,
       stat,
       mod,
-      target.defense,
+      targetDefense,
     );
     if (assist !== undefined) {
       die = Math.max(
         die,
-        roll(20, `${member.character.name}: assisted attack`, member.id, stat, mod, target.defense),
+        roll(20, `${member.character.name}: assisted attack`, member.id, stat, mod, targetDefense),
       );
       delete member.state.abilityAssist;
       logs.push(`${member.character.name} attacks with advantage${assist ? ` and +${assist}` : ''}.`);
     }
     if (die === 1) {
       const harm = roll(4, 'Catastrophic attack backlash', member.id, 'STR');
+      const suffered = shockedDamage(member.state.conditions, harm);
       damage(member.state, harm, 'A catastrophic attack failure.', true);
       logs.push(
-        `${member.character.name} rolls a natural 1 with ${weapon.name}: the attack fails catastrophically and causes ${harm} self-damage${member.state.hp === 0 ? ' and death' : ''}.`,
+        `${member.character.name} rolls a natural 1 with ${weapon.name}: the attack fails catastrophically and causes ${suffered} self-damage${member.state.hp === 0 ? ` and ${isDowned(member.state) ? 'downs them' : 'causes their death'}` : ''}.`,
       );
-    } else if (die === 20 || die + mod >= target.defense) {
+    } else if (die === 20 || die + mod >= targetDefense) {
       const dealt = weaponDamage(
         weapon,
         roll,
         member.id,
-        offhand ? 0 : scaling(member.state, weapon) + (ability ? abilityStrength(ability) * 2 : 0),
+        offhand ? 0 : scaling(member.state, weapon) + (ability ? abilityBonus(ability) : 0),
         die === 20,
       );
-      target.hp = Math.max(0, target.hp - dealt);
+      const inflicted = shockedDamage(target.conditions!, dealt);
+      target.hp = Math.max(0, target.hp - inflicted);
       logs.push(
-        `${member.character.name} ${die === 20 ? 'critically hits' : 'hits'} ${target.name} with ${weapon.name} for ${dealt}${target.hp === 0 ? `, killing ${target.name}` : ''}.`,
+        `${member.character.name} ${die === 20 ? 'critically hits' : 'hits'} ${target.name} with ${weapon.name} for ${inflicted}${target.hp === 0 ? `, killing ${target.name}` : ''}.`,
       );
+      if (ability?.inflicts && target.hp > 0) {
+        applyCondition(target as ConditionState, ability.inflicts);
+        logs.push(`${target.name} becomes ${ability.inflicts} from ${ability.name}.`);
+      }
       if (weapon.id === 'natural' && member.character.traits.some((t) => t.lifesteal)) {
         const hp = member.state.hp;
         member.state.hp = Math.min(member.state.maxHp, member.state.hp + 1);
@@ -746,19 +1221,38 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
           );
         continue;
       }
+      const selectedAbility = member.character.abilities.find(
+        (ability) => ability.name === action?.abilityName,
+      );
+      const utility = selectedAbility?.kind === 'utility' ? selectedAbility : undefined;
       const wasEscaped = fled.has(member.id);
       if (wasEscaped && !action) continue;
       if (
         wasEscaped &&
         action &&
         (action.reengage ||
-          ['attack', 'defend', 'creative', 'ability'].includes(action.main) ||
+          ['attack', 'defend', 'creative'].includes(action.main) ||
+          (action.main === 'ability' &&
+            !utility &&
+            !['mend', 'cleanse'].includes(selectedAbility?.effect ?? '')) ||
           action.minor === 'offhand')
       ) {
         fled.delete(member.id);
         member.state.conditions = member.state.conditions.filter((condition) => condition !== 'Escaped');
         delete member.state.conditionTurns.Escaped;
         logs.push(`${member.character.name} rejoins the fight.`);
+      }
+      const target = members.find((ally) => ally.id === action?.targetId);
+      if (
+        action &&
+        action.main !== 'flee' &&
+        ((target && fled.has(member.id) !== fled.has(target.id)) ||
+          (fled.has(member.id) && encounter.enemies.some((enemy) => enemy.id === action.targetId)))
+      ) {
+        logs.push(
+          `${member.character.name} cannot interact with this target while one of them is outside combat. The main action is spent; resources are preserved.`,
+        );
+        continue;
       }
       member.state.guarding = false;
       if (!action) {
@@ -770,16 +1264,50 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
           `${member.character.name} cannot change equipment during combat; their main action continues with current equipment.`,
         );
       }
-      if (member.state.conditions.includes('Stunned')) {
-        logs.push(`${member.character.name} is stunned and loses their main action.`);
+      const incapacitated = incapacitatingCondition(member.state);
+      if (incapacitated) {
+        logs.push(
+          incapacitated === 'Stunned'
+            ? `${member.character.name} is stunned and loses their main action.`
+            : `${member.character.name} is ${incapacitated} and cannot act.`,
+        );
+      } else if (unavailableAbilities.has(member.id)) {
+        logs.push(`${unavailableAbilities.get(member.id)} The main action is spent.`);
+      } else if (action.main === 'help-up' || action.main === 'heal') {
+        try {
+          const target = members.find(
+            (ally) => ally.id === action.targetId && fled.has(member.id) === fled.has(ally.id),
+          );
+          if (!target || target.id === member.id)
+            throw new RuleError('Choose another party member to assist.');
+          if (action.main === 'help-up') {
+            helpUp(target.state);
+            logs.push(`${member.character.name} helps up ${target.character.name}, restoring them to 1 HP.`);
+          } else {
+            if (!action.mainItemId) throw new RuleError('Choose a healing consumable.');
+            if (target.state.hp >= target.state.maxHp)
+              throw new RuleError('The target is already at full health; the consumable is preserved.');
+            const item = member.state.inventory.find((item) => item.id === action.mainItemId);
+            const restored = healWithItem(member.character, member.state, action.mainItemId, target);
+            logs.push(
+              `${member.character.name} uses ${item!.name} on ${target.character.name}, restoring ${restored} HP.`,
+            );
+          }
+        } catch (error) {
+          if (!(error instanceof RuleError)) throw error;
+          logs.push(
+            `${member.character.name}'s assistance has no effect: ${error.message} The main action is spent.`,
+          );
+        }
       } else if (action.main === 'defend') {
         member.state.guarding = true;
         logs.push(`${member.character.name} defends (+2 defense).`);
       } else if (action.main === 'flee') {
+        moving.add(member.id);
         if (fled.has(member.id)) {
           logs.push(`${member.character.name} continues away from the fight.`);
         } else {
-          const mod = modifier(member.state.stats.DEX);
+          const mod = modifier(member.state.stats.DEX) - ailmentCheckPenalty(member.state, 'DEX');
           const die = roll(20, 'Flee combat', member.id, 'DEX', mod, action.dc ?? 10);
           if (die !== 1 && (die === 20 || die + mod >= (action.dc ?? 10))) {
             fled.add(member.id);
@@ -790,48 +1318,68 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
               const hp = member.state.hp;
               damage(member.state, 4, 'Catastrophic failed escape.', true);
               logs.push(
-                `${member.character.name} takes ${hp - member.state.hp} damage from a catastrophic failed escape${member.state.hp === 0 ? ' and dies' : ''}.`,
+                `${member.character.name} takes ${hp - member.state.hp} damage from a catastrophic failed escape${member.state.hp === 0 ? ` and ${isDowned(member.state) ? 'is downed' : 'dies'}` : ''}.`,
               );
             }
           }
         }
-      } else if (action.main === 'move' || action.main === 'interact') {
+      } else if (action.main === 'move' || action.main === 'interact' || utility) {
+        if (action.main === 'move') moving.add(member.id);
         const kind = action.main === 'move' ? 'movement' : 'interaction';
         const intent = action.description || `${kind} within the scene`;
-        const mod = modifier(member.state.stats[action.stat]);
-        const die =
-          action.dc === undefined
+        const stat = utility?.stat ?? action.stat;
+        const mod =
+          modifier(member.state.stats[stat]) -
+          ailmentCheckPenalty(member.state, stat) +
+          (fled.has(member.id) ? equipmentBonus(member.state, stat, 'checkBonus') : 0) +
+          (utility ? abilityBonus(utility) : 0);
+        const dc = action.dc ?? (utility ? 10 : undefined);
+        let die =
+          dc === undefined
             ? undefined
-            : roll(
-                20,
-                `${member.character.name}: ${intent}`.slice(0, 500),
-                member.id,
-                action.stat,
-                mod,
-                action.dc,
-              );
-        const success = die === undefined || (die !== 1 && (die === 20 || die + mod >= action.dc!));
+            : roll(20, `${member.character.name}: ${intent}`.slice(0, 500), member.id, stat, mod, dc);
+        if (utility) {
+          die = Math.max(
+            die!,
+            roll(20, `${member.character.name}: ${utility.name} advantage`, member.id, stat, mod, dc),
+          );
+          spendAbility(member.state, utility);
+          logs.push(`${member.character.name} uses ${utility.name}; its encounter use is spent.`);
+        }
+        const success = die === undefined || (die !== 1 && (die === 20 || die + mod >= dc!));
         logs.push(
           `${member.character.name} ${success ? 'carries out' : 'fails to carry out'} their ${kind}: ${intent}`,
         );
+        if (action.main === 'interact' && action.cureCondition && success) {
+          const target =
+            action.targetId === null ? member : members.find((ally) => ally.id === action.targetId);
+          if (target && !isDead(target.state) && target.state.conditions.includes(action.cureCondition)) {
+            if (action.mainItemId) {
+              const item = member.state.inventory.find((item) => item.id === action.mainItemId);
+              if (item?.kind !== 'consumable')
+                throw new RuleError(
+                  'Treatment requires an owned consumable or an available environmental remedy.',
+                );
+              removeItem(member.state, item.id);
+            }
+            removeCondition(target.state, action.cureCondition);
+            logs.push(
+              `${member.character.name} removes ${action.cureCondition} from ${target.character.name}.`,
+            );
+          }
+        }
         if (die === 1) {
           const hp = member.state.hp;
           damage(member.state, 4, `Catastrophic failed ${kind}: ${intent}`, true);
           logs.push(
-            `${member.character.name}'s risky ${kind} backfires for ${hp - member.state.hp} damage${member.state.hp === 0 ? ' and causes their death' : ''}.`,
+            `${member.character.name}'s risky ${kind} backfires for ${hp - member.state.hp} damage${member.state.hp === 0 ? ` and ${isDowned(member.state) ? 'downs them' : 'causes their death'}` : ''}.`,
           );
         }
       } else if (action.main === 'ability') {
         const ability = availableAbility(member.character, member.state, action.abilityName!, 'combat');
         if (ability.effect === 'strike') {
-          const target = encounter.enemies.find(
-            (enemy) => enemy.id === action.targetId && enemy.hp > 0 && !enemy.withdrawn,
-          );
-          if (!target)
-            logs.push(
-              `${member.character.name}'s ${ability.name} target is unavailable; the main action is spent and the use is preserved.`,
-            );
-          else {
+          const target = attackTarget(member, action, false, ability);
+          if (target) {
             spendAbility(member.state, ability);
             logs.push(`${member.character.name} uses ${ability.name}; its encounter use is spent.`);
             attack(member, target, false, null, ability);
@@ -843,8 +1391,9 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
               : members.find(
                   (ally) =>
                     ally.id === action.targetId &&
-                    (ally.state.hp > 0 || (ability.effect === 'mend' && isDowned(ally.state))) &&
-                    !fled.has(ally.id),
+                    (ally.state.hp > 0 ||
+                      (['mend', 'cleanse'].includes(ability.effect) && isDowned(ally.state))) &&
+                    fled.has(member.id) === fled.has(ally.id),
                 );
           const mode =
             target?.character.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal';
@@ -856,13 +1405,22 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
             logs.push(
               `${member.character.name}'s ${ability.name} has no effect: the healing is incompatible with ${target.character.name}. The main action is spent and the use is preserved.`,
             );
-          else if (ability.effect === 'mend' && target.state.hp >= target.state.maxHp)
+          else if (
+            ability.effect === 'mend' &&
+            target.state.hp >= target.state.maxHp &&
+            !matchingCures(ability, target.state).length
+          )
             logs.push(
               `${member.character.name}'s ${ability.name} has no effect: ${target.character.name} is already at full health. The main action is spent and the use is preserved.`,
             );
+          else if (ability.effect === 'cleanse' && !matchingCures(ability, target.state).length)
+            logs.push(
+              `${member.character.name}'s ${ability.name} has no effect: ${target.character.name} has no matching ailment. The main action is spent and the use is preserved.`,
+            );
           else {
-            const strength = abilityStrength(ability);
-            if (ability.effect === 'mend') {
+            const strength = abilityBonus(ability);
+            const cured = matchingCures(ability, target.state);
+            if (ability.effect === 'mend' || ability.effect === 'cleanse') {
               const restored = mendWithAbility(
                 member.character,
                 member.state,
@@ -871,7 +1429,9 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
                 (sides, label, _actor, stat) => roll(sides, label, member.id, stat),
               );
               logs.push(
-                `${member.character.name} uses ${ability.name}: ${target.character.name} recovers ${restored} HP (${ability.healing} healing).`,
+                ability.effect === 'cleanse'
+                  ? `${member.character.name} uses ${ability.name} on ${target.character.name}.`
+                  : `${member.character.name} uses ${ability.name}: ${target.character.name} recovers ${restored} HP (${ability.healing} healing).`,
               );
             } else if (ability.effect === 'guard') {
               target.state.abilityGuard = Math.max(target.state.abilityGuard ?? 0, 3 + strength);
@@ -884,20 +1444,29 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
                 `${member.character.name} uses ${ability.name}: ${target.character.name} gains advantage${strength ? ` and +${strength}` : ''} on their next attack.`,
               );
             }
-            if (ability.effect !== 'mend') spendAbility(member.state, ability);
+            if (!['mend', 'cleanse'].includes(ability.effect)) {
+              cureWithAbility(ability, target.state);
+              spendAbility(member.state, ability);
+            }
+            if (cured.length)
+              logs.push(`${ability.name} removes ${cured.join(' and ')} from ${target.character.name}.`);
           }
         }
+      } else if (action.main === 'attack') {
+        const target = attackTarget(member, action);
+        if (target) attack(member, target, false, action.weaponSlot);
       } else {
         const target = encounter.enemies.find((e) => e.id === action.targetId && e.hp > 0 && !e.withdrawn);
         if (!target) {
           logs.push(`${member.character.name}'s target is no longer available; the main action is spent.`);
-        } else if (action.main === 'attack') attack(member, target, false, action.weaponSlot);
-        else {
+        } else {
           const assist = action.effect === 'influence' ? undefined : member.state.abilityAssist;
           const mod =
             modifier(member.state.stats[action.stat]) +
             (action.effect === 'influence' ? 0 : equipmentBonus(member.state, action.stat, 'attackBonus')) +
-            (assist ?? 0);
+            (assist ?? 0) -
+            ailmentCheckPenalty(member.state, action.stat) -
+            (action.effect !== 'influence' && member.state.conditions.includes('Weakened') ? 2 : 0);
           const dc = Math.max(action.effect === 'influence' ? 15 : 5, action.dc ?? 10);
           let die = roll(20, action.description || 'Creative combat action', member.id, action.stat, mod, dc);
           if (assist !== undefined) {
@@ -905,9 +1474,10 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
             delete member.state.abilityAssist;
           }
           if (die === 1) {
+            const suffered = shockedDamage(member.state.conditions, 4);
             damage(member.state, 4, 'A catastrophic improvised action.', true);
             logs.push(
-              `${member.character.name}'s improvised action backfires for 4 damage${member.state.hp === 0 ? ' and causes their death' : ''}.`,
+              `${member.character.name}'s improvised action backfires for ${suffered} damage${member.state.hp === 0 ? ` and ${isDowned(member.state) ? 'downs them' : 'causes their death'}` : ''}.`,
             );
           } else if (die === 20 || die + mod >= dc) {
             if (action.effect === 'influence') {
@@ -929,18 +1499,24 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
                 modifier(member.state.stats[action.stat]),
                 die === 20,
               );
-              target.hp = Math.max(0, target.hp - dealt);
+              const inflicted = shockedDamage(target.conditions!, dealt);
+              target.hp = Math.max(0, target.hp - inflicted);
               logs.push(
-                `${member.character.name}'s creative action deals ${dealt} damage to ${target.name}${target.hp === 0 ? `, killing ${target.name}` : ''}.`,
+                `${member.character.name}'s creative action deals ${inflicted} damage to ${target.name}${target.hp === 0 ? `, killing ${target.name}` : ''}.`,
               );
             }
           } else logs.push(`${member.character.name}'s creative action fails.`);
         }
       }
       if (member.state.hp > 0 && (!fled.has(member.id) || wasEscaped)) {
-        if (action.minor === 'heal') {
+        if (['Frozen', 'Electrocuted'].includes(incapacitated ?? '')) {
+          if (action.minor !== 'none')
+            logs.push(`${member.character.name} cannot take their minor action while ${incapacitated}.`);
+        } else if (action.minor === 'heal') {
           minorAction(member, () => {
             if (!action.minorItemId) throw new RuleError('Choose a healing consumable.');
+            if (action.minorTargetId && action.minorTargetId !== member.id)
+              throw new RuleError('Healing a party member uses your main action.');
             const target = action.minorTargetId
               ? members.find((ally) => ally.id === action.minorTargetId)
               : member;
@@ -956,23 +1532,26 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
             );
           });
         }
-        if (action.minor === 'offhand') {
-          const target = encounter.enemies.find((e) => e.id === action.targetId && e.hp > 0 && !e.withdrawn);
+        if (
+          action.minor === 'offhand' &&
+          !['Frozen', 'Electrocuted', 'Chilled'].some((condition) =>
+            member.state.conditions.includes(condition),
+          )
+        ) {
+          const target = attackTarget(member, action, true);
           if (target) attack(member, target, true, action.weaponSlot);
-          else
-            logs.push(
-              `${member.character.name}'s off-hand target is unavailable; the minor action is spent.`,
-            );
         }
+        if (action.minor === 'offhand' && member.state.conditions.includes('Chilled'))
+          logs.push(`${member.character.name} is Chilled and cannot make an off-hand attack.`);
       } else if (action.minor === 'heal' || action.minor === 'offhand') {
         logs.push(
-          `${member.character.name} cannot take their ${action.minor === 'heal' ? 'healing' : 'off-hand attack'} minor action after ${member.state.hp <= 0 ? 'dying' : 'escaping the fight'}.`,
+          `${member.character.name} cannot take their ${action.minor === 'heal' ? 'healing' : 'off-hand attack'} minor action after ${member.state.hp <= 0 ? (isDowned(member.state) ? 'being downed' : 'dying') : 'escaping the fight'}.`,
         );
       }
     } else {
       const enemy = encounter.enemies.find((e) => e.id === initiative.id);
       if (!enemy || enemy.hp <= 0 || enemy.withdrawn) continue;
-      if (enemy.stunned) {
+      if (enemy.stunned || incapacitatingCondition(enemy as ConditionState)) {
         enemy.stunned = false;
         logs.push(`${enemy.name} is unable to attack this round.`);
         continue;
@@ -982,35 +1561,31 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
       const selected = input.enemyTargets.find((t) => t.enemyId === enemy.id)?.memberId;
       const target = candidates.find((m) => m.id === selected) ?? candidates[0];
       const targetDefense = defense(target.character, target.state);
+      const enemyAttack = enemy.attack - (enemy.conditions!.includes('Weakened') ? 2 : 0);
       const die = roll(
         20,
         `${enemy.name} attacks ${target.character.name}`,
         enemy.id,
         'STR',
-        enemy.attack,
+        enemyAttack,
         targetDefense,
       );
       delete target.state.abilityGuard;
       if (die === 1) {
-        enemy.hp = Math.max(0, enemy.hp - 2);
+        const harm = shockedDamage(enemy.conditions!, 2);
+        enemy.hp = Math.max(0, enemy.hp - harm);
         logs.push(
-          `${enemy.name} catastrophically fails and suffers 2 damage${enemy.hp === 0 ? ' and dies' : ''}.`,
+          `${enemy.name} catastrophically fails and suffers ${harm} damage${enemy.hp === 0 ? ' and dies' : ''}.`,
         );
-      } else if (die === 20 || die + enemy.attack >= targetDefense) {
-        const weapon = { ...baseItem(enemy.id, enemy.name, 'weapon'), damage: enemy.damage };
-        let naturalMax = true;
-        const dealt = weaponDamage(
-          weapon,
-          (...args) => {
-            const result = roll(...args);
-            naturalMax &&= result === args[0];
-            return result;
-          },
-          enemy.id,
-          enemy.attack,
-          die === 20,
-        );
-        damage(target.state, dealt, `Killed by ${enemy.name}.`, die === 20 || naturalMax);
+      } else if (die === 20 || die + enemyAttack >= targetDefense) {
+        const weapon = {
+          ...(enemy.equipment?.find((item) => item.kind === 'weapon') ??
+            baseItem(enemy.id, enemy.name, 'weapon')),
+          damage: enemy.damage,
+        };
+        const baseDamage = weaponDamage(weapon, roll, enemy.id, enemy.attack, die === 20);
+        const dealt = shockedDamage(target.state.conditions, baseDamage);
+        damage(target.state, baseDamage, `Killed by ${enemy.name}.`);
         logs.push(
           `${enemy.name} ${die === 20 ? 'critically hits' : 'hits'} ${target.character.name} for ${dealt}${target.state.hp === 0 ? `, ${isDowned(target.state) ? 'downing' : 'killing'} ${target.character.name}` : ''}.`,
         );
@@ -1020,36 +1595,35 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
           !target.character.traits.some((t) => t.immunities.includes(enemy.onHit!))
         ) {
           if (!target.state.conditions.includes(enemy.onHit)) {
-            target.state.conditions.push(enemy.onHit);
             logs.push(`${target.character.name} becomes ${enemy.onHit} from ${enemy.name}'s attack.`);
           }
-          target.state.conditionTurns[enemy.onHit] = 2;
+          applyCondition(target.state, enemy.onHit, target.character);
         }
       } else logs.push(`${enemy.name} misses ${target.character.name}.`);
     }
   }
   for (const member of members) {
-    for (const condition of [...member.state.conditions]) {
-      if (condition === 'Downed') continue;
-      const immune = member.character.traits.some((t) => t.immunities.some((c) => c === condition));
-      if (!immune && ['Bleeding', 'Burning', 'Poisoned'].includes(condition)) {
-        const hp = member.state.hp;
-        damage(member.state, condition === 'Burning' ? 2 : 1, `${condition} damage.`);
-        if (member.state.hp < hp)
-          logs.push(
-            `${member.character.name} takes ${hp - member.state.hp} ${condition} damage${member.state.hp === 0 ? ' and is downed' : ''}.`,
-          );
-      }
-      const duration = (member.state.conditionTurns[condition] ?? 2) - 1;
-      member.state.conditionTurns[condition] = duration;
-      if (duration <= 0 || immune) {
-        member.state.conditions = member.state.conditions.filter((c) => c !== condition);
-        delete member.state.conditionTurns[condition];
-      }
-    }
+    logs.push(...tickConditions(member, moving.has(member.id)));
     if (fled.has(member.id)) {
       if (!member.state.conditions.includes('Escaped')) member.state.conditions.push('Escaped');
       member.state.conditionTurns.Escaped = 999;
+    }
+  }
+  for (const enemy of encounter.enemies) {
+    for (const condition of [...enemy.conditions!]) {
+      const amount = isAilment(condition) ? ailmentRules[condition].damage : 0;
+      if (amount && enemy.hp > 0 && !enemy.withdrawn) {
+        const hp = enemy.hp;
+        enemy.hp = Math.max(0, hp - shockedDamage(enemy.conditions!, amount));
+        logs.push(
+          `${enemy.name} takes ${hp - enemy.hp} ${condition} damage${enemy.hp === 0 ? ' and dies' : ''}.`,
+        );
+      }
+    }
+    for (const condition of [...enemy.conditions!]) {
+      enemy.conditionTurns![condition] =
+        (enemy.conditionTurns![condition] ?? conditionDuration(condition)) - 1;
+      if (enemy.conditionTurns![condition] <= 0) removeCondition(enemy as ConditionState, condition);
     }
   }
   encounter.round++;
@@ -1057,8 +1631,17 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
   encounter.escaped =
     !encounter.victory &&
     members.some((m) => m.state.hp > 0 && m.state.conditions.includes('Escaped')) &&
-    members.every((m) => isDead(m.state) || (m.state.hp > 0 && m.state.conditions.includes('Escaped')));
+    members.every((m) => m.state.hp <= 0 || m.state.conditions.includes('Escaped'));
+  if (encounter.escaped) {
+    for (const member of members.filter((member) => isDowned(member.state) && !fled.has(member.id))) {
+      removeCondition(member.state, 'Downed');
+      member.state.deathReason = 'Left behind with no conscious ally remaining in combat.';
+      logs.push(`${member.character.name} dies permanently: ${member.state.deathReason}`);
+    }
+    logs.push('The surviving party escapes. Combat ends.');
+  }
   if (encounter.victory) {
+    logs.push(...recoverAfterEncounter(members));
     const xp = encounter.enemies.reduce(
       (sum, enemy) => sum + { minor: 15, normal: 30, elite: 50, boss: 100 }[enemy.tier],
       0,
@@ -1068,17 +1651,10 @@ export function runCombat(members: Member[], encounter: Encounter, input: Combat
         grantXp(member.character, member.state, xp);
         member.state.kills += encounter.enemies.filter((e) => e.hp === 0).length;
         member.state.bosses += encounter.enemies.filter((e) => e.tier === 'boss').length;
-        const hp = member.state.hp;
-        member.state.hp = Math.min(
-          member.state.maxHp,
-          member.state.hp + member.character.traits.reduce((n, t) => n + (t.regeneration ?? 0), 0),
-        );
-        if (member.state.hp > hp)
-          logs.push(
-            `${member.character.name} recovers ${member.state.hp - hp} HP from regeneration after victory.`,
-          );
       }
-    logs.push(`Victory. Each surviving character gains ${xp} XP. A physical item must be offered as loot.`);
+    logs.push(
+      `Victory. Each surviving character gains ${xp} XP. Each defeated enemy drops its saved loot as scene loot.`,
+    );
   }
   if (encounter.victory || encounter.escaped)
     for (const member of members) {

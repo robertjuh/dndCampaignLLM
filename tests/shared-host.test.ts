@@ -78,6 +78,7 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     const result = generating
       ? context.rolledEquipment
         ? {
+            abilities: context.schemaExample.abilities,
             items: context.rolledEquipment.map(
               ({ id, name, description }: { id: string; name: string; description: string }) => ({
                 id,
@@ -86,7 +87,15 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
               }),
             ),
           }
-        : core
+        : {
+            ...core,
+            combatAffinity: 'strike',
+            abilities: context.schemaExample.abilities,
+            traits: core.traits.map((trait, i) => ({
+              ...trait,
+              blocked: i === 0 ? ['head', 'boots'].slice(0, context.handicapCount) : [],
+            })),
+          }
       : {
           narration: 'The party proceeds.',
           summary: 'A new journey.',
@@ -119,9 +128,13 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
       payload: { concept: 'sea warrior' },
     });
     expect(generated.statusCode).toBe(200);
-    expect(generated.json()).toMatchObject(core);
+    expect(generated.json()).toMatchObject({ name: core.name, species: core.species, abilities: [] });
     expect(generated.json().equipmentOptions).toHaveLength(5);
-    const saved = game.saveCharacter(owner, generated.json());
+    const generatedSheet = generated.json();
+    generatedSheet.abilities = ['combat', 'utility'].map((kind) =>
+      generatedSheet.abilityOptions.find((a: { kind: string }) => a.kind === kind),
+    );
+    const saved = game.saveCharacter(owner, generatedSheet);
     const campaign = game.create(owner, {
       name: 'Phone-led campaign',
       setting: 'A custom harbor',

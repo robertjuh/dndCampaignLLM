@@ -34,6 +34,51 @@ function stream(chunks: string[]) {
     }),
   );
 }
+function reviewResponse(init: RequestInit | undefined, approvedEvents: string[]) {
+  const data = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+  if (data.task !== 'Review narration fidelity.') return;
+  return stream([
+    event({
+      type: 'response.completed',
+      response: {
+        status: 'completed',
+        output: [
+          { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ approvedEvents }) }] },
+        ],
+      },
+    }),
+  ]);
+}
+function repairResponse(init: RequestInit | undefined, prose: string) {
+  const data = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+  if (data.task === 'Review narration fidelity.')
+    return reviewResponse(
+      init,
+      data.events.map((event: { id: string }) => event.id),
+    );
+  if (data.task !== 'Repair incomplete action narration.') return;
+  return stream([
+    event({
+      type: 'response.completed',
+      response: {
+        status: 'completed',
+        output: [
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: JSON.stringify({
+                  eventNarrations: Object.fromEntries(data.requiredEvents.map((id: string) => [id, prose])),
+                }),
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  ]);
+}
 function resolveContext(memberId = randomUUID()): GMContext {
   return {
     config: {
@@ -118,6 +163,99 @@ function combatTools(): GameTools {
     validateResolution: vi.fn(),
   });
 }
+it.each(['help-up', 'heal-ally'] as const)(
+  'practice narrates saved %s receipts and arriving characters without repeating mechanics',
+  async (type) => {
+    const context = resolveContext();
+    const helper = context.members[0];
+    const target = resolveContext().members[0];
+    target.character.name = 'Bernardo';
+    target.state.hp = 1;
+    context.members.push(target);
+    context.turn.actions[0] = {
+      memberId: helper.id,
+      text: type === 'help-up' ? 'I help up Bernardo.' : 'I use a healing potion on Bernardo.',
+      passed: false,
+      supportAction:
+        type === 'help-up'
+          ? { type, targetId: target.id }
+          : { type, targetId: target.id, itemId: helper.state.inventory[0].id },
+    };
+    const log = `Mira helps Bernardo up, restoring 1 HP.`;
+    context.supportResults = [
+      { memberId: helper.id, targetId: target.id, type, sourceName: 'Help up', restored: 1, log },
+    ];
+    context.arrivingCharacters = [{ playerName: 'New player', character: templateCharacter('Rowan') }];
+    const tools = combatTools();
+    const outcome = await new PracticeGM().resolve(context, tools);
+    expect(await new PracticeGM().resolve(context, tools)).toEqual(outcome);
+    expect(outcome.narration).toContain(log);
+    expect(outcome.narration).toContain('Rowan emerges from the surroundings and joins the party.');
+    expect(outcome).toMatchObject({ changes: [], xp: 0, location: null });
+    expect(tools).not.toHaveBeenCalled();
+    expect(tools.useResource).not.toHaveBeenCalled();
+  },
+);
+it('retains encounter recovery receipts when noncombat prose omits them', async () => {
+  const context = resolveContext();
+  const memberId = context.members[0].id;
+  const check = {
+    memberId,
+    stat: 'INT',
+    dc: 10,
+    reason: 'Solve the gate mechanism.',
+    mode: 'normal',
+    abilityName: null,
+    lethal: false,
+  };
+  const responses = [
+    { type: 'function_call', name: 'roll_check', call_id: 'check', arguments: JSON.stringify(check) },
+    {
+      type: 'function_call',
+      name: 'complete_challenge',
+      call_id: 'challenge',
+      arguments: JSON.stringify({ memberId, reason: check.reason, bossEquivalent: false }),
+    },
+    { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(result) }] },
+  ];
+  const fetcher = vi.fn(
+    async (_url: unknown, init?: RequestInit) =>
+      repairResponse(init, 'Mira studies the gate mechanism and releases its latch.') ??
+      stream([
+        event({
+          type: 'response.completed',
+          response: { status: 'completed', output: [responses.shift()] },
+        }),
+      ]),
+  );
+  const tools = combatTools();
+  vi.mocked(tools).mockReturnValue({
+    ...check,
+    stat: 'INT',
+    dc: 10,
+    mode: 'normal',
+    id: randomUUID(),
+    dice: [12],
+    modifier: 0,
+    total: 12,
+    success: true,
+    source: 'Test',
+  });
+  const recovery = [
+    'Mira recovers 5 HP after the successful encounter.',
+    "Mira's Focused strike regains one charge.",
+  ];
+  tools.completeChallenge = vi.fn(() => ({ recovery }));
+  const gm = new ChatGPTGM(
+    { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
+    'owner',
+    'test-model',
+    fetcher as typeof fetch,
+  );
+  const outcome = await gm.resolve(context, tools);
+  for (const log of recovery) expect(outcome.narration).toContain(log);
+  expect(tools.completeChallenge).toHaveBeenCalledOnce();
+});
 describe('practice natural-language resources', () => {
   it('keeps ordinary inspection from consuming an owned healing item', async () => {
     const context = resolveContext();
@@ -315,6 +453,11 @@ describe('campaign output language', () => {
         const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
           const request = JSON.parse(init!.body as string);
           const data = JSON.parse(request.input[0].content);
+          const repaired = repairResponse(
+            init,
+            'Ária Starfall studies the gate’s hinges and uncovers its latch.',
+          );
+          if (repaired) return repaired;
           return stream([
             event({
               type: 'response.completed',
@@ -357,14 +500,14 @@ describe('campaign output language', () => {
             attributes: ['STR', 'DEX'],
           });
         else await gm.resolve(context, tools);
-        expect(fetcher).toHaveBeenCalledTimes(phase === 'turn' ? 3 : 2);
+        expect(fetcher).toHaveBeenCalledTimes(phase === 'turn' ? 5 : phase === 'combat' ? 3 : 2);
         const requests = fetcher.mock.calls.map(([, init]) => JSON.parse(init!.body as string));
         for (const request of requests) {
           expect(request.instructions).toContain(
             `Write all generated player-facing prose in ${language === 'Nederlands' ? 'Dutch (Nederlands)' : 'English'}`,
           );
           expect(request.instructions).toContain(
-            'Keep core game mechanics terms in English: STR, DEX, INT, HP, XP, DC, attack, strike, mend, guard, assist',
+            'Keep core game mechanics terms in English: STR, DEX, INT, CHA, CON, WIS, HP, XP, DC, attack, strike, mend, guard, assist',
           );
           expect(request.instructions).toContain('Preserve existing proper names');
           expect(request.instructions).toContain('Never translate JSON property names, enum values, IDs');
@@ -435,8 +578,10 @@ describe('subscription response handling', () => {
         output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(result) }] }],
       },
     ];
-    const fetcher = vi.fn(async () =>
-      stream([event({ type: 'response.completed', response: responses.shift() })]),
+    const fetcher = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        repairResponse(init, 'Mira studies the gate’s hinges and uncovers its latch.') ??
+        stream([event({ type: 'response.completed', response: responses.shift() })]),
     );
     const auth = {
       accessToken: async () => 'test-subscription-token',
@@ -507,10 +652,15 @@ describe('GM narration validation', () => {
       ],
       [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(result) }] }],
     ];
-    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-      stream([
-        event({ type: 'response.completed', response: { status: 'completed', output: outputs.shift() } }),
-      ]),
+    const fetcher = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        repairResponse(
+          init,
+          `Mira examines the mechanism using ${ability.name}, spending its use to uncover the latch.`,
+        ) ??
+        stream([
+          event({ type: 'response.completed', response: { status: 'completed', output: outputs.shift() } }),
+        ]),
     );
     const roll = vi.fn((input: Check): Roll => ({
       ...input,
@@ -590,10 +740,15 @@ describe('GM narration validation', () => {
           },
         ],
       ];
-      const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-        stream([
-          event({ type: 'response.completed', response: { status: 'completed', output: outputs.shift() } }),
-        ]),
+      const fetcher = vi.fn(
+        async (_url: unknown, init?: RequestInit) =>
+          repairResponse(
+            init,
+            `Mira uses ${receipt.sourceName}, ${source === 'item' ? 'consuming one item' : 'spending its ability use'}, restoring 6 HP to Mira.`,
+          ) ??
+          stream([
+            event({ type: 'response.completed', response: { status: 'completed', output: outputs.shift() } }),
+          ]),
       );
       const tools = combatTools();
       tools.useResource = vi.fn(() => receipt);
@@ -649,10 +804,15 @@ describe('GM narration validation', () => {
     });
     const priorCheck = { ...check, memberId: randomUUID(), abilityName: null };
     const outputs = [[call('saved-check', priorCheck)], [message], [call('missing-tool', check)], [message]];
-    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-      stream([
-        event({ type: 'response.completed', response: { status: 'completed', output: outputs.shift() } }),
-      ]),
+    const fetcher = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        repairResponse(
+          init,
+          `Mira examines the mechanism using ${ability.name}, spending its use to uncover the latch.`,
+        ) ??
+        stream([
+          event({ type: 'response.completed', response: { status: 'completed', output: outputs.shift() } }),
+        ]),
     );
     const auth = { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth;
     const roll = vi.fn((input: Check): Roll => ({
@@ -683,12 +843,14 @@ describe('GM narration validation', () => {
     expect(validateResolution).toHaveBeenCalledTimes(2);
     expect(roll).toHaveBeenCalledTimes(2);
     const requests = fetcher.mock.calls.map(([_url, init]) => JSON.parse(init!.body as string));
-    const correction = requests.at(-2).input.at(-1).content;
+    const correction = requests
+      .find((request) => request.input.at(-1).content?.includes(error))
+      .input.at(-1).content;
     expect(correction).toContain(error);
     expect(correction).toContain('Reuse existing saved checks and tool receipts');
     const saved = requests
-      .at(-1)
-      .input.find(
+      .flatMap((request) => request.input)
+      .find(
         (input: { call_id?: string; type: string }) =>
           input.type === 'function_call_output' && input.call_id === 'saved-check',
       );
@@ -778,7 +940,7 @@ describe('server-driven combat phases', () => {
       main: 'attack',
       abilityName: null,
       weaponSlot: 'left',
-      targetId: 'gatekeeper',
+      targetId: null,
     });
     const requests = fetcher.mock.calls.map(([_url, init]) => JSON.parse(init!.body as string));
     expect(requests).toHaveLength(2);
@@ -805,7 +967,7 @@ describe('server-driven combat phases', () => {
     const auth = { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth;
     const gm = new ChatGPTGM(auth, 'owner', 'test-model', fetcher as typeof fetch);
     await expect(gm.planCombat(combatContext())).resolves.toMatchObject({
-      actions: [{ main: 'attack', abilityName: null, weaponSlot: 'left', targetId: 'gatekeeper' }],
+      actions: [{ main: 'attack', abilityName: null, weaponSlot: 'left', targetId: null }],
     });
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
@@ -866,7 +1028,7 @@ describe('server-driven combat phases', () => {
       text: 'Cry over our fallen friend and kiss them farewell.',
       passed: false,
     });
-    context.scene.floor.atmosphere = 'Their fallen friend lies beside a nearby exit.';
+    context.scene.location.atmosphere = 'Their fallen friend lies beside a nearby exit.';
     const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const request = JSON.parse(init!.body as string);
       const data = JSON.parse(request.input[0].content);
@@ -1024,7 +1186,7 @@ describe('server-driven combat phases', () => {
                       xp: 40,
                       gold: 100,
                       safeRest: true,
-                      nextFloor: { biome: 'Desert', atmosphere: 'Sunny', hazard: '' },
+                      location: { name: 'Desert', atmosphere: 'Sunny', hazard: '' },
                     }),
                   },
                 ],
@@ -1042,7 +1204,7 @@ describe('server-driven combat phases', () => {
       fetcher as typeof fetch,
     );
     const outcome = await gm.resolve(context, tools);
-    expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0, safeRest: false, nextFloor: null });
+    expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0, safeRest: false, location: null });
     expect(outcome.narration).toContain('boarding knife');
     expect(tools).not.toHaveBeenCalled();
     expect(tools.combat).not.toHaveBeenCalled();
@@ -1050,7 +1212,9 @@ describe('server-driven combat phases', () => {
     expect(request).not.toHaveProperty('tools');
     expect(JSON.parse(request.input[0].content).combatResult.logs).toEqual(context.combatResult.logs);
     expect(request.instructions).toContain('Never infer a death merely from zero HP');
-    expect(request.instructions).toContain('only spent compatible ally healing helps a Downed character up');
+    expect(request.instructions).toContain(
+      'A spent ally main action helps up without an item for exactly 1 HP',
+    );
   });
   it('narrates the original failed movement and a missed selected strike with its use spent', async () => {
     const context = combatContext();
@@ -1078,34 +1242,37 @@ describe('server-driven combat phases', () => {
       })),
       loot: [],
     };
-    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-      stream([
-        event({
-          type: 'response.completed',
-          response: {
-            status: 'completed',
-            output: [
-              {
-                type: 'message',
-                content: [
-                  {
-                    type: 'output_text',
-                    text: JSON.stringify({
-                      ...result,
-                      narration: '',
-                      eventNarrations: {
-                        'combat:1': 'Mira commits her technique, but the gatekeeper steps outside its reach.',
-                        'combat:2':
-                          'Vex attempts the climb, but loose stone prevents progress toward the exit.',
-                      },
-                    }),
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      ]),
+    const fetcher = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        reviewResponse(init, ['combat:1', 'combat:2']) ??
+        stream([
+          event({
+            type: 'response.completed',
+            response: {
+              status: 'completed',
+              output: [
+                {
+                  type: 'message',
+                  content: [
+                    {
+                      type: 'output_text',
+                      text: JSON.stringify({
+                        ...result,
+                        narration: '',
+                        eventNarrations: {
+                          'combat:1':
+                            'Mira commits her technique, but the gatekeeper steps outside its reach.',
+                          'combat:2':
+                            'Vex attempts the climb, but loose stone prevents progress toward the exit.',
+                        },
+                      }),
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        ]),
     );
     const gm = new ChatGPTGM(
       { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
@@ -1115,10 +1282,14 @@ describe('server-driven combat phases', () => {
     );
     const tools = combatTools();
     const outcome = await gm.resolve(context, tools);
-    for (const fact of context.combatResult.logs) expect(outcome.narration).toContain(fact);
+    expect(outcome.narration).toContain(context.combatResult.logs[0]);
+    expect(outcome.narration).toContain(context.combatResult.logs[3]);
+    expect(outcome.narration).not.toContain(context.combatResult.logs[1]);
+    expect(outcome.narration).not.toContain(context.combatResult.logs[2]);
+    expect(outcome.narration).toContain('steps outside its reach');
     expect(outcome.narration).toContain('loose stone prevents progress');
     expect(outcome.narration).not.toContain('remains available');
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
     expect(tools).not.toHaveBeenCalled();
     const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
     expect(request).not.toHaveProperty('tools');
@@ -1181,6 +1352,300 @@ describe('server-driven combat phases', () => {
   );
 });
 describe('complete player narration', () => {
+  it.each(['missing', 'blank', 'partial', 'rejected', 'echoed', 'invalid review'])(
+    'repairs %s prose for routine actions while preserving discovery XP and the closing scene',
+    async (kind) => {
+      const context = resolveContext();
+      context.config.language = 'Nederlands';
+      const amon = context.members[0];
+      amon.character.name = 'Amon-Sah';
+      context.turn.actions[0].text = 'Ik plaats mijn hand in de uitsparing.';
+      const zafir = resolveContext().members[0];
+      zafir.character.name = 'Zafir al-Raml';
+      context.members.push(zafir);
+      context.turn.roster.push(zafir.id);
+      context.turn.actions.push({ memberId: zafir.id, text: 'Open de deur', passed: false });
+      const amonId = `action:${amon.id}`;
+      const zafirId = `action:${zafir.id}`;
+      const prose = {
+        [amonId]:
+          'Amon-Sah legt zijn omwikkelde hand in de uitsparing. Lichtlijnen ontbranden en de sluiting klikt los.',
+        [zafirId]:
+          'Zafir al-Raml duwt de ontgrendelde deur open. Zachte woestijnwind stroomt vanuit het heiligdom langs hem heen.',
+      };
+      const original = {
+        ...result,
+        narration: 'Achter de geopende doorgang ligt een heiligdom met zwevend zand.',
+        summary: 'De sluiting is ontgrendeld en het heiligdom is ontdekt.',
+        xp: 10,
+        journal: [{ kind: 'location', name: 'Heiligdom', detail: 'Een kamer met zwevend zand.' }],
+        eventNarrations:
+          kind === 'missing'
+            ? undefined
+            : kind === 'blank'
+              ? { [amonId]: ' ', [zafirId]: 123 }
+              : kind === 'partial'
+                ? { [amonId]: prose[amonId] }
+                : kind === 'echoed'
+                  ? {
+                      [amonId]: 'Amon-Sah probeert: Ik plaats mijn hand in de uitsparing.',
+                      [zafirId]: 'Open de deur',
+                    }
+                  : {
+                      [amonId]: 'Amon-Sah doodt een verzonnen vijand.',
+                      [zafirId]: 'Zafir vindt een verzonnen zwaard.',
+                    },
+      };
+      let firstReview = true;
+      const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const request = JSON.parse(init!.body as string);
+        const data = JSON.parse(request.input[0].content);
+        let response: unknown = original;
+        if (data.task === 'Repair incomplete action narration.') {
+          expect(request).not.toHaveProperty('tools');
+          expect(data.summary).toBe(original.summary);
+          expect(data.requiredEvents).toEqual(kind === 'partial' ? [zafirId] : [amonId, zafirId]);
+          expect(data.submittedActions.map((action: { text: string }) => action.text)).toEqual(
+            context.turn.actions.map((action) => action.text),
+          );
+          response = { eventNarrations: { ...prose, unknown: 'Een verzonnen gebeurtenis.' } };
+        } else if (data.task === 'Review narration fidelity.') {
+          expect(request).not.toHaveProperty('tools');
+          if (kind === 'invalid review' && firstReview) {
+            firstReview = false;
+            response = {};
+          } else {
+            response = {
+              approvedEvents: data.events
+                .filter(
+                  (event: { id: string; prose: string }) =>
+                    kind === 'echoed' || event.prose === prose[event.id],
+                )
+                .map((event: { id: string }) => event.id),
+            };
+          }
+          expect(request.instructions).toContain('Routine actions without roll receipts may succeed');
+          expect(request.instructions).toContain('Require an actual outcome');
+        }
+        return stream([
+          event({
+            type: 'response.completed',
+            response: {
+              status: 'completed',
+              output: [
+                { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(response) }] },
+              ],
+            },
+          }),
+        ]);
+      });
+      const tools = combatTools();
+      const before = structuredClone(context);
+      const gm = new ChatGPTGM(
+        { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
+        'owner',
+        'test-model',
+        fetcher as typeof fetch,
+      );
+      const outcome = await gm.resolve(context, tools);
+      expect(outcome.narration).toBe(`${prose[amonId]}\n\n${prose[zafirId]}\n\n${original.narration}`);
+      expect(outcome).toMatchObject({
+        xp: 10,
+        summary: original.summary,
+        changes: [],
+        journal: original.journal,
+      });
+      expect(outcome.narration).not.toMatch(/probeert:|Ik plaats mijn hand|Open de deur|verzonnen/);
+      for (const tool of [
+        tools,
+        tools.useResource,
+        tools.startCombat,
+        tools.combat,
+        tools.completeChallenge,
+        tools.offerLoot,
+      ])
+        expect(tool).not.toHaveBeenCalled();
+      expect(tools.validateResolution).toHaveBeenCalledOnce();
+      expect(context).toEqual(before);
+      const tasks = fetcher.mock.calls.map(
+        ([, init]) => JSON.parse(JSON.parse(init!.body as string).input[0].content).task,
+      );
+      expect(
+        tasks.filter((task) => task === 'Resolve the submitted actions and describe the resulting scene.'),
+      ).toHaveLength(1);
+      expect(tasks.filter((task) => task === 'Repair incomplete action narration.')).toHaveLength(1);
+    },
+  );
+
+  it('fails recoverably after three prose repairs without resolving actions again', async () => {
+    const context = resolveContext();
+    const tools = combatTools();
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(init!.body as string);
+      const data = JSON.parse(request.input[0].content);
+      const response = data.task === 'Repair incomplete action narration.' ? { eventNarrations: {} } : result;
+      if (data.task === 'Repair incomplete action narration.') expect(request).not.toHaveProperty('tools');
+      return stream([
+        event({
+          type: 'response.completed',
+          response: {
+            status: 'completed',
+            output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(response) }] }],
+          },
+        }),
+      ]);
+    });
+    const before = structuredClone(context);
+    const gm = new ChatGPTGM(
+      { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
+      'owner',
+      'test-model',
+      fetcher as typeof fetch,
+    );
+    await expect(gm.resolve(context, tools)).rejects.toThrow('Your actions and rolls are saved');
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(tools.validateResolution).toHaveBeenCalledOnce();
+    expect(context).toEqual(before);
+    for (const tool of [
+      tools,
+      tools.useResource,
+      tools.startCombat,
+      tools.combat,
+      tools.completeChallenge,
+      tools.offerLoot,
+    ])
+      expect(tool).not.toHaveBeenCalled();
+    const last = JSON.parse(fetcher.mock.calls.at(-1)![1]!.body as string);
+    expect(last.input.at(-1).content).toContain('Provide approved action-and-outcome prose');
+  });
+
+  it.each([
+    { review: JSON.stringify({ approvedEvents: ['combat:1', 'unknown'] }), accepted: true },
+    { review: JSON.stringify({ approvedEvents: [] }), accepted: false },
+    { review: '{}', accepted: false },
+    { review: 'invalid JSON', accepted: false },
+  ])(
+    'uses factual fallbacks when fidelity review rejects or cannot verify prose ($review)',
+    async ({ review, accepted }) => {
+      const context = combatContext();
+      const logs = ['Mira misses Gatekeeper with Boarding knife.', 'Gatekeeper hits Mira for 5.'];
+      context.combatResult = { logs, encounter: context.scene.encounter!, characters: [], loot: [] };
+      const hit = 'The gatekeeper’s shield catches Mira’s shoulder, dealing 5 damage.';
+      const invented = `${logs[0]} Her blade pierces his heart, killing him.`;
+      const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const data = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+        const text =
+          data.task === 'Review narration fidelity.'
+            ? review
+            : JSON.stringify({
+                ...result,
+                narration: '',
+                eventNarrations: { 'combat:0': invented, 'combat:1': hit, unknown: 'An invented event.' },
+              });
+        return stream([
+          event({
+            type: 'response.completed',
+            response: {
+              status: 'completed',
+              output: [{ type: 'message', content: [{ type: 'output_text', text }] }],
+            },
+          }),
+        ]);
+      });
+      const gm = new ChatGPTGM(
+        { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
+        'owner',
+        'test-model',
+        fetcher as typeof fetch,
+      );
+      const tools = combatTools();
+      const outcome = await gm.resolve(context, tools);
+      expect(outcome.narration).toBe(`${logs[0]}\n\n${accepted ? hit : logs[1]}`);
+      expect(outcome.narration).not.toContain('killing him');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      const request = JSON.parse(fetcher.mock.calls[1][1]!.body as string);
+      expect(request).not.toHaveProperty('tools');
+      const data = JSON.parse(request.input[0].content);
+      expect(data.events).toEqual([
+        { id: 'combat:0', fact: logs[0], prose: invented },
+        { id: 'combat:1', fact: logs[1], prose: hit },
+      ]);
+      expect(data.submittedActions[0]).toMatchObject({
+        characterName: 'Mira',
+        text: context.turn.actions[0].text,
+      });
+      expect(request.instructions).toContain('without contradicting facts or inventing mechanical effects');
+      expect(tools).not.toHaveBeenCalled();
+      expect(tools.combat).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0, location: null });
+    },
+  );
+
+  it.each(['combat', 'noncombat'])(
+    'corrects XP and DC mentions in %s prose without repeating mechanics',
+    async (phase) => {
+      const context = phase === 'combat' ? combatContext() : resolveContext();
+      const beatId = phase === 'combat' ? 'combat:0' : `action:${context.members[0].id}`;
+      if (phase === 'combat')
+        context.combatResult = {
+          logs: [
+            'Victory. Each surviving character gains 30 XP. Each defeated enemy drops its saved loot as scene loot.',
+          ],
+          encounter: { ...context.scene.encounter!, victory: true },
+          characters: [],
+          loot: [],
+        };
+      const responses = [
+        { ...result, narration: 'The party earns 30 XP.' },
+        { ...result, eventNarrations: { [beatId]: 'Mira passes a DC 10 check.' } },
+        {
+          ...result,
+          eventNarrations: {
+            [beatId]:
+              phase === 'combat'
+                ? 'The last enemy falls. Its equipment lies on the ground for the victorious party to claim.'
+                : 'Mira traces the gate’s hinges and studies its lock.',
+          },
+        },
+      ];
+      const fetcher = vi.fn(
+        async (_url: unknown, init?: RequestInit) =>
+          reviewResponse(init, [beatId]) ??
+          stream([
+            event({
+              type: 'response.completed',
+              response: {
+                status: 'completed',
+                output: [
+                  {
+                    type: 'message',
+                    content: [{ type: 'output_text', text: JSON.stringify(responses.shift()) }],
+                  },
+                ],
+              },
+            }),
+          ]),
+      );
+      const gm = new ChatGPTGM(
+        { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
+        'owner',
+        'test-model',
+        fetcher as typeof fetch,
+      );
+      const tools = combatTools();
+      const outcome = await gm.resolve(context, tools);
+      expect(outcome.narration).not.toMatch(/\b(?:XP|DC)\b/);
+      expect(outcome.narration).toContain(
+        phase === 'combat' ? 'The last enemy falls.' : 'Mira traces the gate’s hinges',
+      );
+      expect(fetcher).toHaveBeenCalledTimes(4);
+      expect(tools).not.toHaveBeenCalled();
+      expect(tools.combat).not.toHaveBeenCalled();
+      const correction = JSON.parse(fetcher.mock.calls[1][1]!.body as string);
+      expect(correction.input.at(-1).content).toContain('Keep XP rewards and DCs out');
+    },
+  );
+
   it.each([
     { 'combat:1': 'The gatekeeper clips Mira with its shield, dealing 5 damage.' },
     { 'combat:0': 123, 'combat:1': '   ', unknown: 'An unrelated invented event.' },
@@ -1191,30 +1656,32 @@ describe('complete player narration', () => {
       const context = combatContext();
       const logs = ['Mira misses Gatekeeper with Boarding knife.', 'Gatekeeper hits Mira for 5.'];
       context.combatResult = { logs, encounter: context.scene.encounter!, characters: [], loot: [] };
-      const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-        stream([
-          event({
-            type: 'response.completed',
-            response: {
-              status: 'completed',
-              output: [
-                {
-                  type: 'message',
-                  content: [
-                    {
-                      type: 'output_text',
-                      text: JSON.stringify({
-                        ...result,
-                        narration: 'Mira staggers as the gatekeeper strikes her.',
-                        eventNarrations,
-                      }),
-                    },
-                  ],
-                },
-              ],
-            },
-          }),
-        ]),
+      const fetcher = vi.fn(
+        async (_url: unknown, init?: RequestInit) =>
+          reviewResponse(init, ['combat:1']) ??
+          stream([
+            event({
+              type: 'response.completed',
+              response: {
+                status: 'completed',
+                output: [
+                  {
+                    type: 'message',
+                    content: [
+                      {
+                        type: 'output_text',
+                        text: JSON.stringify({
+                          ...result,
+                          narration: 'Mira staggers as the gatekeeper strikes her.',
+                          eventNarrations,
+                        }),
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          ]),
       );
       const gm = new ChatGPTGM(
         { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
@@ -1227,7 +1694,7 @@ describe('complete player narration', () => {
       expect(outcome.narration).toContain(logs[0]);
       expect(outcome.narration).not.toContain('An unrelated invented event.');
       expect(outcome).not.toHaveProperty('eventNarrations');
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledTimes(eventNarrations?.['combat:1']?.trim() ? 2 : 1);
       expect(tools.combat).not.toHaveBeenCalled();
       const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
       expect(JSON.parse(request.input[0].content).narrationBeats).toEqual([
@@ -1238,7 +1705,7 @@ describe('complete player narration', () => {
     },
   );
   it.each(['Smoke hangs between the fighter and the locked gate.', ''])(
-    'preserves detailed event prose in engine order with intro %j',
+    'narrates actions in engine order before closing scene prose %j',
     async (intro) => {
       const context = combatContext();
       context.combatResult = {
@@ -1251,30 +1718,32 @@ describe('complete player narration', () => {
         'Mira lunges with her boarding knife, aiming for a gap beneath the gatekeeper’s raised shield. The guard pivots at the last moment, and her blade scrapes harmlessly across the iron rim. Her attack misses, leaving her exposed in the narrow passage.';
       const hit =
         'The gatekeeper answers immediately with a heavy shield strike. Mira tries to recover her footing, but the edge catches her shoulder and forces her back against the stonework. She suffers 5 damage, though she remains ready to fight.';
-      const fetcher = vi.fn(async () =>
-        stream([
-          event({
-            type: 'response.completed',
-            response: {
-              status: 'completed',
-              output: [
-                {
-                  type: 'message',
-                  content: [
-                    {
-                      type: 'output_text',
-                      text: JSON.stringify({
-                        ...result,
-                        narration: intro,
-                        eventNarrations: { 'combat:1': hit, 'combat:0': miss },
-                      }),
-                    },
-                  ],
-                },
-              ],
-            },
-          }),
-        ]),
+      const fetcher = vi.fn(
+        async (_url: unknown, init?: RequestInit) =>
+          reviewResponse(init, ['combat:0', 'combat:1']) ??
+          stream([
+            event({
+              type: 'response.completed',
+              response: {
+                status: 'completed',
+                output: [
+                  {
+                    type: 'message',
+                    content: [
+                      {
+                        type: 'output_text',
+                        text: JSON.stringify({
+                          ...result,
+                          narration: intro,
+                          eventNarrations: { 'combat:1': hit, 'combat:0': miss },
+                        }),
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          ]),
       );
       const gm = new ChatGPTGM(
         { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
@@ -1285,20 +1754,17 @@ describe('complete player narration', () => {
       const outcome = await gm.resolve(context, combatTools());
       expect(outcome.narration).toContain(miss);
       expect(outcome.narration).toContain(hit);
-      expect(outcome.narration).toContain(context.combatResult.logs[0]);
-      expect(outcome.narration).toContain(context.combatResult.logs[1]);
+      expect(outcome.narration).not.toContain(context.combatResult.logs[0]);
+      expect(outcome.narration).not.toContain(context.combatResult.logs[1]);
       expect(outcome.narration.indexOf(miss)).toBeLessThan(outcome.narration.indexOf(hit));
-      expect(outcome.narration.indexOf(context.combatResult.logs[0])).toBeLessThan(
-        outcome.narration.indexOf(miss),
-      );
-      expect(outcome.narration.indexOf(context.combatResult.logs[1])).toBeLessThan(
-        outcome.narration.indexOf(hit),
-      );
-      if (intro) expect(outcome.narration.startsWith(intro)).toBe(true);
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(outcome.narration.startsWith(miss)).toBe(true);
+      if (intro) expect(outcome.narration.endsWith(intro)).toBe(true);
+      const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
+      expect(request.instructions).toContain('Never open with an overview of the round');
+      expect(fetcher).toHaveBeenCalledTimes(2);
     },
   );
-  it('covers a newly rolled noncombat failure without asking the model to repair omitted prose', async () => {
+  it('covers a newly rolled noncombat failure by repairing omitted prose without repeating the check', async () => {
     const context = resolveContext();
     const memberId = context.members[0].id;
     const waiting = resolveContext().members[0];
@@ -1356,13 +1822,18 @@ describe('complete player narration', () => {
         ],
       },
     ];
-    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-      stream([
-        event({
-          type: 'response.completed',
-          response: { status: 'completed', output: [responses.shift()] },
-        }),
-      ]),
+    const fetcher = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        repairResponse(
+          init,
+          `Mira uses ${ability.name}, spending its use to study the gate. A natural 1 causes a catastrophic failure and she loses 4 HP. A catastrophic setback.`,
+        ) ??
+        stream([
+          event({
+            type: 'response.completed',
+            response: { status: 'completed', output: [responses.shift()] },
+          }),
+        ]),
     );
     const roll = vi.fn((input: Check): Roll => ({
       ...input,
@@ -1387,9 +1858,11 @@ describe('complete player narration', () => {
       fetcher as typeof fetch,
     );
     const outcome = await gm.resolve(context, tools);
-    expect(outcome.narration).toContain('Mira attempts: Inspect the gate.');
+    expect(outcome.narration).toContain('study the gate');
+    expect(outcome.narration).not.toContain('Mira attempts:');
     expect(outcome.narration).toContain(ability.name);
-    expect(outcome.narration).toContain("Mira's INT check fails (1 against DC 10)");
+    expect(outcome.narration).toContain('catastrophic failure');
+    expect(outcome.narration).not.toMatch(/\b(?:XP|DC)\b/);
     expect(outcome.narration).toContain('natural 1');
     expect(outcome.narration).toContain('4 HP');
     expect(outcome.narration).toContain('A catastrophic setback.');
@@ -1398,7 +1871,7 @@ describe('complete player narration', () => {
     expect(outcome.narration).not.toContain('19 against DC 10');
     expect(outcome.narration).not.toContain('Mira: initiative');
     expect(roll).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
     expect(context.turn.rolls).toEqual([initiative]);
     const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
     expect(JSON.parse(request.input[0].content).narrationBeats[0].id).toBe(`action:${memberId}`);
@@ -1450,6 +1923,11 @@ describe('setting and character interactions', () => {
       const question = 'Mira, how do you respond?';
       const narration = `${effect} ${question}`;
       const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const repaired = repairResponse(
+          init,
+          'Mira studies the gate’s hinges and finds its concealed latch.',
+        );
+        if (repaired) return repaired;
         const request = JSON.parse(init!.body as string);
         const input = JSON.parse(request.input[0].content);
         return stream([
@@ -1492,10 +1970,9 @@ describe('setting and character interactions', () => {
         expect(outcome.narration).toContain(narration);
         expect(outcome.narration.indexOf(effect)).toBeLessThan(outcome.narration.indexOf(question));
         expect(outcome.journal).toEqual([fact]);
-        expect(outcome).toMatchObject({ choices: [], changes: [], xp: 0, gold: 0, nextFloor: null });
+        expect(outcome).toMatchObject({ choices: [], changes: [], xp: 0, gold: 0, location: null });
         for (const log of context.combatResult?.logs ?? []) expect(outcome.narration).toContain(log);
-        if (phase === 'noncombat')
-          expect(outcome.narration).toContain(`Mira attempts: ${context.turn.actions[0].text}`);
+        if (phase === 'noncombat') expect(outcome.narration).toContain('Mira studies the gate’s hinges');
       }
       expect(context).toEqual(before);
       for (const tool of [
@@ -1507,7 +1984,7 @@ describe('setting and character interactions', () => {
         tools.useResource,
       ])
         expect(tool).not.toHaveBeenCalled();
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledTimes(phase === 'noncombat' ? 3 : 1);
       const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
       const input = JSON.parse(request.input[0].content);
       expect(input).toMatchObject({ config: context.config, members: context.members, journal: [fact] });
@@ -1542,7 +2019,7 @@ describe('setting and character interactions', () => {
 });
 describe('free-form player decisions', () => {
   it.each(['opening', 'noncombat', 'combat'])(
-    'discards stale suggestions and warnings during %s without another model request',
+    'discards stale suggestions and warnings during %s while keeping the action narration complete',
     async (phase) => {
       const context = phase === 'combat' ? combatContext() : resolveContext();
       if (phase === 'opening') {
@@ -1556,30 +2033,32 @@ describe('free-form player decisions', () => {
           characters: [],
           loot: [],
         };
-      const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-        stream([
-          event({
-            type: 'response.completed',
-            response: {
-              status: 'completed',
-              output: [
-                {
-                  type: 'message',
-                  content: [
-                    {
-                      type: 'output_text',
-                      text: JSON.stringify({
-                        ...result,
-                        choices: ['Investigate the gate.', 'Attack the gatekeeper.'],
-                        lethalWarning: { message: 'Confirm the danger before acting.' },
-                      }),
-                    },
-                  ],
-                },
-              ],
-            },
-          }),
-        ]),
+      const fetcher = vi.fn(
+        async (_url: unknown, init?: RequestInit) =>
+          repairResponse(init, 'Mira studies the gate’s hinges and finds its concealed latch.') ??
+          stream([
+            event({
+              type: 'response.completed',
+              response: {
+                status: 'completed',
+                output: [
+                  {
+                    type: 'message',
+                    content: [
+                      {
+                        type: 'output_text',
+                        text: JSON.stringify({
+                          ...result,
+                          choices: ['Investigate the gate.', 'Attack the gatekeeper.'],
+                          lethalWarning: { message: 'Confirm the danger before acting.' },
+                        }),
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          ]),
       );
       const gm = new ChatGPTGM(
         { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
@@ -1591,7 +2070,7 @@ describe('free-form player decisions', () => {
       expect(outcome.choices).toEqual([]);
       expect(outcome.lethalWarning).toBeNull();
       expect(outcomeSchema.parse(outcome)).toEqual(outcome);
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledTimes(phase === 'noncombat' ? 3 : 1);
       const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
       expect(request.instructions).toContain('Do not provide action suggestions');
       expect(request.instructions).toContain('always return choices:[]');
@@ -1610,7 +2089,7 @@ describe('free-form player decisions', () => {
     expect(outcome.narration).not.toContain('describe their first action');
     expect(outcome.narration).not.toContain('Describe your approach');
   });
-  it('resolves fatal risk in the submitted turn through a lethal check without a warning or confirmation round', async () => {
+  it('resolves lethal risk through a saved first downing without a warning or confirmation round', async () => {
     const context = resolveContext();
     const memberId = context.members[0].id;
     const text = 'Leap across the shattered bridge above the lava.';
@@ -1647,13 +2126,18 @@ describe('free-form player decisions', () => {
         ],
       },
     ];
-    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-      stream([
-        event({
-          type: 'response.completed',
-          response: { status: 'completed', output: [responses.shift()] },
-        }),
-      ]),
+    const fetcher = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        repairResponse(
+          init,
+          'Mira leaps across the shattered bridge, but a natural 1 sends her crashing into the stone ledge. Mira is downed at 0 HP, still alive.',
+        ) ??
+        stream([
+          event({
+            type: 'response.completed',
+            response: { status: 'completed', output: [responses.shift()] },
+          }),
+        ]),
     );
     const roll = vi.fn((input: Check): Roll => ({
       ...input,
@@ -1679,11 +2163,12 @@ describe('free-form player decisions', () => {
     );
     const outcome = await gm.resolve(context, tools);
     expect(roll).toHaveBeenCalledExactlyOnceWith(check);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
     expect(outcome.lethalWarning).toBeNull();
-    expect(outcome.narration).toContain(text);
+    expect(outcome.narration).toContain('Mira leaps across the shattered bridge');
     expect(outcome.narration).toContain('natural 1');
-    expect(outcome.narration).toContain('Mira dies');
+    expect(outcome.narration).toContain('Mira is downed at 0 HP');
+    expect(outcome.narration).not.toContain('Mira dies');
     expect(context.turn.actions[0]).not.toHaveProperty('acceptsLethalRisk');
     const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
     expect(request.instructions).toContain('Resolve dangerous submitted actions immediately');
@@ -1724,12 +2209,12 @@ describe('ChatGPT registration boundaries', () => {
   });
 });
 
-it('generates a balanced custom template from the supplied concept without a species catalog', async () => {
+it('generates a custom template from the supplied concept without a species catalog', async () => {
   const sheet = templateCharacter('Roberto', 'Elf spider');
   sheet.traits = [
     {
       ...blankTrait('Chaotic anatomy'),
-      stats: { STR: 3, DEX: -1, INT: 1 },
+      stats: { ...blankTrait().stats, STR: 3, DEX: -1, INT: 1 },
       description: 'Powerful limbs, careful spellcraft, and awkward footing.',
     },
   ];
@@ -1739,13 +2224,23 @@ it('generates a balanced custom template from the supplied concept without a spe
     const context = JSON.parse(JSON.parse(init!.body as string).input[0].content);
     const value = context.rolledEquipment
       ? {
+          abilities: context.schemaExample.abilities,
           items: context.rolledEquipment.map((item: { id: string }, i: number) => ({
             id: item.id,
             name: `Silk-bound equipment ${i}`,
             description: 'Woven silk equipment.',
           })),
         }
-      : core;
+      : {
+          ...core,
+          combatAffinity: 'strike',
+          abilities: context.schemaExample.abilities,
+          traits: core.traits.map((trait, i) => ({
+            ...trait,
+            stats: { ...trait.stats, DEX: context.handicapCount > 0 && i === 0 ? -1 : 0 },
+            blocked: context.handicapCount === 2 && i === 0 ? ['head'] : [],
+          })),
+        };
     return stream([
       event({
         type: 'response.completed',
@@ -1763,7 +2258,11 @@ it('generates a balanced custom template from the supplied concept without a spe
   const gm = new ChatGPTGM(auth, 'owner', '', fetcher as unknown as typeof fetch);
   const concept = 'chaotic warlord elf spider with a tendency to randomly cast spells';
   const result = await gm.generate(concept);
-  expect(result).toMatchObject({ name: 'Roberto', species: 'Elf spider', stats: { STR: 8, DEX: 4, INT: 6 } });
+  expect(result).toMatchObject({
+    name: 'Roberto',
+    species: 'Elf spider',
+    traits: [{ name: 'Chaotic anatomy' }, { name: 'Silk instinct' }],
+  });
   expect(result.equipmentOptions[0].name).toBe('Silk-bound equipment 0');
   const request = (fetcher.mock.calls as unknown as [string, RequestInit][])[0];
   expect(request[1].body).toContain(concept);

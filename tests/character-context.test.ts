@@ -10,6 +10,7 @@ import {
   templateCharacter,
   type CampaignConfig,
   type Item,
+  type Ability,
 } from '../shared/schema';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -23,15 +24,26 @@ async function fixture() {
   const { equipmentOptions: _, selectedEquipmentIds: __, ...character } = templateCharacter('Station medic');
   const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
     const context = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+    const draft = structuredClone(character);
+    draft.abilities.push(
+      { ...draft.abilities[0], name: 'Alternative combat ability' },
+      {
+        ...draft.abilities[1],
+        name: 'Alternative utility ability',
+        description: 'Navigate unfamiliar places.',
+      },
+    );
+    draft.traits[0].blocked = ['head', 'boots'].slice(0, context.handicapCount ?? 0) as ('head' | 'boots')[];
     const result = context.rolledEquipment
       ? {
+          abilities: context.schemaExample.abilities,
           items: context.rolledEquipment.map(({ id, name, description }: Item) => ({
             id,
             name,
             description,
           })),
         }
-      : character;
+      : { ...draft, combatAffinity: 'mend' };
     return new Response(
       `data: ${JSON.stringify({
         type: 'response.completed',
@@ -122,7 +134,7 @@ it('uses an accessible campaign theme and host model for character and starting 
       expect(request.instructions).toContain("campaign's setting");
       expect(request.instructions).toContain('Write all generated player-facing prose in Dutch (Nederlands)');
       expect(request.instructions).toContain(
-        'Keep core game mechanics terms in English: STR, DEX, INT, HP, XP, DC, attack, strike, mend, guard, assist',
+        'Keep core game mechanics terms in English: STR, DEX, INT, CHA, CON, WIS, HP, XP, DC, attack, strike, mend, guard, assist',
       );
       expect(request.instructions).toContain('Never translate JSON property names, enum values, IDs');
       expect(request.input[0].content).not.toContain(campaign.displayToken);
@@ -184,6 +196,9 @@ it('preserves an explicit character name through generation and saving in every 
       expect(response.statusCode).toBe(200);
       const character = response.json();
       expect(character.name).toBe(name);
+      character.abilities = ['combat', 'utility'].map((kind) =>
+        character.abilityOptions.find((a: Ability) => a.kind === kind),
+      );
       character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item: Item) => item.id);
       const saved = await app.inject({
         method: 'POST',
@@ -240,6 +255,9 @@ it('lets a fallen player generate in their campaign context, save their picks, a
     expect(generated.statusCode, generated.body).toBe(200);
     const character = generated.json();
     character.concept = 'A wandering medic';
+    character.abilities = ['combat', 'utility'].map((kind) =>
+      character.abilityOptions.find((a: Ability) => a.kind === kind),
+    );
     character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item: Item) => item.id);
     const saved = await app.inject({
       method: 'POST',

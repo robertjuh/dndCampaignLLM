@@ -72,21 +72,40 @@ test('a shared screen follows two players and advances only after both submit', 
   await first.page.getByRole('button', { name: 'Submit action' }).click();
   await expect(display.getByText('Mira examines the brass key.', { exact: true })).toBeVisible();
   await expect(display.getByText('1 / 2 ready', { exact: true })).toBeVisible();
+  await first.page.getByRole('button', { name: 'Cancel action', exact: true }).click();
+  await expect(display.getByText('0 / 2 ready', { exact: true })).toBeVisible();
+  await expect(first.page.getByLabel('Your action')).toHaveValue('Mira examines the brass key.');
   await expect(second.page.getByLabel('Your action')).toBeEnabled();
   await second.page.getByLabel('Your action').fill('Rowan watches the doorway.');
   await second.page.getByRole('button', { name: 'Submit action' }).click();
+  await expect(display.getByText('1 / 2 ready', { exact: true })).toBeVisible();
+  await expect(display.getByText('Turn 1', { exact: true })).toBeVisible();
+  await expect(first.page.getByRole('button', { name: 'Submit action' })).toBeEnabled();
+  await first.page.getByRole('button', { name: 'Submit action' }).click();
   await expect(display.getByText('CHAPTER IN MOTION · TURN 1')).toBeVisible();
   await expect(display.getByText('Turn 2', { exact: true })).toBeVisible();
   await expect(display.locator('.roll-receipt')).toHaveCount(2);
-  await expect(observation.locator('.ability-uses')).toContainText('0/1 uses remaining');
-  await expect(observation.getByRole('button', { name: 'Use ability', exact: true })).toBeDisabled();
+  const completedTurn = display.locator('.story-turn').last();
+  await expect(completedTurn.locator('.recap')).toContainText('Mira: +20 XP.');
+  await expect(completedTurn.locator('.recap')).toContainText('Rowan: +20 XP.');
+  await expect(completedTurn.locator('.narration')).not.toContainText(/\b(?:XP|DC)\b/);
+  expect(
+    await completedTurn.evaluate((element) => {
+      const rolls = element.querySelector('.rolls')!;
+      const narrator = element.querySelector('.narrator')!;
+      return !!(rolls.compareDocumentPosition(narrator) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }),
+  ).toBe(true);
+  await expect(first.page.getByText('1 encounters completed', { exact: true })).toBeVisible();
+  await expect(observation.locator('.ability-uses')).toContainText('1/1 uses remaining');
+  await expect(observation.getByRole('button', { name: 'Use ability', exact: true })).toBeEnabled();
   await first.page.reload();
   await expect(
     first.page
       .locator('.character-controls .ability-card')
       .filter({ hasText: 'Keen observation' })
       .locator('.ability-uses'),
-  ).toContainText('0/1 uses remaining');
+  ).toContainText('1/1 uses remaining');
   await expect(display.getByRole('button', { name: 'Submit action' })).toHaveCount(0);
   await display.screenshot({ path: 'test-results/shared-screen.png', fullPage: true });
   await first.page.setViewportSize({ width: 390, height: 844 });

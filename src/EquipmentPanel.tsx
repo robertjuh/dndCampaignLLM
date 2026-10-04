@@ -14,6 +14,8 @@ import {
   unequip,
   usableSlots,
   healWithItem,
+  isDead,
+  canInteract,
 } from '../shared/rules';
 import { ItemDetails, slotLabels } from './CharacterSheet';
 
@@ -26,6 +28,7 @@ function EquipmentItem({
   snapshot,
   ground = false,
   lockReason,
+  healingLockReason,
   manage,
 }: {
   item: Item & { quantity: number };
@@ -33,10 +36,12 @@ function EquipmentItem({
   snapshot: Snapshot;
   ground?: boolean;
   lockReason: string;
+  healingLockReason: string;
   manage: Manage;
 }) {
   const [hand, setHand] = useState<Slot>();
   const [drops, setDrops] = useState<string[]>([]);
+  const [healingTargetId, setHealingTargetId] = useState(member.id);
   const reasonId = useId();
   const { character, state } = member;
   const valid = usableSlots(character, state.stats, item);
@@ -54,13 +59,29 @@ function EquipmentItem({
       ? hand
       : (destinations.find((slot) => !state.equipment[slot]) ?? destinations[0] ?? fallback);
   const equippable = item.kind !== 'consumable';
+  const healingTargets = snapshot.members.filter(
+    (ally) => ally.active && !isDead(ally.state) && canInteract(snapshot.scene, state, ally.state),
+  );
+  const healingTarget = healingTargets.find((ally) => ally.id === healingTargetId) ?? member;
   let healingReason = '';
   if (!ground && item.healing > 0) {
     try {
-      healWithItem(character, structuredClone(state), item.id);
+      if (healingTarget.state.hp >= healingTarget.state.maxHp) throw new Error('Already at full health.');
+      healWithItem(character, structuredClone(state), item.id, {
+        character: healingTarget.character,
+        state: structuredClone(healingTarget.state),
+      });
     } catch (error) {
       healingReason = (error as Error).message;
     }
+    if (
+      !healingReason &&
+      healingTarget.id !== member.id &&
+      (snapshot.status !== 'active' ||
+        !snapshot.turn?.roster.includes(member.id) ||
+        state.pendingLevelUps > 0)
+    )
+      healingReason = 'Healing an ally requires your action in an active turn.';
   }
   const dropIds = drops.filter((id) => state.inventory.some((item) => item.id === id));
   const next = structuredClone(state);
@@ -151,7 +172,7 @@ function EquipmentItem({
           {ground && takeReason && takeReason !== equipReason && (
             <p className="gear-reason">Take: {takeReason}</p>
           )}
-          {healingReason && <p className="gear-reason">Use on self: {healingReason}</p>}
+          {healingReason && <p className="gear-reason">Healing: {healingReason}</p>}
         </div>
         {ground &&
           state.inventory.length > 0 &&
@@ -230,28 +251,38 @@ function EquipmentItem({
         ) : (
           <>
             {item.healing > 0 && (
-              <button
-                className="button secondary"
-                disabled={!!lockReason || !!healingReason}
-                aria-describedby={reasonId}
-                onClick={() => manage({ type: 'heal', itemId: item.id })}
-              >
-                Use
-              </button>
-            )}
-            {item.healing > 0 &&
-              snapshot.members
-                .filter((ally) => ally.id !== member.id && ally.state.conditions.includes('Downed'))
-                .map((ally) => (
-                  <button
-                    className="button secondary"
-                    key={ally.id}
-                    disabled={!!lockReason}
-                    onClick={() => manage({ type: 'heal', itemId: item.id, targetId: ally.id })}
+              <>
+                <label className="gear-hand">
+                  <span>Healing target</span>
+                  <select
+                    aria-label={`Healing target for ${item.name}`}
+                    value={healingTarget.id}
+                    disabled={!!healingLockReason}
+                    onChange={(event) => setHealingTargetId(event.target.value)}
                   >
-                    Heal {ally.character.name}
-                  </button>
-                ))}
+                    {healingTargets.map((ally) => (
+                      <option key={ally.id} value={ally.id}>
+                        {ally.id === member.id ? 'Self · Instant' : `${ally.character.name} · Uses turn`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="button secondary"
+                  disabled={!!healingLockReason || !!healingReason}
+                  aria-describedby={reasonId}
+                  onClick={() =>
+                    manage({
+                      type: 'heal',
+                      itemId: item.id,
+                      ...(healingTarget.id !== member.id ? { targetId: healingTarget.id } : {}),
+                    })
+                  }
+                >
+                  {healingTarget.id === member.id ? 'Use on self' : `Heal ${healingTarget.character.name}`}
+                </button>
+              </>
+            )}
             <button
               className="button secondary gear-drop"
               disabled={!!lockReason}
@@ -270,11 +301,13 @@ export function EquipmentPanel({
   member,
   snapshot,
   lockReason,
+  healingLockReason,
   command,
 }: {
   member: Member;
   snapshot: Snapshot;
   lockReason: string;
+  healingLockReason: string;
   command: (route: string, body: unknown) => Promise<Snapshot | undefined>;
 }) {
   const [open, setOpen] = useState(false);
@@ -378,7 +411,8 @@ export function EquipmentPanel({
             </span>
           </div>
           <p className="muted small">
-            Equipped gear uses no backpack space. Consumables stack three per slot.
+            Equipped gear uses no backpack space. Consumables stack three per slot. Self healing is instant;
+            healing a party member uses your turn.
           </p>
           {state.inventory.length ? (
             state.inventory.map((item) => (
@@ -388,6 +422,7 @@ export function EquipmentPanel({
                 member={member}
                 snapshot={snapshot}
                 lockReason={lockReason}
+                healingLockReason={healingLockReason}
                 manage={manage}
               />
             ))
@@ -414,7 +449,14 @@ export function EquipmentPanel({
               item={item}
               member={member}
               snapshot={snapshot}
-              lockReason={lockReason}
+              lockReason={
+                snapshot.scene.encounter &&
+                !snapshot.scene.encounter.victory &&
+                !snapshot.scene.encounter.escaped
+                  ? 'Scene loot is unavailable until combat ends.'
+                  : lockReason
+              }
+              healingLockReason={healingLockReason}
               manage={manage}
             />
           ))}

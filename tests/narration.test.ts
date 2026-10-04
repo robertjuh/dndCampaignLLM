@@ -65,7 +65,10 @@ it.each(['Nederlands', 'English'] as const)(
         memberId: member.id,
         stat: 'INT',
         dc: 10,
-        reason: 'Onderzoek',
+        reason:
+          language === 'Nederlands'
+            ? 'Mira bestudeert de symbolen op de poort met Focus from Dawn.'
+            : 'Mira studies the gate’s symbols using Focus from Dawn.',
         mode: 'normal',
         lethal: false,
         abilityName: 'Focus from Dawn',
@@ -101,11 +104,11 @@ it.each(['Nederlands', 'English'] as const)(
     ]);
     expect(beats.map((beat) => beat.id)).toEqual(['action:player-0', 'action:player-1']);
     const narration = assembleNarration('', beats, {});
+    expect(narration).toContain(gm.turn.rolls[0].reason);
+    expect(narration).not.toContain(gm.turn.actions[0].text);
+    expect(narration).not.toMatch(/probeert:|attempts:/);
     if (language === 'Nederlands') {
-      expect(narration).toContain('Mira probeert: Onderzoek de poort. (met Focus from Dawn)');
-      expect(narration).toContain(
-        "Mira's INT check mislukt (3 tegen DC 10): natural 1, catastrofale mislukking.",
-      );
+      expect(narration).toContain("Mira's INT check mislukt: natural 1, catastrofale mislukking.");
       expect(narration).toContain('Mira gebruikt Focus from Dawn, waarbij de ability use wordt verbruikt.');
       expect(narration).toContain(
         'Mira gebruikt Potion with Hope, waarbij één item wordt verbruikt, en herstelt 4 HP bij Mara for Hire.',
@@ -115,9 +118,8 @@ it.each(['Nederlands', 'English'] as const)(
       expect(narration).toContain('Mara for Hire wacht en onderneemt geen actie.');
       expect(narration).not.toMatch(/ attempts:| check fails| against DC | waits and takes no action/);
     } else {
-      expect(narration).toContain('Mira attempts: Onderzoek de poort. (using Focus from Dawn)');
       expect(narration).toContain(
-        "Mira's INT check fails (3 against DC 10): natural 1, catastrophic failure. Mira uses Focus from Dawn, spending its use.",
+        "Mira's INT check fails: natural 1, catastrophic failure. Mira uses Focus from Dawn, spending its use.",
       );
       expect(narration).toContain(
         'Mira uses Potion with Hope, consuming one item, restoring 4 HP to Mara for Hire.',
@@ -142,7 +144,12 @@ it('keeps Dutch combat facts in narration without model prose, preserving names,
     `Mira from Before carries out their movement: ${intent}`,
     "Mira from Before's minor action has no effect: This healing item is incompatible with your character. The minor action is spent.",
     'Mara for Hire uses a healing consumable on Mira from Before, helping them up.',
+    'Mira from Before redirects their Focused strike from Mara for Hire to Knife with advantage because Mara for Hire fell earlier this round.',
+    'Mira from Before redirects their off-hand attack from Mara for Hire to Knife with advantage because Mara for Hire withdrew earlier this round.',
+    'Mira from Before skips their Focused strike: no enemies remain; the use is preserved.',
+    'Mira from Before skips their off-hand attack: no enemies remain.',
     'Victory. Each surviving character gains 30 XP. A physical item must be offered as loot.',
+    'Victory. Each surviving character gains 30 XP. Each defeated enemy drops its saved loot as scene loot.',
   ];
   gm.combatResult = {
     logs,
@@ -163,12 +170,19 @@ it('keeps Dutch combat facts in narration without model prose, preserving names,
     `Mira from Before voert de verplaatsing uit: ${intent}`,
     "Mira from Before's minor action heeft geen effect: Dit healing item is niet geschikt voor het personage. De minor action is verbruikt.",
     'Mara for Hire gebruikt een healing consumable bij Mira from Before, waardoor dit personage weer overeind komt.',
-    'Overwinning. Elk overlevend personage krijgt 30 XP. Een fysiek item moet als loot worden aangeboden.',
+    'Mira from Before richt de Focused strike van Mara for Hire op Knife with advantage omdat Mara for Hire eerder deze ronde viel.',
+    'Mira from Before richt de off-hand attack van Mara for Hire op Knife with advantage omdat Mara for Hire eerder deze ronde zich terugtrok.',
+    'Mira from Before slaat de Focused strike over: er zijn geen vijanden meer; de ability use blijft beschikbaar.',
+    'Mira from Before slaat de off-hand attack over: er zijn geen vijanden meer.',
+    'Overwinning. Een fysiek item moet als loot worden aangeboden.',
+    'Overwinning. Elke verslagen vijand laat de opgeslagen items als loot achter.',
   ]);
   const fallback = assembleNarration('', beats, undefined);
   expect(fallback).toBe(beats.map((beat) => beat.fact).join('\n\n'));
   gm.config.language = 'English';
-  expect(narrationBeats(gm).map((beat) => beat.fact)).toEqual(logs);
+  expect(narrationBeats(gm).map((beat) => beat.fact)).toEqual(
+    logs.map((log) => log.replace(' Each surviving character gains 30 XP.', '')),
+  );
 });
 
 it('keeps every recorded outcome when atmosphere and event prose exhaust the narration budget', () => {
@@ -180,7 +194,12 @@ it('keeps every recorded outcome when atmosphere and event prose exhaust the nar
     beats.map((beat) => [beat.id, `${beat.fact} ${'Dust and sparks fill the room. '.repeat(100)}`]),
   );
   prose['combat:unknown'] = 'An invented action.';
-  const narration = assembleNarration('Atmosphere. '.repeat(1800), beats, prose);
+  const narration = assembleNarration(
+    'Atmosphere. '.repeat(1800),
+    beats,
+    prose,
+    new Set(beats.map((beat) => beat.id)),
+  );
   expect(narration.length).toBeLessThanOrEqual(maxNarrationLength);
   for (const beat of beats) expect(narration).toContain(beat.fact);
   expect(narration).not.toContain('An invented action.');
@@ -199,13 +218,13 @@ it.each([
   },
   {
     id: 'action:player',
-    fact: "Mira attempts: Inspect the gate. Mira's INT check fails (1 against DC 10): natural 1, catastrophic failure.",
+    fact: "Mira attempts: Inspect the gate. Mira's INT check fails: natural 1, catastrophic failure.",
     prose: 'Mira traces the gate’s symbols with her fingertips.',
   },
 ])('keeps the recorded failure when nonblank prose omits it ($id)', ({ id, fact, prose }) => {
   const narration = assembleNarration('', [{ id, fact }], { [id]: prose });
   expect(narration).toContain(fact);
-  expect(narration).toContain(prose);
+  expect(narration).not.toContain(prose);
 });
 
 it('prioritizes detailed player outcomes over an introduction that fills the budget', () => {
@@ -213,8 +232,56 @@ it('prioritizes detailed player outcomes over an introduction that fills the bud
   const prose =
     'Mara lunges through the smoke with her knife, but the sapper ducks beneath her swing. Her attack misses.';
   const intro = 'A'.repeat(maxNarrationLength - beat.fact.length - 2);
-  const narration = assembleNarration(intro, [beat], { [beat.id]: prose });
-  expect(narration).toContain(beat.fact);
+  const narration = assembleNarration(intro, [beat], { [beat.id]: prose }, new Set([beat.id]));
+  expect(narration).not.toContain(beat.fact);
   expect(narration.includes(prose)).toBe(true);
   expect(narration.length).toBeLessThanOrEqual(maxNarrationLength);
+});
+
+it('uses approved Dutch paraphrases once without action announcements or repeated dialogue', () => {
+  const beats = [
+    { id: 'combat:0', fact: 'De commandant faalt catastrofaal en krijgt 2 damage.' },
+    { id: 'combat:1', fact: 'Dario voert de interactie uit: Goddess, kunnen we samenwerken?' },
+  ];
+  const prose = {
+    'combat:0':
+      'De kettingzweep haakt achter de dansvloer en slaat tegen haar eigen harnas. De commandant krijgt 2 damage.',
+    'combat:1': '“Goddess, kunnen we samenwerken?” vraagt Dario. De commandant houdt haar zweep geheven.',
+    unknown: 'An invented event.',
+  };
+  const narration = assembleNarration('', beats, prose, new Set(['combat:0', 'combat:1', 'unknown']));
+  expect(narration).toBe(`${prose['combat:0']}\n\n${prose['combat:1']}`);
+  expect(narration.match(/kunnen we samenwerken/g)).toHaveLength(1);
+});
+
+it('uses only the factual fallback for unapproved prose, even when it repeats the exact fact', () => {
+  const fact = 'Mira misses Gatekeeper with her knife.';
+  const prose = `${fact} Her blade pierces his heart, killing him.`;
+  expect(assembleNarration('', [{ id: 'combat:0', fact }], { 'combat:0': prose })).toBe(fact);
+});
+
+it('keeps player action results before the closing scene and preserves an opening with no actions', () => {
+  const fact = 'Mira misses Gatekeeper with her knife.';
+  const closing = 'The gatekeeper still blocks the passage.';
+  expect(assembleNarration(closing, [{ id: 'combat:0', fact }], {})).toBe(`${fact}\n\n${closing}`);
+  expect(assembleNarration('The party arrives at the gate.', [], {})).toBe('The party arrives at the gate.');
+});
+
+it('includes permanent abandonment death and combat ending in Dutch narration', () => {
+  const gm = context();
+  gm.combatResult = {
+    logs: [
+      'Mara for Hire dies permanently: Left behind with no conscious ally remaining in combat.',
+      'The surviving party escapes. Combat ends.',
+    ],
+    encounter: { enemies: [], round: 2, initiative: [], victory: false, escaped: true },
+    characters: [],
+    loot: [],
+  };
+  const facts = narrationBeats(gm)
+    .map((beat) => beat.fact)
+    .join('\n');
+  expect(facts).toContain('Mara for Hire sterft permanent');
+  expect(facts).toContain('Het combat eindigt.');
+  expect(facts).not.toContain('Left behind');
 });

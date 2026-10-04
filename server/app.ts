@@ -183,6 +183,11 @@ export async function createApp(options: {
     return reply.redirect(result.url);
   });
   app.post('/api/characters', async (request) => game.saveCharacter(request.player.id, request.body));
+  app.get('/api/characters/ability-stats', async (request) => {
+    if (!loopback(request.ip))
+      throw new GameError('Ability choice statistics are available on the host computer at 127.0.0.1.', 403);
+    return game.abilityChoiceStats();
+  });
   app.post('/api/characters/:id', async (request) =>
     game.updateCharacter(request.player.id, campaignId(request), request.body),
   );
@@ -281,6 +286,12 @@ export async function createApp(options: {
     );
     return snap(id, request);
   });
+  app.post('/api/campaigns/:id/action/cancel', async (request) => {
+    const id = campaignId(request);
+    const { turnId } = z.object({ turnId: z.string().uuid() }).strict().parse(request.body);
+    game.cancelAction(id, request.player.id, turnId);
+    return snap(id, request);
+  });
   app.post('/api/campaigns/:id/pause', async (request) => {
     const id = campaignId(request);
     const { paused } = z.object({ paused: z.boolean() }).strict().parse(request.body);
@@ -312,7 +323,17 @@ export async function createApp(options: {
   app.post('/api/campaigns/:id/character', async (request) => {
     const action = z
       .object({
-        type: z.enum(['starter', 'equip', 'unequip', 'heal', 'drop', 'take', 'take-equip', 'rest']),
+        type: z.enum([
+          'starter',
+          'equip',
+          'unequip',
+          'heal',
+          'help-up',
+          'drop',
+          'take',
+          'take-equip',
+          'rest',
+        ]),
         itemId: z.string().optional(),
         targetId: z.string().uuid().optional(),
         abilityName: z.string().min(1).max(80).optional(),

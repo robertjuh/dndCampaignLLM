@@ -1,12 +1,46 @@
+import { z } from 'zod';
 import { maxNarrationLength, type Outcome, type Roll } from '../shared/schema';
+import { isDead } from '../shared/rules';
 import type { GMContext } from './game';
 
-type NarrationBeat = { id: string; fact: string };
+export type NarrationBeat = { id: string; fact: string };
+
+const storyProse = z
+  .string()
+  .refine(
+    (text) =>
+      !/\b(?:XP|DCs?\d*|experience points?|difficulty class(?:es)?|ervaringspunten|moeilijkheidsklasse)\b/i.test(
+        text,
+      ),
+    {
+      message:
+        'Keep XP rewards and DCs out of narration and eventNarrations. The server adds actual XP rewards to summary; DCs appear in roll receipts.',
+    },
+  );
 
 // Translate fixed engine phrasing; keep names, mechanics and submitted text exact.
 const dutchCombatPhrases: [string, string][] = [
-  ['Victory. Each surviving character gains ', 'Overwinning. Elk overlevend personage krijgt '],
-  [' XP. A physical item must be offered as loot.', ' XP. Een fysiek item moet als loot worden aangeboden.'],
+  [
+    ' dies permanently: Left behind with no conscious ally remaining in combat.',
+    ' sterft permanent: achtergelaten zonder bewuste bondgenoot in combat.',
+  ],
+  ['The surviving party escapes. Combat ends.', 'De overlevende groepsleden ontsnappen. Het combat eindigt.'],
+  [
+    ' cannot interact with this target while one of them is outside combat. The main action is spent; resources are preserved.',
+    ' kan dit doelwit niet bereiken omdat een van beiden buiten combat is. De main action is verbruikt; items en ability uses blijven behouden.',
+  ],
+  ['Victory.', 'Overwinning.'],
+  [' A physical item must be offered as loot.', ' Een fysiek item moet als loot worden aangeboden.'],
+  [
+    ' Each defeated enemy drops an equipped item as scene loot.',
+    ' Elke verslagen vijand laat een uitgerust item als loot achter.',
+  ],
+  [
+    ' Each defeated enemy drops its saved loot as scene loot.',
+    ' Elke verslagen vijand laat de opgeslagen items als loot achter.',
+  ],
+  [' drops ', ' laat achter: '],
+  ['. It is available as scene loot.', '. Het item is beschikbaar als loot op deze locatie.'],
   [
     ' cannot carry out their submitted action because they were downed before their turn.',
     ' kan de ingediende actie niet uitvoeren omdat het personage vóór de beurt Downed raakte.',
@@ -20,6 +54,9 @@ const dutchCombatPhrases: [string, string][] = [
     "'s off-hand attack heeft geen effect: deze vereist twee verschillende light one-handed weapons.",
   ],
   ["'s minor action has no effect: ", "'s minor action heeft geen effect: "],
+  [' skips their ', ' slaat de '],
+  [': no enemies remain', ' over: er zijn geen vijanden meer'],
+  ['; the use is preserved.', '; de ability use blijft beschikbaar.'],
   [' The minor action is spent.', ' De minor action is verbruikt.'],
   [
     ' The main action is spent and the use is preserved.',
@@ -40,6 +77,10 @@ const dutchCombatPhrases: [string, string][] = [
   [' has no effect: ', ' heeft geen effect: '],
   [' is already at full health.', ' heeft al volledige HP.'],
   ['; its encounter use is spent.', '; de encounter use is verbruikt.'],
+  [
+    ' has already been used. It recharges after a successful encounter.',
+    ' is al gebruikt. De ability krijgt na een succesvolle encounter weer een charge.',
+  ],
   [
     "'s target is no longer available; the main action is spent.",
     "'s doelwit is niet meer beschikbaar; de main action is verbruikt.",
@@ -78,12 +119,27 @@ const dutchCombatPhrases: [string, string][] = [
   [' attacks with advantage', ' voert een attack uit met advantage'],
   [' and +', ' en +'],
   [' recovers ', ' herstelt '],
+  [' helps ', ' helpt '],
+  [
+    ' up at 1 HP. They can act next turn.',
+    ' overeind met 1 HP. Het personage kan de volgende beurt handelen.',
+  ],
+  [' after the successful encounter', ' na de succesvolle encounter'],
+  [' regains one charge.', ' krijgt één charge terug.'],
+  [' The main action is spent.', ' De main action is verbruikt.'],
+  [', restoring ', ', en herstelt '],
+  [' from constitution and traits', ' door constitution en traits'],
   [' HP from lifesteal.', ' HP door lifesteal.'],
   [' HP from regeneration after victory.', ' HP door regeneration na de overwinning.'],
   [' rejoins the fight.', ' keert terug in het gevecht.'],
   [' holds position.', ' blijft op de plek.'],
   [' changes equipment as their minor action.', ' wisselt equipment als minor action.'],
   [' is stunned and loses their main action.', ' is Stunned en verliest de main action.'],
+  [' and cannot act.', ' en kan niet handelen.'],
+  [' cannot take their minor action while ', ' kan de minor action niet uitvoeren door '],
+  [' is Chilled and cannot make an off-hand attack.', ' is Chilled en kan geen off-hand attack uitvoeren.'],
+  [' has no matching ailment.', ' heeft geen overeenkomende ailment.'],
+  [' removes ', ' verwijdert '],
   [' defends (+2 defense).', ' verdedigt zich (+2 defense).'],
   [' continues away from the fight.', ' gaat verder weg van het gevecht.'],
   [' escapes the fight.', ' ontsnapt uit het gevecht.'],
@@ -149,11 +205,16 @@ const dutchCombatPhrases: [string, string][] = [
     'De traits verhinderen het gebruik van heavy strength weapons of plate armour.',
   ],
   [' from ', ' door '],
+  [' on ', ' bij '],
   [' with ', ' met '],
   [' for ', ' voor '],
 ];
 
-function combatFact(context: GMContext, fact: string): string {
+export function combatFact(
+  context: Pick<GMContext, 'config' | 'members' | 'turn' | 'combatResult'>,
+  fact: string,
+): string {
+  fact = fact.replace(/ Each surviving character gains \d+ XP\./g, '');
   if (context.config.language !== 'Nederlands') return fact;
   const names = [
     ...new Set([
@@ -165,6 +226,7 @@ function combatFact(context: GMContext, fact: string): string {
       ]),
       ...(context.combatResult?.encounter.enemies.map((enemy) => enemy.name) ?? []),
       ...(context.combatResult?.characters.map((character) => character.name) ?? []),
+      ...(context.combatResult?.loot.map((item) => item.name) ?? []),
       ...context.turn.actions.flatMap((action) => (action.characterName ? [action.characterName] : [])),
       ...context.turn.actions.flatMap((action) => [action.text, action.text.slice(0, 500)]),
     ]),
@@ -177,6 +239,11 @@ function combatFact(context: GMContext, fact: string): string {
       new RegExp(names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g'),
       (name) => `\u0000${protectedText.push(name) - 1}\u0000`,
     );
+  fact = fact.replace(
+    / redirects their (.+) from (.+) to (.+) because (.+) (fell|withdrew) earlier this round\.$/,
+    (_, attack, original, target, unavailable, reason) =>
+      ` richt de ${attack} van ${original} op ${target} omdat ${unavailable} eerder deze ronde ${reason === 'fell' ? 'viel' : 'zich terugtrok'}.`,
+  );
   for (const [english, dutch] of dutchCombatPhrases) fact = fact.replaceAll(english, dutch);
   return fact.replace(/\u0000(\d+)\u0000/g, (_, index) => protectedText[Number(index)]);
 }
@@ -186,64 +253,103 @@ export function narrationBeats(
   rolls: Roll[] = context.turn.rolls,
   changes: Outcome['changes'] = [],
 ): NarrationBeat[] {
-  if (context.combatResult)
-    return context.combatResult.logs.map((fact, index) => ({
-      id: `combat:${index}`,
-      fact: combatFact(context, fact),
-    }));
   const dutch = context.config.language === 'Nederlands';
-  return context.turn.actions.map((action) => {
-    const member = context.members.find((member) => member.id === action.memberId);
-    const name = action.characterName ?? member?.character.name ?? action.memberId;
-    const attempt = action.text.length > 500 ? `${action.text.slice(0, 500)}…` : action.text;
-    const facts = [
-      action.passed
-        ? dutch
-          ? `${name} wacht en onderneemt geen actie.`
-          : `${name} waits and takes no action.`
-        : dutch
-          ? `${name} probeert: ${attempt}${action.abilityName ? ` (met ${action.abilityName})` : ''}`
-          : `${name} attempts: ${attempt}${action.abilityName ? ` (using ${action.abilityName})` : ''}`,
+  const arrivals = (context.arrivingCharacters ?? []).map((arrival, index) => ({
+    id: `arrival:${index}`,
+    fact: dutch
+      ? `${arrival.character.name}, het nieuwe personage van ${arrival.playerName}, sluit zich aan bij de groep.`
+      : `${arrival.character.name}, ${arrival.playerName}'s new character, joins the party.`,
+  }));
+  if (context.combatResult)
+    return [
+      ...arrivals,
+      ...context.combatResult.logs.map((fact, index) => ({
+        id: `combat:${index}`,
+        fact: combatFact(context, fact),
+      })),
     ];
-    if (!action.passed)
-      for (const roll of rolls.filter((roll) => roll.memberId === action.memberId && !roll.notation))
+  const recovery = (context.recoveryLogs ?? []).map((fact, index) => ({
+    id: `recovery:${index}`,
+    fact: combatFact(context, fact),
+  }));
+  return [
+    ...arrivals,
+    ...context.turn.actions.map((action) => {
+      const member = context.members.find((member) => member.id === action.memberId);
+      const name = action.characterName ?? member?.character.name ?? action.memberId;
+      const attempt = action.text.length > 500 ? `${action.text.slice(0, 500)}…` : action.text;
+      const checks = rolls.filter((roll) => roll.memberId === action.memberId && !roll.notation);
+      const facts = [
+        action.passed
+          ? dutch
+            ? `${name} wacht en onderneemt geen actie.`
+            : `${name} waits and takes no action.`
+          : checks.length
+            ? checks.map((roll) => roll.reason).join(' ')
+            : dutch
+              ? `${name} probeert: ${attempt}${action.abilityName ? ` (met ${action.abilityName})` : ''}`
+              : `${name} attempts: ${attempt}${action.abilityName ? ` (using ${action.abilityName})` : ''}`,
+      ];
+      const criticalResult =
+        member && isDead(member.state)
+          ? dutch
+            ? ` ${name} sterft door opnieuw neer te gaan.`
+            : ` ${name} dies after being downed again.`
+          : dutch
+            ? ` ${name} raakt Downed met 0 HP.`
+            : ` ${name} is downed at 0 HP.`;
+      if (!action.passed)
+        for (const roll of checks)
+          facts.push(
+            dutch
+              ? `${name}'s ${roll.stat} check ${roll.success ? 'slaagt' : 'mislukt'}${roll.critical === 'success' ? ': natural 20, uitzonderlijk succes' : roll.critical === 'failure' ? ': natural 1, catastrofale mislukking' : ''}.${roll.abilityName ? ` ${name} gebruikt ${roll.abilityName}, waarbij de ability use wordt verbruikt.` : ''}${roll.lethal && roll.critical === 'failure' ? criticalResult : ''}`
+              : `${name}'s ${roll.stat} check ${roll.success ? 'succeeds' : 'fails'}${roll.critical === 'success' ? ': natural 20, extraordinary success' : roll.critical === 'failure' ? ': natural 1, catastrophic failure' : ''}.${roll.abilityName ? ` ${name} uses ${roll.abilityName}, spending its use.` : ''}${roll.lethal && roll.critical === 'failure' ? criticalResult : ''}`,
+          );
+      for (const support of context.supportResults?.filter((result) => result.memberId === action.memberId) ??
+        [])
+        facts.push(combatFact(context, support.log));
+      for (const receipt of context.resourceUses?.filter((receipt) => receipt.memberId === action.memberId) ??
+        []) {
+        const target = context.members.find((member) => member.id === (receipt.targetId ?? action.memberId));
         facts.push(
           dutch
-            ? `${name}'s ${roll.stat} check ${roll.success ? 'slaagt' : 'mislukt'} (${roll.total} tegen DC ${roll.dc})${roll.critical === 'success' ? ': natural 20, uitzonderlijk succes' : roll.critical === 'failure' ? ': natural 1, catastrofale mislukking' : ''}.${roll.abilityName ? ` ${name} gebruikt ${roll.abilityName}, waarbij de ability use wordt verbruikt.` : ''}${roll.lethal && roll.critical === 'failure' ? ` ${name} sterft door de levensgevaarlijke actie.` : ''}`
-            : `${name}'s ${roll.stat} check ${roll.success ? 'succeeds' : 'fails'} (${roll.total} against DC ${roll.dc})${roll.critical === 'success' ? ': natural 20, extraordinary success' : roll.critical === 'failure' ? ': natural 1, catastrophic failure' : ''}.${roll.abilityName ? ` ${name} uses ${roll.abilityName}, spending its use.` : ''}${roll.lethal && roll.critical === 'failure' ? ` ${name} dies from the lethal action.` : ''}`,
+            ? `${name} gebruikt ${receipt.sourceName}, ${receipt.itemId ? 'waarbij één item wordt verbruikt' : 'waarbij de ability use wordt verbruikt'}${receipt.restored > 0 ? `, en herstelt ${receipt.restored} HP bij ${target?.character.name ?? name}` : ''}.`
+            : `${name} uses ${receipt.sourceName}, ${receipt.itemId ? 'consuming one item' : 'spending its ability use'}${receipt.restored > 0 ? `, restoring ${receipt.restored} HP to ${target?.character.name ?? name}` : ''}.`,
         );
-    for (const receipt of context.resourceUses?.filter((receipt) => receipt.memberId === action.memberId) ??
-      []) {
-      const target = context.members.find((member) => member.id === (receipt.targetId ?? action.memberId));
-      facts.push(
-        dutch
-          ? `${name} gebruikt ${receipt.sourceName}, ${receipt.itemId ? 'waarbij één item wordt verbruikt' : 'waarbij de ability use wordt verbruikt'}${receipt.restored > 0 ? `, en herstelt ${receipt.restored} HP bij ${target?.character.name ?? name}` : ''}.`
-          : `${name} uses ${receipt.sourceName}, ${receipt.itemId ? 'consuming one item' : 'spending its ability use'}${receipt.restored > 0 ? `, restoring ${receipt.restored} HP to ${target?.character.name ?? name}` : ''}.`,
-      );
-    }
-    for (const change of changes.filter((change) => change.memberId === action.memberId)) {
-      if (change.type === 'hp' && change.amount !== 0)
-        facts.push(
-          dutch
-            ? `${name} ${change.amount < 0 ? 'verliest' : 'herstelt'} ${Math.abs(change.amount)} HP: ${change.reason}`
-            : `${name} ${change.amount < 0 ? 'loses' : 'recovers'} ${Math.abs(change.amount)} HP: ${change.reason}`,
-        );
-      if (change.type === 'condition')
-        facts.push(
-          dutch
-            ? `${name} ${change.remove ? 'verliest' : 'krijgt'} ${change.name}: ${change.reason}`
-            : `${name} ${change.remove ? 'loses' : 'gains'} ${change.name}: ${change.reason}`,
-        );
-    }
-    return { id: `action:${action.memberId}`, fact: facts.join(' ') };
-  });
+        if (receipt.cured?.length)
+          facts.push(
+            dutch
+              ? `${receipt.sourceName} verwijdert ${receipt.cured.join(' en ')} bij ${target?.character.name ?? name}.`
+              : `${receipt.sourceName} removes ${receipt.cured.join(' and ')} from ${target?.character.name ?? name}.`,
+          );
+      }
+      for (const change of changes.filter((change) => change.memberId === action.memberId)) {
+        if (change.type === 'hp' && change.amount !== 0)
+          facts.push(
+            dutch
+              ? `${name} ${change.amount < 0 ? 'verliest' : 'herstelt'} ${Math.abs(change.amount)} HP: ${change.reason}`
+              : `${name} ${change.amount < 0 ? 'loses' : 'recovers'} ${Math.abs(change.amount)} HP: ${change.reason}`,
+          );
+        if (change.type === 'condition')
+          facts.push(
+            dutch
+              ? `${name} ${change.remove ? 'verliest' : 'krijgt'} ${change.name}: ${change.reason}`
+              : `${name} ${change.remove ? 'loses' : 'gains'} ${change.name}: ${change.reason}`,
+          );
+      }
+      return { id: `action:${action.memberId}`, fact: facts.join(' ') };
+    }),
+    ...recovery,
+  ];
 }
 
 export function assembleNarration(
   narration: string,
   beats: NarrationBeat[],
   eventNarrations: unknown,
+  approvedEvents: ReadonlySet<string> = new Set(),
 ): string {
+  storyProse.parse(narration);
   if (!beats.length) return narration;
   const prose =
     eventNarrations && typeof eventNarrations === 'object' && !Array.isArray(eventNarrations)
@@ -255,15 +361,14 @@ export function assembleNarration(
   for (let index = 0; index < beats.length; index++) {
     const value = Object.hasOwn(prose, beats[index].id) ? prose[beats[index].id] : undefined;
     if (typeof value !== 'string' || !value.trim()) continue;
-    const detail = value.trim();
-    const fact = beats[index].fact;
-    const text = detail.includes(fact) ? detail : `${fact} ${detail}`;
-    const extra = text.length - paragraphs[index].length;
+    const detail = storyProse.parse(value.trim());
+    if (!approvedEvents.has(beats[index].id)) continue;
+    const extra = detail.length - paragraphs[index].length;
     if (extra > remaining) continue;
-    paragraphs[index] = text;
+    paragraphs[index] = detail;
     remaining -= extra;
   }
-  const intro = narration.trim();
-  const includeIntro = intro.length > 0 && intro.length + 2 <= remaining;
-  return [...(includeIntro ? [intro] : []), ...paragraphs].join('\n\n');
+  const closing = narration.trim();
+  const includeClosing = closing.length > 0 && closing.length + 2 <= remaining;
+  return [...paragraphs, ...(includeClosing ? [closing] : [])].join('\n\n');
 }

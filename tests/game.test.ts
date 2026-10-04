@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../server/db';
-import { baseItem, isDowned, isDead } from '../shared/rules';
+import { baseItem, isDowned, isDead, applyCondition } from '../shared/rules';
 import { PracticeGM } from '../server/providers';
 import { Game, type GameMaster, type GMContext } from '../server/game';
 import {
@@ -88,6 +88,189 @@ it('edits only owned templates and lobby characters, resets readiness, and prese
   game.updateCharacter(p1.id, c1.id, templateCharacter('Future character'));
   expect(game.members(c.id).find((m) => m.playerId === p1.id)!.character.name).toBe('Revised character');
   expect(game.characters(p1.id)[0].name).toBe('Future character');
+});
+
+it('locks help-up to the assisting turn and restores exactly 1 HP once across a narration retry', async () => {
+  let fail = true;
+  const receipts: GMContext['supportResults'][] = [];
+  const f = fixture({
+    resolve: async (context) => {
+      if (context.turn.number) {
+        receipts.push(structuredClone(context.supportResults));
+        if (fail) throw new Error('Interrupted support narration.');
+      }
+      return outcome();
+    },
+  });
+  const turn = await start(f);
+  const [downed, helper] = f.game.members(f.c.id);
+  downed.state.hp = 0;
+  downed.state.conditions = ['Downed'];
+  downed.state.downedThisEncounter = true;
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(downed.state), downed.id);
+  f.db.prepare('UPDATE turns SET roster = ? WHERE id = ?').run(JSON.stringify([helper.id]), turn.id);
+  f.game.pause(f.c.id, f.host.id, true);
+  f.game.manageCharacter(f.c.id, helper.playerId, { type: 'help-up', targetId: downed.id });
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.actions[0]).toMatchObject({
+    text: 'I help up Mira.',
+    supportAction: { type: 'help-up', targetId: downed.id },
+  });
+  expect(() => f.game.submit(f.c.id, helper.playerId, turn.id, 'Attack instead.', false)).toThrow(
+    'already used',
+  );
+  expect(f.game.members(f.c.id)[0].state.hp).toBe(0);
+  f.game.pause(f.c.id, f.host.id, false);
+  await f.game.idle();
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+  fail = false;
+  f.game.retry(f.c.id, f.host.id);
+  await f.game.idle();
+  const restored = f.game.snapshot(f.c.id, f.host.id);
+  expect(restored.members[0].state).toMatchObject({ hp: 1, downedThisEncounter: true, conditions: [] });
+  expect(restored.turn!.roster).toContain(downed.id);
+  expect(receipts[1]).toEqual(receipts[0]);
+  const selfItem = restored.members[0].state.inventory[0];
+  f.game.manageCharacter(f.c.id, downed.playerId, { type: 'heal', itemId: selfItem.id });
+  expect(f.game.members(f.c.id)[0].state.hp).toBe(1 + selfItem.healing);
+  f.game.submit(f.c.id, downed.playerId, restored.turn!.id, 'Return to the fight.', false);
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.actions).toHaveLength(1);
+});
+
+it('spends one ally healing item and locks the main action once across a failed narration', async () => {
+  let fail = true;
+  const f = fixture({
+    resolve: async (context, tools) => {
+      if (context.turn.number) {
+        const support = context.turn.actions.find((action) => action.supportAction)!;
+        expect(() =>
+          tools({
+            memberId: support.memberId,
+            stat: 'WIS',
+            dc: 10,
+            reason: 'Also investigate.',
+            mode: 'normal',
+            lethal: false,
+          }),
+        ).toThrow('main action');
+        if (fail) throw new Error('Interrupted item narration.');
+      }
+      return outcome();
+    },
+  });
+  const turn = await start(f);
+  const [target, healer] = f.game.members(f.c.id);
+  target.state.hp = 2;
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(target.state), target.id);
+  const item = healer.state.inventory[0];
+  f.game.manageCharacter(f.c.id, healer.playerId, { type: 'heal', itemId: item.id, targetId: target.id });
+  expect(() => f.game.submit(f.c.id, healer.playerId, turn.id, 'Attack too.', false)).toThrow('already used');
+  f.game.submit(f.c.id, target.playerId, turn.id, '', true);
+  await f.game.idle();
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+  expect(f.game.members(f.c.id)[0].state.hp).toBe(2);
+  fail = false;
+  f.game.retry(f.c.id, f.host.id);
+  await f.game.idle();
+  expect(f.game.members(f.c.id)[0].state.hp).toBe(2 + item.healing);
+  expect(f.game.members(f.c.id)[1].state.inventory).toHaveLength(0);
+  expect(f.game.snapshot(f.c.id, f.host.id).history.at(-1)!.actions).toHaveLength(2);
+});
+
+it('migrates saved three-stat characters, floors and interrupted turn receipts without losing progress', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gather-encounter-migration-'));
+  cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+  const filename = join(directory, 'game.sqlite');
+  const f = fixture(undefined, filename);
+  const turn = await start(f);
+  const members = f.game.members(f.c.id);
+  Object.assign(members[0].state, { hp: 7, level: 3, maxHp: 30, xp: 42, gold: 9 });
+  const legacyScene = {
+    floor: {
+      number: 4,
+      biome: 'The old forest',
+      atmosphere: 'Drifting mist.',
+      hazard: 'Roots.',
+      encounters: 3,
+      cleared: true,
+    },
+    encounter: null,
+    loot: [],
+    safeRest: true,
+    usedRest: false,
+    lethalWarning: null,
+  };
+  const oldStats = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(oldStats);
+    if (!value || typeof value !== 'object') return value;
+    const result = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, oldStats(child)]));
+    if ('STR' in result) {
+      delete result.CHA;
+      delete result.CON;
+      delete result.WIS;
+    }
+    if ('restedEncounter' in result) {
+      delete result.restedEncounter;
+      result.restedFloor = 4;
+      delete result.downedThisEncounter;
+    }
+    return result;
+  };
+  for (const member of members) {
+    f.db
+      .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+      .run(JSON.stringify(oldStats(member.character)), JSON.stringify(oldStats(member.state)), member.id);
+    f.db
+      .prepare('UPDATE characters SET sheet = ? WHERE id = ?')
+      .run(JSON.stringify(oldStats(member.character)), member.characterId);
+  }
+  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(legacyScene), f.c.id);
+  f.db.prepare("UPDATE turns SET phase = 'failed', draft = ? WHERE id = ?").run(
+    JSON.stringify(
+      oldStats({
+        members,
+        scene: legacyScene,
+        receipts: {
+          combat: {
+            logs: [],
+            encounter: { enemies: [], round: 1, initiative: [], victory: true, escaped: false },
+            loot: [],
+            characters: members.map((member) => ({
+              id: member.id,
+              name: member.character.name,
+              state: member.state,
+            })),
+          },
+        },
+      }),
+    ),
+    turn.id,
+  );
+  f.db.exec('ALTER TABLE actions DROP COLUMN support_action; PRAGMA user_version = 7;');
+  f.db.close();
+  const db = openDatabase(filename);
+  cleanup.unshift(() => db.close());
+  const game = new Game(db, () => ({ resolve: async () => outcome() }));
+  const restored = game.snapshot(f.c.id, f.host.id);
+  expect(db.pragma('user_version', { simple: true })).toBe(8);
+  expect(restored.members[0].state).toMatchObject({
+    hp: 7,
+    level: 3,
+    xp: 42,
+    gold: 9,
+    stats: { CHA: 5, CON: 5, WIS: 5 },
+    restedEncounter: null,
+  });
+  expect(restored.scene).toMatchObject({
+    location: { name: 'The old forest', atmosphere: 'Drifting mist.', hazard: 'Roots.' },
+    encounters: 3,
+  });
+  expect(restored.scene).not.toHaveProperty('floor');
+  expect(restored.members[0].character.traits[0].stats).toMatchObject({ CHA: 0, CON: 0, WIS: 0 });
+  const draft = JSON.parse(game.pending(f.c.id)!.draft!);
+  expect(draft.receipts.combat.characters[0].state.stats).toMatchObject({ CHA: 5, CON: 5, WIS: 5 });
+  game.retry(f.c.id, f.host.id);
+  await game.idle();
+  expect(game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
 });
 async function start(f: ReturnType<typeof fixture>) {
   f.game.start(f.c.id, f.host.id);
@@ -196,15 +379,25 @@ it('records atomic loot swaps, rejects equipment changes in combat, and leaves f
 });
 
 describe('downing and allied recovery', () => {
-  async function downFirst(impact = 12, failsCritically = false, invalidFloor = false) {
+  async function downFirst(impact = 12, failsCritically = false, interrupt = false) {
     const contexts: GMContext[] = [];
     let corrected = false;
     const f = fixture({
       resolve: async (ctx, tools) => {
         contexts.push(structuredClone(ctx));
+        const healing = ctx.turn.actions.find((action) => action.abilityName);
+        if (ctx.turn.number > 1 && healing) {
+          const target = ctx.members.find((member) => isDowned(member.state))!;
+          tools.useResource!({
+            memberId: healing.memberId,
+            itemId: null,
+            abilityName: healing.abilityName!,
+            targetId: target.id,
+          });
+        }
         if (ctx.turn.number !== 1) return outcome();
         const member = ctx.members.find((member) => member.character.name === 'Mira')!;
-        if (failsCritically)
+        if (failsCritically || interrupt)
           tools({
             memberId: member.id,
             stat: 'DEX',
@@ -213,6 +406,7 @@ describe('downing and allied recovery', () => {
             mode: 'normal',
             lethal: false,
           });
+        if (interrupt && !corrected) throw new Error('Narration interrupted after the saved check.');
         return outcome({
           changes: [
             ...(corrected
@@ -228,10 +422,6 @@ describe('downing and allied recovery', () => {
               : []),
             { type: 'hp', memberId: member.id, amount: -2, reason: 'A falling stone.' },
           ],
-          nextFloor:
-            invalidFloor && !corrected
-              ? { biome: 'Invalid floor', atmosphere: 'Too soon.', hazard: '' }
-              : null,
         });
       },
     });
@@ -251,7 +441,7 @@ describe('downing and allied recovery', () => {
     };
   }
 
-  it('downs ordinary lethal environmental damage and lets an ally spend their item to restore the turn roster', async () => {
+  it('downs environmental damage and spends the ally’s turn and item to restore the next roster', async () => {
     const f = await downFirst();
     const [downed, healer] = f.game.members(f.c.id);
     expect(isDowned(downed.state)).toBe(true);
@@ -266,6 +456,8 @@ describe('downing and allied recovery', () => {
     ).toThrow();
     const item = healer.state.inventory.find((item) => item.healing > 0)!;
     f.game.manageCharacter(f.c.id, healer.playerId, { type: 'heal', itemId: item.id, targetId: downed.id });
+    expect(f.game.members(f.c.id)[0].state.hp).toBe(0);
+    await f.game.idle();
     const restored = f.game.members(f.c.id)[0];
     expect(restored.state.hp).toBe(item.healing);
     expect(isDowned(restored.state)).toBe(false);
@@ -274,7 +466,7 @@ describe('downing and allied recovery', () => {
     const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
     submitBoth(f, turn.id);
     await f.game.idle();
-    expect(f.game.snapshot(f.c.id, f.host.id).turn!.number).toBe(3);
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.number).toBe(4);
   });
 
   it('uses a saved Mend ability outside combat to revive an ally and records its use and roll', async () => {
@@ -291,14 +483,20 @@ describe('downing and allied recovery', () => {
       .prepare('UPDATE members SET sheet = ? WHERE id = ?')
       .run(JSON.stringify(healer.character), healer.id);
     f.draw.mockReturnValue(4);
-    const restored = f.game.manageCharacter(f.c.id, healer.playerId, {
+    f.game.manageCharacter(f.c.id, healer.playerId, {
       type: 'heal',
       abilityName: ability.name,
       targetId: downed.id,
     });
+    await f.game.idle();
+    const restored = f.game.snapshot(f.c.id, f.host.id);
     expect(restored.members[0].state.hp).toBe(4);
     expect(restored.members[1].state.abilityUses?.[ability.name]).toBe(1);
-    expect(restored.turn!.rolls.at(-1)).toMatchObject({ memberId: healer.id, dice: [4], notation: 'd6' });
+    expect(restored.history.at(-1)!.rolls.at(-1)).toMatchObject({
+      memberId: healer.id,
+      dice: [4],
+      notation: 'd6',
+    });
     expect(() =>
       f.game.manageCharacter(f.c.id, healer.playerId, {
         type: 'heal',
@@ -309,19 +507,22 @@ describe('downing and allied recovery', () => {
     expect(f.draw).toHaveBeenCalledTimes(2);
   });
 
-  it('kills only on critical environmental impact or player critical failure and prevents allied corpse healing', async () => {
+  it('downs the first critical impact or critical failure and prevents healing a permanently dead ally', async () => {
     for (const [impact, failsCritically] of [
       [20, false],
       [1, true],
     ] as const) {
       const f = await downFirst(impact, failsCritically);
       const [fallen, healer] = f.game.members(f.c.id);
-      expect(isDead(fallen.state)).toBe(true);
-      expect(fallen.state.deathReason).toBe('A falling stone.');
+      expect(isDowned(fallen.state)).toBe(true);
+      expect(fallen.state.deathReason).toBeNull();
       expect(f.game.snapshot(f.c.id, f.host.id).history.at(-1)!.result!.narration).toContain(
-        'Mira dies: A falling stone.',
+        'Mira is downed at 0 HP.',
       );
       expect(f.draw).toHaveBeenCalledTimes(1);
+      fallen.state.conditions = [];
+      fallen.state.deathReason = 'Downed a second time.';
+      f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(fallen.state), fallen.id);
       const item = healer.state.inventory.find((item) => item.healing > 0)!;
       expect(() =>
         f.game.manageCharacter(f.c.id, healer.playerId, {
@@ -348,7 +549,7 @@ describe('downing and allied recovery', () => {
     expect(f.contexts.at(-1)!.turn.actions.map((action) => action.memberId)).toEqual([healer.id]);
   });
 
-  it('keeps lethal-impact dice locked when a failed commit is retried with reordered narrative changes', async () => {
+  it('keeps a saved check locked when interrupted narration is retried', async () => {
     const f = await downFirst(12, false, true);
     const failed = f.game.snapshot(f.c.id, f.host.id).turn!;
     expect(failed.phase).toBe('failed');
@@ -359,7 +560,7 @@ describe('downing and allied recovery', () => {
     f.game.retry(f.c.id, f.host.id);
     await f.game.idle();
     expect(f.game.snapshot(f.c.id, f.host.id).history.at(-1)!.rolls[0].dice).toEqual([12]);
-    expect(f.draw).toHaveBeenCalledTimes(1);
+    expect(f.draw).toHaveBeenCalledTimes(2);
     expect(isDowned(f.game.members(f.c.id)[0].state)).toBe(true);
   });
 
@@ -414,6 +615,126 @@ describe('downing and allied recovery', () => {
 });
 
 describe('automatic group turns', () => {
+  it('offers all saved tier-based loot per defeated enemy, leaves withdrawn enemies alone, and reuses loot on retry', async () => {
+    let fail = true;
+    let logs: string[] = [];
+    const f = fixture({
+      resolve: async (context, tools) => {
+        if (context.turn.number === 1)
+          tools.startCombat(
+            ['First', 'Second', 'Peaceful'].map((name, index) => ({
+              id: `foe-${index}`,
+              name,
+              tier: ['elite', 'boss', 'normal'][index],
+              hp: 1,
+              defense: 5,
+              attack: 0,
+              damage: '1d4',
+              description: '',
+              tactic: '',
+              equipmentBlueprints: [
+                {
+                  name: `${name} blade`,
+                  kind: 'weapon',
+                  scaling: ['STR'],
+                  hands: 1,
+                  light: true,
+                  description: 'Equipped blade',
+                },
+                {
+                  name: `${name} helm`,
+                  kind: 'helmet',
+                  scaling: [],
+                  hands: 1,
+                  light: false,
+                  description: 'Equipped helm',
+                },
+              ],
+            })),
+          );
+        if (context.combatResult) logs = context.combatResult.logs;
+        if (context.turn.number === 2 && fail) throw new Error('Interrupted loot narration');
+        return outcome();
+      },
+    });
+    f.draw.mockImplementation((sides: number) => Math.min(12, sides));
+    let turn = await start(f);
+    submitBoth(f, turn.id);
+    await f.game.idle();
+    const before = f.game.snapshot(f.c.id, f.host.id);
+    const enemies = structuredClone(before.scene.encounter!.enemies);
+    expect(enemies.map((enemy) => enemy.equipment!.length)).toEqual([4, 5, 3]);
+    before.scene.encounter!.enemies[2].withdrawn = true;
+    f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(before.scene), f.c.id);
+    turn = before.turn!;
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Attack First', false);
+    f.game.submit(f.c.id, f.p2.id, turn.id, 'Attack Second', false);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+    const draws = f.draw.mock.calls.length;
+    fail = false;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    const after = f.game.snapshot(f.c.id, f.host.id);
+    expect(after.scene.loot).toEqual(
+      enemies.slice(0, 2).flatMap((enemy) => enemy.equipment!.map((item) => ({ ...item, quantity: 1 }))),
+    );
+    expect(after.scene.encounter!.enemies.map((enemy) => enemy.equipment!.length)).toEqual([0, 0, 3]);
+    expect(f.draw.mock.calls).toHaveLength(draws);
+    expect(after.members.map((member) => member.state.inventory)).toEqual(
+      before.members.map((member) => member.state.inventory),
+    );
+    expect(logs.filter((log) => log.endsWith('It is available as scene loot.'))).toHaveLength(9);
+  });
+  it('cancels queued ally support before it spends an item or restores HP', async () => {
+    const f = fixture();
+    const turn = await start(f);
+    const [helper, ally] = f.game.members(f.c.id);
+    ally.state.hp = 1;
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(ally.state), ally.id);
+    const item = helper.state.inventory.find((item) => item.healing > 0)!;
+    f.game.manageCharacter(f.c.id, helper.playerId, { type: 'heal', itemId: item.id, targetId: ally.id });
+    f.game.cancelAction(f.c.id, helper.playerId, turn.id);
+    expect(f.game.snapshot(f.c.id, helper.playerId).turn!.actions).toEqual([]);
+    expect(f.game.members(f.c.id)[1].state.hp).toBe(1);
+    expect(f.game.members(f.c.id)[0].state.inventory.find((owned) => owned.id === item.id)?.quantity).toBe(
+      item.quantity,
+    );
+    expect(() => f.game.submit(f.c.id, helper.playerId, turn.id, 'Watch the gate.', false)).not.toThrow();
+  });
+  it('withdraws readiness until a cancelled action is resubmitted and rejects stale cancellation', async () => {
+    const resolve = vi.fn(async () => outcome());
+    const f = fixture({ resolve });
+    const turn = await start(f);
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Use Keen observation.', false, false, 'Keen observation');
+    expect(() => f.game.cancelAction(f.c.id, f.host.id, turn.id)).toThrow('next turn');
+    const version = f.game.snapshot(f.c.id, f.p1.id).version;
+    f.game.cancelAction(f.c.id, f.p1.id, turn.id);
+    expect(f.game.snapshot(f.c.id, f.p1.id).version).toBeGreaterThan(version);
+    expect(f.game.snapshot(f.c.id, f.p1.id).turn!.actions).toEqual([]);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(f.game.snapshot(f.c.id, f.p1.id).turn!.phase).toBe('collecting');
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Watch the doorway instead.', false);
+    expect(() => f.game.cancelAction(f.c.id, f.p1.id, turn.id)).toThrow('already processing');
+    await f.game.idle();
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(
+      f.game
+        .snapshot(f.c.id, f.p1.id)
+        .history.at(-1)!
+        .actions.find((action) => !action.passed),
+    ).toMatchObject({
+      text: 'Watch the doorway instead.',
+    });
+    expect(f.game.members(f.c.id)[0].state.abilityUses?.['Keen observation'] ?? 0).toBe(0);
+    expect(() => f.game.cancelAction(f.c.id, f.p1.id, turn.id)).toThrow('already processing');
+    const next = f.game.snapshot(f.c.id, f.p1.id).turn!;
+    f.game.submit(f.c.id, f.p1.id, next.id, '', true);
+    f.game.cancelAction(f.c.id, f.p1.id, next.id);
+    expect(f.game.snapshot(f.c.id, f.p1.id).turn!.actions).toEqual([]);
+  });
   it('waits for the complete roster and resolves the final submission exactly once', async () => {
     const resolve = vi.fn(async () => outcome());
     const f = fixture({ resolve });
@@ -674,7 +995,7 @@ describe('roguelike multiplayer lifecycle', () => {
     expect(checks).toHaveLength(1);
     expect(f.draw).toHaveBeenCalledTimes(1);
   });
-  it('preserves an unannounced lethal natural-one death through a failed narration and receipt retry', async () => {
+  it('preserves an unannounced lethal natural-one downing through a failed narration and receipt retry', async () => {
     let fail = true;
     const checks: unknown[] = [];
     const f = fixture({
@@ -715,7 +1036,8 @@ describe('roguelike multiplayer lifecycle', () => {
     expect(s.status).toBe('active');
     expect(s.turn?.roster).toEqual([s.members[1].id]);
     expect(s.members[0].state.hp).toBe(0);
-    expect(s.members[0].state.deathReason).toBe('Catastrophic failure: Jump');
+    expect(s.members[0].state.deathReason).toBeNull();
+    expect(isDowned(s.members[0].state)).toBe(true);
     expect(checks[1]).toEqual(checks[0]);
     expect(f.draw).toHaveBeenCalledTimes(1);
     expect(s.history.at(-1)?.rolls).toHaveLength(1);
@@ -792,9 +1114,11 @@ describe('roguelike multiplayer lifecycle', () => {
     await f.game.idle();
     const s = f.game.snapshot(f.c.id, f.host.id);
     expect(s.turn?.phase).toBe('collecting');
-    expect(s.scene.loot).toHaveLength(1);
-    expect(s.scene.loot[0].name).toBe('A unique user-world prize');
+    expect(s.scene.loot).toHaveLength(3);
+    expect(s.scene.loot[0].name).toBe("User-world adversary's weapon");
     expect(s.members[0].state.xp).toBe(30);
+    expect(s.history.at(-1)!.result!.summary).toContain('XP rewards:\nMira: +30 XP.\nRowan: +30 XP.');
+    expect(s.history.at(-1)!.result!.summary.match(/XP rewards:/g)).toHaveLength(1);
     expect(f.draw.mock.calls).toHaveLength(draws);
     expect(planCombat).toHaveBeenCalledTimes(1);
   });
@@ -839,6 +1163,28 @@ describe('roguelike multiplayer lifecycle', () => {
   });
 });
 
+it.each(['English', 'Nederlands'] as const)(
+  'reports actual noncombat XP in the %s summary even when a character levels up',
+  async (language) => {
+    const f = fixture({ resolve: async (context) => outcome({ xp: context.turn.number ? 20 : 0 }) });
+    f.game.setLanguage(f.c.id, f.host.id, language);
+    const turn = await start(f);
+    expect(f.game.snapshot(f.c.id, f.host.id).history[0].result!.summary).not.toContain('XP');
+    const member = f.game.members(f.c.id)[0];
+    member.state.xp = 85;
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(member.state), member.id);
+    submitBoth(f, turn.id);
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.c.id, f.host.id);
+    expect(snapshot.members[0].state).toMatchObject({ level: 2, xp: 5 });
+    const result = snapshot.history.at(-1)!.result!;
+    expect(result.summary).toContain(
+      `${language === 'Nederlands' ? 'XP-beloningen' : 'XP rewards'}:\nMira: +20 XP.\nRowan: +20 XP.`,
+    );
+    expect(result.narration).not.toContain('XP');
+  },
+);
+
 it('rewards a noncombat boss equivalent once and waits for level-up choices', async () => {
   const f = fixture({
     resolve: async (ctx, tools) => {
@@ -848,7 +1194,7 @@ it('rewards a noncombat boss equivalent once and waits for level-up choices', as
         memberId,
         stat: 'INT',
         dc: 15,
-        reason: 'Resolve the floor trial',
+        reason: 'Resolve the trial',
         mode: 'normal',
         lethal: false,
       });
@@ -865,12 +1211,13 @@ it('rewards a noncombat boss equivalent once and waits for level-up choices', as
   submitBoth(f, turn.id);
   await f.game.idle();
   const s = f.game.snapshot(f.c.id, f.host.id);
-  expect(s.scene.floor.cleared).toBe(true);
+  expect(s.scene.encounters).toBe(1);
   expect(s.members[0].state).toMatchObject({ level: 2, pendingLevelUps: 1, bosses: 1 });
-  expect(() => f.game.submit(f.c.id, f.p1.id, s.turn!.id, 'Next floor', false)).toThrow('Choose');
+  expect(s.history.at(-1)!.result!.summary).toContain('XP rewards:\nMira: +100 XP.\nRowan: +100 XP.');
+  expect(() => f.game.submit(f.c.id, f.p1.id, s.turn!.id, 'Continue', false)).toThrow('Choose');
 });
 
-it('does not award a floor challenge to a late arrival outside the frozen roster', async () => {
+it('does not award a encounter challenge to a late arrival outside the frozen roster', async () => {
   const f = fixture({
     resolve: async (ctx, tools) => {
       if (!ctx.turn.number) return outcome();
@@ -918,7 +1265,7 @@ it.each(['new-combat', 'new-utility', 'upgrade-combat', 'upgrade-utility', 'attr
     expect(after.state.lastLevelUp).toBeTruthy();
     if (choice === 'attributes') {
       expect(context.attributes).toEqual(['DEX', 'DEX']);
-      expect(after.state.stats).toEqual({ STR: 5, DEX: 7, INT: 5 });
+      expect(after.state.stats).toEqual({ STR: 5, DEX: 7, INT: 5, CHA: 5, CON: 5, WIS: 5 });
       expect(after.character.abilities).toEqual(before.character.abilities);
     } else if (choice.startsWith('upgrade')) {
       expect(context.target?.name).toBe(
@@ -986,6 +1333,27 @@ it('rejects an upgrade in an empty category and invalid provider rewards without
   await expect(f.game.levelUp(f.c.id, member.playerId, 'new-combat')).rejects.toThrow('category and level');
   expect(f.game.members(f.c.id)[0]).toEqual(member);
 });
+
+it.each([{ dice: '2d8' as const }, { bonus: 3 }])(
+  'rejects model-chosen power on a new level-up ability (%j)',
+  async (power) => {
+    const f = fixture({
+      resolve: async () => outcome(),
+      levelUp: async () => ({
+        ability: { ...templateCharacter().abilities[0], name: 'New ability', ...power },
+        description: 'A new ability.',
+      }),
+    });
+    await start(f);
+    const member = f.game.members(f.c.id)[0];
+    member.state.pendingLevelUps = 1;
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(member.state), member.id);
+    await expect(f.game.levelUp(f.c.id, member.playerId, 'new-combat')).rejects.toThrow(
+      'standard base power',
+    );
+    expect(f.game.members(f.c.id)[0]).toEqual(member);
+  },
+);
 
 it('migrates existing equipment and pending stat points without resetting a campaign', async () => {
   const filename = join(mkdtempSync(join(tmpdir(), 'gather-migration-')), 'game.db');
@@ -1062,6 +1430,7 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   const member = f.game.members(f.c.id)[0];
   const ability = member.character.abilities.find((ability) => ability.kind === 'utility')!;
   ability.level = 2;
+  ability.bonus = 1;
   member.state.stats.INT = 7;
   member.state.equipment.left = {
     ...baseItem('relic', 'Remembered oath', 'relic'),
@@ -1082,8 +1451,8 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   await f.game.idle();
   expect(receipts[0]).toMatchObject({
     dice: [4, 12],
-    modifier: 3,
-    total: 15,
+    modifier: 4,
+    total: 16,
     success: true,
     mode: 'advantage',
     abilityName: ability.name,
@@ -1106,10 +1475,10 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   scene.safeRest = true;
   f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
   f.game.manageCharacter(f.c.id, f.p1.id, { type: 'rest' });
-  expect(f.game.members(f.c.id)[0].state.abilityUses?.[ability.name]).toBeUndefined();
+  expect(f.game.members(f.c.id)[0].state.abilityUses?.[ability.name]).toBe(1);
   expect(() =>
-    f.game.submit(f.c.id, f.p1.id, next.id, 'Use the restored ability', false, false, ability.name),
-  ).not.toThrow();
+    f.game.submit(f.c.id, f.p1.id, next.id, 'Try the spent ability', false, false, ability.name),
+  ).toThrow('already been used');
 });
 
 it('requires explicit utility selection, rejects the wrong stat, and cancels disadvantage with ability advantage', async () => {
@@ -1728,6 +2097,79 @@ it('keeps escaped players acting, recovers saved rosters, and lets them re-engag
   expect(snapshot.scene.encounter?.enemies[0].hp).toBe(120);
 });
 
+it.each([
+  ['I attack and use his death to regain my abilities.', false],
+  ['Use Focused strike on Gatekeeper.', true],
+] as const)('recovers a saved turn with a spent ability request: %s', async (text, requested) => {
+  let combatLogs: string[] = [];
+  const planCombat = vi.fn();
+  const f = fixture({
+    planCombat,
+    resolve: async (context, tools) => {
+      if (context.turn.number === 1)
+        tools.startCombat([
+          {
+            id: 'foe',
+            name: 'Gatekeeper',
+            tier: 'normal',
+            hp: 120,
+            defense: 10,
+            attack: 0,
+            damage: '1d4',
+            description: '',
+            tactic: '',
+          },
+        ]);
+      if (context.combatResult) combatLogs = context.combatResult.logs;
+      return outcome();
+    },
+  });
+  f.draw.mockImplementation((sides: number) => Math.min(12, sides));
+  let turn = await start(f);
+  submitBoth(f, turn.id);
+  await f.game.idle();
+  turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+  const [spent, ready] = f.game.members(f.c.id);
+  const ability = spent.character.abilities[0];
+  spent.state.abilityUses = { [ability.name]: 1 };
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(spent.state), spent.id);
+  f.game.pause(f.c.id, f.host.id, true);
+  f.game.submit(f.c.id, spent.playerId, turn.id, text, false);
+  f.game.submit(f.c.id, ready.playerId, turn.id, 'Use Focused strike on Gatekeeper.', false);
+  const legacyPlan = combatSchema.parse({
+    actions: [spent, ready].map((member) => ({
+      memberId: member.id,
+      main: 'ability',
+      abilityName: ability.name,
+      targetId: 'foe',
+      stat: 'STR',
+      description: member.id === spent.id ? text : 'Use Focused strike on Gatekeeper.',
+      minor: 'none',
+      minorItemId: null,
+    })),
+    enemyTargets: [],
+    loot: { name: 'Salvage', kind: 'relic', scaling: [], hands: 1, light: false, description: '' },
+  });
+  const draft = {
+    members: [spent, ready],
+    scene: f.game.snapshot(f.c.id, f.host.id).scene,
+    receipts: { combatInput: legacyPlan },
+  };
+  f.db
+    .prepare("UPDATE turns SET phase = 'failed', error = ?, draft = ? WHERE id = ?")
+    .run('That ability has already been used.', JSON.stringify(draft), turn.id);
+  f.game.retry(f.c.id, f.host.id);
+  await f.game.idle();
+  const completed = f.game.snapshot(f.c.id, f.host.id);
+  expect(completed.turn!.phase).toBe('collecting');
+  expect(completed.members[0].state.abilityUses?.[ability.name]).toBe(1);
+  expect(completed.members[1].state.abilityUses?.[ability.name]).toBe(1);
+  expect(combatLogs.some((log) => log.includes(`${ready.character.name} uses ${ability.name}`))).toBe(true);
+  expect(combatLogs.some((log) => log.includes('already been used'))).toBe(requested);
+  expect(planCombat).not.toHaveBeenCalled();
+  expect(completed.scene.encounter!.round).toBe(2);
+});
+
 it('reuses the saved combat plan, partial rolls and finished receipt after reload and narration failure', async () => {
   const filename = join(mkdtempSync(join(tmpdir(), 'gather-combat-retry-')), 'game.sqlite');
   let failNarration = true;
@@ -1796,16 +2238,20 @@ it('reuses the saved combat plan, partial rolls and finished receipt after reloa
   expect(planCombat).toHaveBeenCalledTimes(1);
   expect(f.draw.mock.calls.length).toBe(draws);
   expect(completed.members.map((member) => member.state.xp)).toEqual([30, 30]);
-  expect(completed.scene.loot).toHaveLength(1);
-  expect(completed.scene.floor.encounters).toBe(1);
+  expect(completed.scene.loot).toHaveLength(3);
+  expect(completed.scene.encounters).toBe(1);
 });
 
-it('restores utility uses when the party changes floors and combat uses on a new encounter', async () => {
+it('restores all ability charges after a successful encounter and preserves spent charges when combat starts', async () => {
   const f = fixture({
     resolve: async (ctx, tools) => {
       if (!ctx.turn.number) return outcome();
-      if (ctx.turn.number === 1)
-        return outcome({ nextFloor: { biome: 'Mountain', atmosphere: 'A narrow pass', hazard: '' } });
+      if (ctx.turn.number === 1) {
+        const memberId = ctx.members[0].id;
+        tools({ memberId, stat: 'INT', dc: 10, reason: 'Solve the trial.', mode: 'normal', lethal: false });
+        tools.completeChallenge({ memberId, reason: 'The trial is solved.', bossEquivalent: false });
+        return outcome({ location: { name: 'Mountain', atmosphere: 'A narrow pass', hazard: '' } });
+      }
       tools.startCombat([
         {
           id: 'foe',
@@ -1828,19 +2274,18 @@ it('restores utility uses when the party changes floors and combat uses on a new
     member.character.abilities.map((ability) => [ability.name, 1]),
   );
   f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(member.state), member.id);
-  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
-  scene.floor.cleared = true;
-  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
   submitBoth(f, turn.id);
   await f.game.idle();
   let after = f.game.members(f.c.id)[0];
-  expect(after.state.abilityUses?.[member.character.abilities[1].name]).toBeUndefined();
-  expect(after.state.abilityUses?.[member.character.abilities[0].name]).toBe(1);
+  expect(after.state.abilityUses?.[member.character.abilities[1].name]).toBe(0);
+  expect(after.state.abilityUses?.[member.character.abilities[0].name]).toBe(0);
+  after.state.abilityUses![member.character.abilities[0].name] = 1;
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(after.state), after.id);
   turn = f.game.snapshot(f.c.id, f.host.id).turn!;
   submitBoth(f, turn.id);
   await f.game.idle();
   after = f.game.members(f.c.id)[0];
-  expect(after.state.abilityUses?.[member.character.abilities[0].name]).toBeUndefined();
+  expect(after.state.abilityUses?.[member.character.abilities[0].name]).toBe(1);
   expect(f.game.snapshot(f.c.id, f.host.id).scene.encounter).not.toBeNull();
 });
 
@@ -1989,3 +2434,307 @@ it('adds real powers to existing saved and equipped off-hand items while preserv
     scaling: ['INT'],
   });
 });
+
+describe('ailments across party turns', () => {
+  it('ticks exploration and passed turns once, with no tick on failed resolution or the opening scene', async () => {
+    let fail = true;
+    const f = fixture({
+      resolve: async (context) => {
+        if (context.turn.number === 1 && fail) throw Error('Interrupted narration');
+        return outcome();
+      },
+    });
+    const hero = f.game.members(f.c.id)[0];
+    applyCondition(hero.state, 'Weakened');
+    applyCondition(hero.state, 'Burning');
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(hero.state), hero.id);
+    const turn = await start(f);
+    expect(f.game.members(f.c.id)[0].state.conditionTurns).toMatchObject({ Weakened: 2, Burning: 3 });
+    f.game.submit(f.c.id, f.p1.id, turn.id, '', true);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+    expect(f.game.members(f.c.id)[0].state).toMatchObject({
+      hp: hero.state.hp,
+      conditionTurns: { Weakened: 2, Burning: 3 },
+    });
+    fail = false;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    expect(f.game.members(f.c.id)[0].state).toMatchObject({
+      hp: hero.state.hp - 2,
+      conditionTurns: { Weakened: 1, Burning: 2 },
+    });
+    const next = f.game.snapshot(f.c.id, f.host.id).turn!;
+    submitBoth(f, next.id);
+    await f.game.idle();
+    expect(f.game.members(f.c.id)[0].state.conditions).not.toContain('Weakened');
+    expect(f.game.members(f.c.id)[0].state.hp).toBe(hero.state.hp - 4);
+    expect(f.game.snapshot(f.c.id, f.host.id).history.at(-1)!.result!.narration).toContain('Burning damage');
+  });
+
+  it('does not tick combat twice when committing its narrative', async () => {
+    const f = fixture({
+      resolve: async (context, tools) => {
+        if (context.turn.number)
+          tools.combat(
+            combatSchema.parse({
+              actions: [],
+              enemyTargets: [],
+              loot: { name: 'Spare', kind: 'relic', scaling: [], hands: 1, light: false, description: '' },
+            }),
+          );
+        return outcome();
+      },
+    });
+    const turn = await start(f);
+    const hero = f.game.members(f.c.id)[0];
+    applyCondition(hero.state, 'Weakened');
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(hero.state), hero.id);
+    const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+    scene.encounter = {
+      round: 1,
+      victory: false,
+      escaped: false,
+      initiative: [],
+      enemies: [
+        {
+          id: 'idle-foe',
+          name: 'Idle foe',
+          tier: 'normal',
+          hp: 20,
+          maxHp: 20,
+          initiative: 1,
+          defense: 10,
+          attack: 0,
+          damage: '1d4',
+          description: '',
+          tactic: '',
+          onHit: null,
+        },
+      ],
+    };
+    f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
+    f.game.submit(f.c.id, f.p1.id, turn.id, '', true);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
+    expect(f.game.members(f.c.id)[0].state.conditionTurns.Weakened).toBe(1);
+  });
+
+  it.each(['mend', 'cleanse'] as const)(
+    'executes %s cures outside combat at full HP, with saved receipts on retry',
+    async (effect) => {
+      let fail = true;
+      const receipts: unknown[] = [];
+      const f = fixture({
+        resolve: async (context, tools) => {
+          if (context.turn.number) {
+            const actor = context.members[0];
+            const receipt = tools.useResource!({
+              memberId: actor.id,
+              targetId: context.members[1].id,
+              itemId: null,
+              abilityName: actor.character.abilities[0].name,
+            });
+            receipts.push(structuredClone(receipt));
+            if (fail) throw Error('Interrupted cure narration');
+          }
+          return outcome();
+        },
+      });
+      const turn = await start(f);
+      f.draw.mockImplementation((sides) => Math.min(12, sides));
+      const [actor, target] = f.game.members(f.c.id);
+      actor.character.abilities[0] = { ...actor.character.abilities[0], effect, cures: ['Shocked'] };
+      applyCondition(target.state, 'Shocked');
+      f.db
+        .prepare('UPDATE members SET sheet = ? WHERE id = ?')
+        .run(JSON.stringify(actor.character), actor.id);
+      f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(target.state), target.id);
+      f.game.submit(
+        f.c.id,
+        f.p1.id,
+        turn.id,
+        `Use ${actor.character.abilities[0].name} on Rowan.`,
+        false,
+        false,
+        actor.character.abilities[0].name,
+      );
+      f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+      await f.game.idle();
+      expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+      expect(f.game.members(f.c.id)[1].state.conditions).toContain('Shocked');
+      fail = false;
+      f.game.retry(f.c.id, f.host.id);
+      await f.game.idle();
+      expect(f.game.members(f.c.id)[1].state.conditions).not.toContain('Shocked');
+      expect(f.game.members(f.c.id)[0].state.abilityUses![actor.character.abilities[0].name]).toBe(1);
+      expect(receipts[0]).toMatchObject({ restored: 0, cured: ['Shocked'] });
+      expect(receipts[1]).toEqual(receipts[0]);
+    },
+  );
+
+  it('allows a reasonable submitted environmental remedy to cure an ally before the damage tick', async () => {
+    const f = fixture({
+      resolve: async (context) =>
+        context.turn.number
+          ? outcome({
+              changes: [
+                {
+                  type: 'condition',
+                  memberId: context.members[1].id,
+                  name: 'Burning',
+                  remove: true,
+                  reason: 'Mira smothers the flames on Rowan with the nearby blanket.',
+                },
+              ],
+            })
+          : outcome(),
+    });
+    const turn = await start(f);
+    const target = f.game.members(f.c.id)[1];
+    applyCondition(target.state, 'Burning');
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(target.state), target.id);
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Smother the flames on Rowan with the nearby blanket.', false);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
+    expect(f.game.members(f.c.id)[1].state.conditions).not.toContain('Burning');
+    expect(f.game.members(f.c.id)[1].state.hp).toBe(target.state.hp);
+  });
+});
+
+it.each([true, false])(
+  'allows escaped utility actions and equipment, rejects cross-combat support, and persists abandoned deaths across retries (selected: %s)',
+  async (selected) => {
+    let interruptNarration = false;
+    const receipts: GMContext['combatResult'][] = [];
+    const f = fixture({
+      planCombat: async (context) => ({
+        actions: context.turn.actions
+          .filter((action) => action.text.includes('utility'))
+          .map((action) => ({
+            memberId: action.memberId,
+            main: 'ability',
+            abilityName: context.members
+              .find((member) => member.id === action.memberId)!
+              .character.abilities.find((ability) => ability.kind === 'utility')!.name,
+          })),
+      }),
+      resolve: async (context, tools) => {
+        if (context.turn.number === 1 && !context.combatResult)
+          tools.startCombat([
+            {
+              id: 'foe',
+              name: 'Gatekeeper',
+              tier: 'normal',
+              hp: 100,
+              defense: 10,
+              attack: 0,
+              damage: '1d4',
+              description: '',
+              tactic: '',
+            },
+          ]);
+        if (context.combatResult) {
+          receipts.push(structuredClone(context.combatResult));
+          if (interruptNarration) throw new Error('Interrupted escape narration.');
+          return new PracticeGM().resolve(context, tools);
+        }
+        return outcome();
+      },
+    });
+    f.draw.mockImplementation((sides: number) => Math.min(12, sides));
+    let turn = await start(f);
+    submitBoth(f, turn.id);
+    await f.game.idle();
+    turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Flee', false);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    let [escaped, fighter] = f.game.members(f.c.id);
+    expect(escaped.state.conditions).toContain('Escaped');
+    fighter.state.hp -= 2;
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(fighter.state), fighter.id);
+    const potion = { ...baseItem('outside-potion', 'Potion', 'consumable'), quantity: 1, healing: 4 };
+    escaped.state.inventory.push(potion);
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(escaped.state), escaped.id);
+    expect(() =>
+      f.game.manageCharacter(f.c.id, escaped.playerId, { type: 'help-up', targetId: fighter.id }),
+    ).toThrow('Rejoin');
+    expect(() =>
+      f.game.manageCharacter(f.c.id, escaped.playerId, {
+        type: 'heal',
+        itemId: potion.id,
+        targetId: fighter.id,
+      }),
+    ).toThrow('Rejoin');
+    expect(() =>
+      f.game.manageCharacter(f.c.id, fighter.playerId, {
+        type: 'heal',
+        itemId: fighter.state.inventory[0].id,
+        targetId: escaped.id,
+      }),
+    ).toThrow('Rejoin');
+    const slot = (['right', 'left', 'body', 'head', 'boots'] as const).find(
+      (slot) => escaped.state.equipment[slot],
+    );
+    expect(slot).toBeDefined();
+    f.game.manageCharacter(f.c.id, escaped.playerId, { type: 'unequip', slot });
+    expect(f.game.members(f.c.id)[0].state.equipment[slot!]).toBeNull();
+    const utility = escaped.character.abilities.find((ability) => ability.kind === 'utility')!;
+    turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(
+      f.c.id,
+      f.p1.id,
+      turn.id,
+      'Search the alley using my utility ability.',
+      false,
+      false,
+      selected ? utility.name : null,
+    );
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    let snapshot = f.game.snapshot(f.c.id, f.host.id);
+    expect(snapshot.turn?.phase).toBe('collecting');
+    expect(snapshot.members[0].state.conditions).toContain('Escaped');
+    expect(snapshot.members[0].state.abilityUses?.[utility.name]).toBe(1);
+
+    fighter = f.game.members(f.c.id)[1];
+    fighter.state.hp = 0;
+    fighter.state.conditions = ['Downed'];
+    fighter.state.downedThisEncounter = true;
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(fighter.state), fighter.id);
+    // Saved turns may still list a now-Downed member. Regenerate the collecting roster as on startup.
+    f.db
+      .prepare('UPDATE turns SET roster = ? WHERE id = ?')
+      .run(JSON.stringify([escaped.id]), snapshot.turn!.id);
+    interruptNarration = true;
+    f.game.submit(f.c.id, f.p1.id, snapshot.turn!.id, 'I hide in the alley.', false);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('failed');
+    const receipt = receipts.at(-1)!;
+    expect(receipt!.encounter).toMatchObject({ victory: false, escaped: true });
+    expect(isDead(receipt!.characters.find((member) => member.id === fighter.id)!.state)).toBe(true);
+    const draws = f.draw.mock.calls.length;
+    interruptNarration = false;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    snapshot = f.game.snapshot(f.c.id, f.host.id);
+    expect(f.draw.mock.calls.length).toBe(draws);
+    expect(snapshot).toMatchObject({ status: 'active', turn: { phase: 'collecting', roster: [escaped.id] } });
+    expect(snapshot.scene.encounter).toMatchObject({ escaped: true, victory: false });
+    expect(isDead(snapshot.members[1].state)).toBe(true);
+    expect(snapshot.members[1].state.deathReason).toContain('Left behind');
+    expect(snapshot.members[0].state.conditions).not.toContain('Escaped');
+    expect(snapshot.history.at(-1)?.result?.narration).toContain('dies permanently');
+    expect(() =>
+      f.game.manageCharacter(f.c.id, escaped.playerId, {
+        type: 'heal',
+        itemId: potion.id,
+        targetId: fighter.id,
+      }),
+    ).toThrow('dead');
+  },
+);

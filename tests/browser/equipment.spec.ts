@@ -1,12 +1,127 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { templateCharacter, type Snapshot } from '../../shared/schema';
 import { baseItem } from '../../shared/rules';
+import { conditionDescription } from '../../shared/ailments';
 
 async function post<T>(request: APIRequestContext, path: string, data: unknown): Promise<T> {
   const response = await request.post(path, { headers: { 'x-gather-request': '1' }, data });
   expect(response.ok(), await response.text()).toBe(true);
   return response.json();
 }
+
+test('shared-screen item inspection exposes types and mechanics without changing equipment', async ({
+  page,
+}) => {
+  const character = templateCharacter('Fransinator');
+  character.equipmentOptions[0] = {
+    ...baseItem('focus', 'Pijnreservoir', 'focus'),
+    scaling: ['CHA'],
+    attackBonus: 1,
+    description: 'A reservoir that channels conviction.',
+  };
+  character.equipmentOptions[1] = {
+    ...baseItem('shield', 'Afkickkliniekdeur', 'shield'),
+    defense: 1,
+    description: 'A clinic door repurposed as a shield.',
+  };
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.healingItemName = 'Verzegelde ontwenningsampul';
+  const saved = await post<{ id: string }>(page.request, '/api/characters', character);
+  const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
+    name: 'Item inspection',
+    setting: 'An ash wasteland',
+    premise: '',
+    tone: '',
+    language: 'English',
+    instructions: '',
+    custom: [],
+    provider: 'practice',
+    model: '',
+  });
+  const snapshot = await post<Snapshot>(page.request, '/api/join', {
+    code: campaign.inviteCode,
+    playerName: 'Fransinator player',
+    characterId: saved.id,
+  });
+  const before = structuredClone(snapshot.members[0].state);
+  snapshot.members[0].state.conditions = ['Weakened', 'Stunned', 'Burning', 'Custom curse'];
+  // Include a stowed weapon to verify that backpack items can also be inspected.
+  snapshot.members[0].state.inventory.push({
+    ...baseItem('spare-weapon', 'Spare blade', 'weapon'),
+    damage: '2d4',
+    scaling: ['STR'],
+    requirements: { STR: 7, DEX: 0, INT: 0, CHA: 0, CON: 0, WIS: 0 },
+    hands: 2,
+    description: 'A heavy spare blade.',
+    quantity: 1,
+  });
+  snapshot.isHost = false;
+  snapshot.myMemberId = null;
+  await page.addInitScript(() =>
+    Object.defineProperty(window, 'EventSource', {
+      value: class {
+        close() {}
+      },
+    }),
+  );
+  await page.route(`**/api/campaigns/${campaign.id}`, (route) => route.fulfill({ json: snapshot }));
+  await page.goto(`/screen/${campaign.id}#${campaign.displayToken}`);
+  const card = page.locator('.member-card');
+  const weakened = card.locator('.conditions span').filter({ hasText: 'Weakened' });
+  await weakened.hover();
+  await expect(weakened).toHaveText('Weakened · 2 turns');
+  await expect(card.locator('.conditions span').filter({ hasText: 'Burning' })).toHaveAttribute(
+    'title',
+    /blanket/,
+  );
+  await expect(weakened).toHaveAttribute('title', conditionDescription('Weakened')!);
+  await expect(weakened).toHaveAttribute('aria-label', /^Weakened: -2 to attack rolls/);
+  await expect(card.locator('.conditions span').filter({ hasText: 'Stunned' })).toHaveAttribute(
+    'title',
+    conditionDescription('Stunned')!,
+  );
+  await expect(card.locator('.conditions span').filter({ hasText: 'Burning' })).toHaveAttribute(
+    'title',
+    conditionDescription('Burning')!,
+  );
+  await expect(card.locator('.conditions span').filter({ hasText: 'Custom curse' })).toHaveAttribute(
+    'aria-label',
+    'Custom curse',
+  );
+  await card.getByRole('button', { name: 'Fransinator' }).click();
+  const focus = card.locator('.item-inspection').filter({ hasText: 'Pijnreservoir' });
+  await expect(focus.locator('summary')).toHaveText('Pijnreservoir (focus)');
+  await expect(focus.getByText(character.equipmentOptions[0].description, { exact: true })).not.toBeVisible();
+  await focus.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(focus.getByText(character.equipmentOptions[0].description, { exact: true })).toBeVisible();
+  await expect(focus).toContainText('+1 CHA attack rolls while equipped');
+  await expect(focus).not.toContainText('1d4');
+  const shield = card.locator('.item-inspection').filter({ hasText: 'Afkickkliniekdeur' });
+  await expect(shield.locator('summary')).toHaveText('Afkickkliniekdeur (shield)');
+  await shield.locator('summary').click();
+  await expect(shield).toContainText('+1 defense');
+  await expect(card.locator('li').filter({ hasText: 'Body' })).toHaveText('BodyNone');
+  const potion = card.locator('.item-inspection').filter({ hasText: character.healingItemName });
+  await expect(potion.locator('summary')).toContainText('(consumable)');
+  await expect(potion.locator('..')).toContainText('×1');
+  await potion.locator('summary').click();
+  await expect(potion).toContainText('Heal 6 HP');
+  const weapon = card.locator('.item-inspection').filter({ hasText: 'Spare blade' });
+  await expect(weapon.locator('summary')).toHaveText('Spare blade (weapon)');
+  await weapon.locator('summary').click();
+  await expect(weapon).toContainText('2d4 + STR modifier');
+  await expect(weapon).toContainText('Two-handed');
+  await expect(weapon).toContainText('Requires 7 STR');
+  await focus.locator('summary').click();
+  await expect(focus.getByText(character.equipmentOptions[0].description, { exact: true })).not.toBeVisible();
+  await expect(card.getByRole('button', { name: /Equip|Drop|Stow/ })).toHaveCount(0);
+  const after: Snapshot = await (await page.request.get(`/api/campaigns/${campaign.id}`)).json();
+  expect(after.members[0].state).toEqual(before);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/shared-item-inspection.png', fullPage: true });
+});
 
 test('mobile equipment previews swaps, equips nearby loot, and records free changes in the turn summary', async ({
   page,

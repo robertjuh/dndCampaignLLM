@@ -10,8 +10,10 @@ import {
   checkSchema,
   outcomeSchema,
   type Action,
+  type SupportAction,
   type CampaignConfig,
   type Character,
+  type AbilityChoiceStats,
   type CharacterState,
   type Check,
   resourceUseSchema,
@@ -47,11 +49,13 @@ import {
   grantXp,
   gainAttributes,
   abilityMechanics,
-  abilityStrength,
+  abilityBonus,
+  abilityDice,
   equipmentBonus,
   availableAbility,
   spendAbility,
-  resetAbilities,
+  recoverAfterEncounter,
+  helpUp,
   chooseStartingEquipment,
   equip,
   unequip,
@@ -63,10 +67,22 @@ import {
   mendWithAbility,
   isDead,
   isDowned,
+  isInCombat,
+  canInteract,
   damage,
   runCombat,
   randomLoot,
+  rollEnemyLoot,
+  baseItem,
+  applyCondition,
+  removeCondition,
+  tickConditions,
+  matchingCures,
+  ailmentCheckPenalty,
+  incapacitatingCondition,
 } from '../shared/rules';
+import { isAilment } from '../shared/ailments';
+import { combatFact } from './narration';
 
 export class GameError extends Error {
   constructor(
@@ -107,6 +123,17 @@ export type GMContext = {
   combatResult?: CombatReceipt;
   resourceUses?: ResourceReceipt[];
   pendingReplacements?: { playerName: string; character: Character }[];
+  arrivingCharacters?: { playerName: string; character: Character }[];
+  supportResults?: SupportResult[];
+  recoveryLogs?: string[];
+};
+type SupportResult = {
+  memberId: string;
+  targetId: string;
+  type: 'help-up' | 'heal-ally';
+  sourceName: string;
+  restored: number;
+  log: string;
 };
 export type CombatReceipt = {
   logs: string[];
@@ -117,6 +144,7 @@ export type CombatReceipt = {
 export type ResourceReceipt = ResourceUse & {
   sourceName: string;
   restored: number;
+  cured?: string[];
   state: CharacterState;
   targetState: CharacterState;
 };
@@ -165,9 +193,19 @@ export function validateLevelUpReward(context: LevelUpContext, input: unknown): 
       context.target &&
       (reward.ability.effect !== context.target.effect ||
         reward.ability.stat !== context.target.stat ||
-        reward.ability.healing !== context.target.healing)
+        reward.ability.healing !== context.target.healing ||
+        reward.ability.dice !== context.target.dice ||
+        (reward.ability.bonus ?? 0) !== (context.target.bonus ?? 0) ||
+        (reward.ability.inflicts ?? null) !== (context.target.inflicts ?? null) ||
+        JSON.stringify(reward.ability.cures ?? []) !== JSON.stringify(context.target.cures ?? []))
     )
-      throw new GameError('An upgrade must preserve the ability’s effect, attribute, and healing type.');
+      throw new GameError(
+        'An upgrade must preserve the ability’s effect, attribute, healing type, dice, and rolled bonus.',
+      );
+    if (!context.target && (reward.ability.dice !== undefined || (reward.ability.bonus ?? 0) !== 0))
+      throw new GameError(
+        'New level-up abilities must use standard base power, without model-chosen dice or bonuses.',
+      );
   }
   return reward;
 }
@@ -230,8 +268,49 @@ export class Game {
         .all(ownerId) as { id: string; sheet: string }[]
     ).map((r) => ({ id: r.id, ...(JSON.parse(r.sheet) as Character) }));
   }
+  abilityChoiceStats(): AbilityChoiceStats {
+    const result: AbilityChoiceStats = { characters: 0, offers: 0, selections: 0, rows: [] };
+    const groups = new Map<string, AbilityChoiceStats['rows'][number]>();
+    for (const row of this.db.prepare('SELECT sheet FROM characters').all() as { sheet: string }[]) {
+      const character = JSON.parse(row.sheet) as Character;
+      if (!character.abilityOptions) continue;
+      result.characters++;
+      const chosen = new Set(character.abilities.map((a) => a.name));
+      for (const ability of character.abilityOptions) {
+        const dice = ['strike', 'mend'].includes(ability.effect) ? abilityDice(ability) : null;
+        const bonus = ability.bonus ?? 0;
+        const key = json([ability.kind, ability.effect, ability.stat, dice, bonus]);
+        const group = groups.get(key) ?? {
+          kind: ability.kind,
+          effect: ability.effect,
+          stat: ability.stat,
+          dice,
+          bonus,
+          offered: 0,
+          selected: 0,
+        };
+        group.offered++;
+        result.offers++;
+        if (chosen.has(ability.name)) {
+          group.selected++;
+          result.selections++;
+        }
+        groups.set(key, group);
+      }
+    }
+    result.rows = [...groups.values()].sort(
+      (a, b) =>
+        b.offered - a.offered ||
+        json([a.kind, a.effect, a.stat, a.dice, a.bonus]).localeCompare(
+          json([b.kind, b.effect, b.stat, b.dice, b.bonus]),
+        ),
+    );
+    return result;
+  }
   saveCharacter(ownerId: string, input: unknown) {
     const sheet = normalizeCharacter(characterSchema.parse(input));
+    if (sheet.abilityOptions && sheet.abilities.length !== 2)
+      throw new GameError('Choose one in-combat ability and one out-of-combat ability before saving.');
     const id = randomUUID();
     this.db
       .prepare('INSERT INTO characters(id, owner_id, sheet) VALUES(?, ?, ?)')
@@ -240,6 +319,8 @@ export class Game {
   }
   updateCharacter(ownerId: string, id: string, input: unknown) {
     const sheet = normalizeCharacter(characterSchema.parse(input));
+    if (sheet.abilityOptions && sheet.abilities.length !== 2)
+      throw new GameError('Choose one in-combat ability and one out-of-combat ability before saving.');
     const result = this.db
       .prepare('UPDATE characters SET sheet = ? WHERE id = ? AND owner_id = ?')
       .run(json(sheet), id, ownerId);
@@ -376,10 +457,84 @@ export class Game {
       this.db
         .prepare('UPDATE members SET replacement = ? WHERE id = ?')
         .run(replacement ? json(replacement) : null, member.id);
+      const row = this.pending(id);
+      if (replacement && member.state.respawnReady && row?.phase === 'collecting') {
+        const draft: Draft = {
+          members: this.members(id),
+          scene: JSON.parse(this.campaign(id).scene!),
+          receipts: {},
+        };
+        const replacingIds = draft.members
+          .filter(
+            (member) =>
+              member.active && isDead(member.state) && member.state.respawnReady && member.replacement,
+          )
+          .map((member) => member.id);
+        const arrivals = this.activateReplacements(id, row.id, draft);
+        const roster = JSON.parse(row.roster) as string[];
+        this.db
+          .prepare('UPDATE turns SET roster = ? WHERE id = ?')
+          .run(
+            json([
+              ...new Set([
+                ...roster,
+                ...replacingIds.filter((id) =>
+                  draft.members.some((member) => member.id === id && member.state.hp > 0),
+                ),
+              ]),
+            ]),
+            row.id,
+          );
+        this.recordArrivals(id, row.id, arrivals);
+        this.queueIfReady(id);
+      }
       this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
     })();
     this.emit(id);
+    this.kick(id);
     return this.snapshot(id, playerId);
+  }
+  private activateReplacements(id: string, turnId: string, draft: Draft) {
+    const arrivals: NonNullable<GMContext['arrivingCharacters']> = [];
+    if (
+      (draft.scene.encounter && !draft.scene.encounter.victory && !draft.scene.encounter.escaped) ||
+      !draft.members.some((member) => member.state.hp > 0)
+    )
+      return arrivals;
+    for (const member of draft.members) {
+      if (!isDead(member.state) || !member.state.respawnReady) continue;
+      const queued = this.db.prepare('SELECT replacement FROM members WHERE id = ?').get(member.id) as {
+        replacement: string | null;
+      };
+      if (!queued.replacement) continue;
+      const replacement = JSON.parse(queued.replacement) as NonNullable<Member['replacement']>;
+      this.db
+        .prepare("UPDATE turns SET draft = ? WHERE campaign_id = ? AND phase = 'complete' AND draft IS NULL")
+        .run(json({ members: this.members(id), scene: draft.scene, receipts: {} }), id);
+      this.db
+        .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
+        .run(
+          id,
+          turnId,
+          'character_replaced',
+          json({ member, replacementCharacterId: replacement.characterId }),
+        );
+      member.characterId = replacement.characterId;
+      member.character = replacement.character;
+      member.state = initialState(member.character, randomUUID());
+      member.replacement = null;
+      this.db
+        .prepare('UPDATE members SET state = ?, sheet = ?, character_id = ?, replacement = NULL WHERE id = ?')
+        .run(json(member.state), json(member.character), member.characterId, member.id);
+      arrivals.push({ playerName: member.playerName, character: member.character });
+    }
+    return arrivals;
+  }
+  private recordArrivals(id: string, turnId: string, arrivals: NonNullable<GMContext['arrivingCharacters']>) {
+    for (const arrival of arrivals)
+      this.db
+        .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
+        .run(id, turnId, 'character_joined', json(arrival));
   }
   members(id: string): Member[] {
     return (
@@ -420,6 +575,7 @@ export class Game {
           passed: number;
           accepts_lethal_risk: number;
           ability_name: string | null;
+          support_action: string | null;
         }[]
       ).map((a) => ({
         memberId: a.member_id,
@@ -427,6 +583,7 @@ export class Game {
         passed: !!a.passed,
         acceptsLethalRisk: !!a.accepts_lethal_risk,
         ...(a.ability_name ? { abilityName: a.ability_name } : {}),
+        ...(a.support_action ? { supportAction: JSON.parse(a.support_action) } : {}),
         ...(actors.find((member) => member.id === a.member_id)
           ? { characterName: actors.find((member) => member.id === a.member_id)!.character.name }
           : {}),
@@ -500,6 +657,7 @@ export class Game {
     passed: boolean,
     acceptsLethalRisk = false,
     abilityName: string | null = null,
+    supportAction: SupportAction | null = null,
   ) {
     this.db.transaction(() => {
       const row = this.pending(id);
@@ -509,6 +667,8 @@ export class Game {
       if (!member || !(JSON.parse(row.roster) as string[]).includes(member.id))
         throw new GameError('You join the action from the next turn.', 403);
       if (member.state.hp <= 0) throw new GameError('This character’s run has ended.');
+      if (this.turn(row).actions.find((action) => action.memberId === member.id)?.supportAction)
+        throw new GameError('Helping your ally has already used your action for this turn.');
       if (member.state.pendingLevelUps > 0)
         throw new GameError('Choose your level-up reward before taking another action.');
       if (!member.state.equipmentChosen) throw new GameError('Choose two starting equipment pieces first.');
@@ -516,17 +676,57 @@ export class Game {
       if (abilityName) {
         const scene: Scene = JSON.parse(this.campaign(id).scene!);
         const inCombat = scene.encounter && !scene.encounter.victory && !scene.encounter.escaped;
-        availableAbility(member.character, member.state, abilityName, inCombat ? 'combat' : 'utility');
+        const healingAbility = member.character.abilities.some(
+          (ability) =>
+            ability.name === abilityName &&
+            ability.kind === 'combat' &&
+            ['mend', 'cleanse'].includes(ability.effect),
+        );
+        availableAbility(
+          member.character,
+          member.state,
+          abilityName,
+          (inCombat && !member.state.conditions.includes('Escaped')) ||
+            healingAbility ||
+            (inCombat &&
+              member.character.abilities.some(
+                (ability) => ability.name === abilityName && ability.kind === 'combat',
+              ))
+            ? 'combat'
+            : 'utility',
+        );
       }
       this.db
         .prepare(
-          'INSERT INTO actions(turn_id, member_id, text, passed, accepts_lethal_risk, ability_name) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(turn_id, member_id) DO UPDATE SET text = excluded.text, passed = excluded.passed, accepts_lethal_risk = excluded.accepts_lethal_risk, ability_name = excluded.ability_name',
+          'INSERT INTO actions(turn_id, member_id, text, passed, accepts_lethal_risk, ability_name, support_action) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(turn_id, member_id) DO UPDATE SET text = excluded.text, passed = excluded.passed, accepts_lethal_risk = excluded.accepts_lethal_risk, ability_name = excluded.ability_name, support_action = excluded.support_action',
         )
-        .run(turnId, member.id, passed ? '' : text, +passed, +acceptsLethalRisk, abilityName);
+        .run(
+          turnId,
+          member.id,
+          passed ? '' : text,
+          +passed,
+          +acceptsLethalRisk,
+          abilityName,
+          supportAction ? json(supportAction) : null,
+        );
       this.queueIfReady(id);
+      this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
     })();
     this.emit(id);
     this.kick(id);
+  }
+  cancelAction(id: string, playerId: string, turnId: string) {
+    this.db.transaction(() => {
+      const row = this.pending(id);
+      if (!row || row.id !== turnId || row.phase !== 'collecting')
+        throw new GameError('That turn is already processing. Refresh to see the current turn.', 409);
+      const member = this.members(id).find((member) => member.playerId === playerId);
+      if (!member || !(JSON.parse(row.roster) as string[]).includes(member.id))
+        throw new GameError('You join the action from the next turn.', 403);
+      this.db.prepare('DELETE FROM actions WHERE turn_id = ? AND member_id = ?').run(turnId, member.id);
+      this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
+    })();
+    this.emit(id);
   }
   private queueIfReady(id: string) {
     const row = this.pending(id);
@@ -535,6 +735,50 @@ export class Game {
     const actions = this.turn(row).actions;
     if (roster.length && roster.every((memberId) => actions.some((a) => a.memberId === memberId)))
       this.db.prepare("UPDATE turns SET phase = 'queued' WHERE id = ? AND phase = 'collecting'").run(row.id);
+  }
+  private resolveSupport(id: string, turnId: string): SupportResult[] {
+    return this.withDraft(id, turnId, (draft) => {
+      if (draft.receipts.support) return draft.receipts.support as SupportResult[];
+      const results: SupportResult[] = [];
+      for (const action of this.turn(this.pending(id)!).actions) {
+        if (!action.supportAction) continue;
+        const support = action.supportAction;
+        const member = draft.members.find((member) => member.id === action.memberId)!;
+        const target = draft.members.find((member) => member.id === support.targetId)!;
+        const sourceName =
+          support.type === 'help-up'
+            ? 'Help up'
+            : member.state.inventory.find((item) => item.id === support.itemId)!.name;
+        let restored = 0;
+        let log: string;
+        try {
+          if (incapacitatingCondition(member.state))
+            throw new GameError('This character cannot use their main action while incapacitated.');
+          restored =
+            support.type === 'help-up'
+              ? helpUp(target.state)
+              : target.state.hp >= target.state.maxHp
+                ? 0
+                : healWithItem(member.character, member.state, support.itemId!, target);
+          log =
+            support.type === 'help-up'
+              ? `${member.character.name} helps ${target.character.name} up at 1 HP. They can act next turn.`
+              : `${member.character.name} uses ${sourceName} on ${target.character.name}, restoring ${restored} HP.`;
+        } catch (error) {
+          log = `${member.character.name}'s ${sourceName} has no effect: ${(error as Error).message}. The main action is spent.`;
+        }
+        results.push({
+          memberId: member.id,
+          targetId: target.id,
+          type: support.type,
+          sourceName,
+          restored,
+          log,
+        });
+      }
+      draft.receipts.support = results;
+      return results;
+    });
   }
   pause(id: string, playerId: string, paused: boolean) {
     this.db.transaction(() => {
@@ -603,6 +847,7 @@ export class Game {
     const action = turn.actions.find((action) => action.memberId === check.memberId && !action.passed);
     if (!action || turn.number === 0 || !turn.roster.includes(check.memberId))
       throw new GameError('Only a character acting this turn can make a check.');
+    if (action.supportAction) throw new GameError('Helping an ally uses this character’s main action.');
     if (action.abilityName && action.abilityName !== check.abilityName)
       throw new GameError('Use exactly the ability selected by the player.');
     // One immutable check per character. Retries reuse its dice and consumed ability use.
@@ -626,8 +871,13 @@ export class Game {
       if (scene.encounter && !scene.encounter.victory && !scene.encounter.escaped)
         throw new GameError('Use resolve_combat to adjudicate a combat round.');
       const member = draft.members.find((member) => member.id === check.memberId)!;
-      if (draft.receipts[`resource:ability:${member.id}`])
-        throw new GameError('This character has already spent their main action on a healing ability.');
+      if (incapacitatingCondition(member.state))
+        throw new GameError('This character cannot make a check while incapacitated.');
+      const itemUse = draft.receipts[`resource:item:${member.id}`] as ResourceReceipt | undefined;
+      if (draft.receipts[`resource:ability:${member.id}`] || (itemUse && itemUse.targetId !== member.id))
+        throw new GameError(
+          'This character has already spent their main action helping an ally or using a healing ability.',
+        );
       const requested = requestedAbility(member.character, action, 'utility', check.abilityName);
       if (check.abilityName && requested?.name !== check.abilityName)
         throw new GameError('Use a saved utility ability requested in the player’s action.');
@@ -646,7 +896,8 @@ export class Game {
       const bonus =
         modifier(member.state.stats[check.stat]) +
         equipmentBonus(member.state, check.stat, 'checkBonus') +
-        (ability ? abilityStrength(ability) : 0);
+        (ability ? abilityBonus(ability) : 0) -
+        ailmentCheckPenalty(member.state, check.stat);
       const total = selected + bonus;
       const result: Roll = {
         ...check,
@@ -753,6 +1004,7 @@ export class Game {
         turn.actions.some(
           (action) =>
             !action.passed &&
+            !incapacitatingCondition(draft.members.find((member) => member.id === action.memberId)!.state) &&
             !draft.receipts[`resource:ability:${action.memberId}`] &&
             requiresUtilityCheck(
               draft.members.find((member) => member.id === action.memberId)!.character,
@@ -771,6 +1023,8 @@ export class Game {
         turn.actions.some(
           (action) =>
             !action.passed &&
+            !action.supportAction &&
+            !incapacitatingCondition(draft.members.find((member) => member.id === action.memberId)!.state) &&
             !draft.receipts[`resource:item:${action.memberId}`] &&
             requestedConsumable(
               draft.members.find((member) => member.id === action.memberId)!,
@@ -809,8 +1063,16 @@ export class Game {
       const generated = enemies.map((e) => {
         const total = this.mechanicalDie(id, turnId, 20, `${e.name}: initiative`, e.id, 'DEX');
         initiative.push({ id: e.id, total });
-        return { ...e, maxHp: e.hp, initiative: total };
+        const equipment = rollEnemyLoot(
+          randomUUID(),
+          Math.max(1, ...draft.members.map((member) => member.state.level)),
+          e,
+          (sides, label) => this.mechanicalDie(id, turnId, sides, `${e.name}: ${label}`, e.id, 'INT'),
+          (JSON.parse(this.campaign(id).config) as CampaignConfig).language,
+        );
+        return { ...e, equipment, maxHp: e.hp, initiative: total };
       });
+      for (const member of draft.members) delete member.state.respawnReady;
       draft.scene.encounter = {
         enemies: generated,
         round: 1,
@@ -818,7 +1080,6 @@ export class Game {
         victory: false,
         escaped: false,
       };
-      for (const member of draft.members) resetAbilities(member.character, member.state, 'combat');
       draft.scene.safeRest = false;
       draft.receipts.startCombat = structuredClone(draft.scene.encounter);
       return draft.receipts.startCombat;
@@ -844,7 +1105,25 @@ export class Game {
       for (const action of parsed.actions) {
         const submitted = turn.actions.find((submitted) => submitted.memberId === action.memberId)!;
         const member = draft.members.find((member) => member.id === action.memberId)!;
-        const ability = requestedAbility(member.character, submitted, 'combat', action.abilityName);
+        if (submitted.supportAction) {
+          const support = submitted.supportAction;
+          if (
+            action.main !== (support.type === 'help-up' ? 'help-up' : 'heal') ||
+            action.targetId !== support.targetId ||
+            action.mainItemId !== (support.type === 'heal-ally' ? support.itemId : null) ||
+            action.minor !== 'none'
+          )
+            throw new GameError('Resolve exactly the ally support action selected by the player.');
+        }
+        const kind =
+          member.state.conditions.includes('Escaped') &&
+          !action.reengage &&
+          member.character.abilities.some(
+            (ability) => ability.name === action.abilityName && ability.kind === 'utility',
+          )
+            ? 'utility'
+            : 'combat';
+        const ability = requestedAbility(member.character, submitted, kind, action.abilityName);
         if (
           (action.abilityName ?? null) !== (ability?.name ?? null) ||
           (action.main === 'ability') !== !!ability
@@ -874,15 +1153,30 @@ export class Game {
         this.mechanicalDie(id, turnId, sides, label, actor, stat, bonus, dc),
       );
       if (draft.scene.encounter.victory) {
-        const loot = randomLoot(
-          randomUUID(),
-          draft.scene.floor,
-          (sides) => this.mechanicalDie(id, turnId, sides, 'Loot generation', 'world', 'INT'),
-          parsed.loot,
+        logs.push(
+          ...recoverAfterEncounter(
+            draft.members.filter((member) => member.active && !active.includes(member)),
+          ),
         );
-        offerGroundItem(draft.scene, loot);
-        draft.scene.floor.encounters++;
-        if (draft.scene.encounter.enemies.some((e) => e.tier === 'boss')) draft.scene.floor.cleared = true;
+        for (const enemy of draft.scene.encounter.enemies.filter((enemy) => enemy.hp === 0)) {
+          // Older saved encounters predate enemy equipment.
+          const equipment = enemy.equipment?.length
+            ? enemy.equipment
+            : [
+                {
+                  ...baseItem(randomUUID(), `${enemy.name}'s weapon`.slice(0, 100), 'weapon'),
+                  damage: enemy.damage,
+                },
+              ];
+          for (const loot of equipment) {
+            offerGroundItem(draft.scene, loot);
+            logs.push(`${enemy.name} drops ${loot.name}. It is available as scene loot.`);
+          }
+          enemy.equipment = [];
+        }
+        draft.scene.encounters++;
+        draft.scene.usedRest = false;
+        for (const member of draft.members) if (isDead(member.state)) member.state.respawnReady = true;
       }
       const receipt: CombatReceipt = {
         logs,
@@ -925,8 +1219,19 @@ export class Game {
       const target = draft.members.find((member) => member.id === targetId);
       if (!target) throw new GameError('Choose an ally in this campaign.');
       if (member.state.hp <= 0) throw new GameError('Only a conscious character can use a resource.');
+      const incapacitated = incapacitatingCondition(member.state);
+      if (incapacitated && (incapacitated !== 'Stunned' || use.abilityName || targetId !== member.id))
+        throw new GameError('This character cannot use that action while incapacitated.');
+      if (action.supportAction)
+        throw new GameError('This support action has already been resolved by the server.');
+      if (
+        (use.abilityName || targetId !== member.id) &&
+        turn.rolls.some((roll) => roll.memberId === member.id && !roll.notation)
+      )
+        throw new GameError('This character has already spent their main action on a check.');
       if (isDead(target.state)) throw new GameError('A dead character cannot be healed.');
       let restored = 0;
+      const originalConditions = [...target.state.conditions];
       let sourceName: string;
       if (use.itemId) {
         const item = member.state.inventory.find((item) => item.id === use.itemId);
@@ -956,6 +1261,9 @@ export class Game {
         targetId,
         sourceName,
         restored,
+        cured: originalConditions.filter(
+          (condition) => isAilment(condition) && !target.state.conditions.includes(condition),
+        ),
         state: structuredClone(member.state),
         targetState: structuredClone(target.state),
       };
@@ -981,7 +1289,7 @@ export class Game {
       if (draft.receipts.combat) throw new GameError('Combat rewards have already been offered.');
       const item = randomLoot(
         randomUUID(),
-        draft.scene.floor,
+        Math.max(1, ...draft.members.map((member) => member.state.level)),
         (sides) => this.mechanicalDie(id, turnId, sides, 'Exploration loot rarity', 'world', 'INT'),
         blueprint,
       );
@@ -1010,9 +1318,9 @@ export class Game {
         throw new GameError(
           'A completed challenge needs a successful check this turn; a boss equivalent requires DC 15 or higher.',
         );
-      draft.scene.floor.encounters++;
+      if (draft.receipts.combat) throw new GameError('Combat already completed this encounter.');
+      draft.scene.encounters++;
       if (input.bossEquivalent) {
-        draft.scene.floor.cleared = true;
         draft.receipts.bossReward = 100;
         for (const member of draft.members)
           if (member.state.hp > 0 && turn.roster.includes(member.id)) {
@@ -1020,9 +1328,13 @@ export class Game {
             member.state.bosses++;
           }
       }
+      const recovery = recoverAfterEncounter(draft.members.filter((member) => member.active));
+      for (const member of draft.members) if (isDead(member.state)) member.state.respawnReady = true;
+      draft.scene.safeRest = true;
+      draft.scene.usedRest = false;
       draft.receipts.challenge = {
         reason: input.reason,
-        floorCleared: draft.scene.floor.cleared,
+        recovery,
         xp: input.bossEquivalent ? 100 : 0,
         members: draft.members.filter((m) => turn.roster.includes(m.id)),
       };
@@ -1054,10 +1366,12 @@ export class Game {
     const budgets = new Map<string, number>();
     for (const change of outcome.changes) {
       const member = draft.members.find((member) => member.id === change.memberId);
-      if (!member || !turn.roster.includes(member.id))
+      const removingCondition = change.type === 'condition' && change.remove;
+      if (!member || (!turn.roster.includes(member.id) && !(removingCondition && member.active)))
         throw new GameError('The GM referenced a character outside this turn.');
       if (isDead(member.state)) throw new GameError('Permadeath cannot be undone by narrative changes.');
-      if (isDowned(member.state)) throw new GameError('A downed character needs healing from an ally.');
+      if (isDowned(member.state) && !removingCondition)
+        throw new GameError('A downed character needs healing from an ally.');
       if (change.type === 'hp') {
         if (change.amount > 0)
           throw new GameError(
@@ -1073,16 +1387,37 @@ export class Game {
         );
       if (change.type === 'condition' && change.name.toLowerCase() === 'downed')
         throw new GameError('The rules engine controls downing and revival.');
+      if (removingCondition && isAilment(change.name)) {
+        const actors = turn.actions.filter((action) => {
+          const actor = draft.members.find((candidate) => candidate.id === action.memberId)!;
+          return (
+            !action.passed &&
+            !action.supportAction &&
+            !incapacitatingCondition(actor.state) &&
+            !action.abilityName &&
+            !draft.receipts[`resource:ability:${actor.id}`] &&
+            (actor.id === member.id ||
+              action.text.toLowerCase().includes(member.character.name.toLowerCase())) &&
+            !turn.rolls.some((roll) => roll.memberId === actor.id && !roll.notation && !roll.success)
+          );
+        });
+        if (!actors.length)
+          throw new GameError(
+            'Removing an ailment requires an available submitted treatment action with a successful check when risky.',
+          );
+      }
     }
     const unresolved = turn.actions.filter((action) => {
       if (
         action.passed ||
         draft.receipts.combat ||
         (combatActive && !draft.receipts.startCombat) ||
+        action.supportAction ||
         draft.receipts[`resource:ability:${action.memberId}`]
       )
         return false;
       const member = draft.members.find((member) => member.id === action.memberId)!;
+      if (incapacitatingCondition(member.state)) return false;
       const ability = requestedAbility(member.character, action, 'utility');
       return (
         requiresUtilityCheck(member.character, action) &&
@@ -1101,7 +1436,13 @@ export class Game {
     if (!combatActive && !draft.receipts.combat)
       for (const action of turn.actions) {
         const member = draft.members.find((member) => member.id === action.memberId)!;
-        if (action.passed || member.state.hp <= 0) continue;
+        if (
+          action.passed ||
+          action.supportAction ||
+          member.state.hp <= 0 ||
+          incapacitatingCondition(member.state)
+        )
+          continue;
         const item = requestedConsumable(member, action);
         if (item && !draft.receipts[`resource:item:${member.id}`])
           throw new GameError(
@@ -1109,7 +1450,8 @@ export class Game {
           );
         const ability = requestedAbility(member.character, action, 'combat');
         if (
-          ability?.effect !== 'mend' ||
+          !ability ||
+          !['mend', 'cleanse'].includes(ability.effect) ||
           draft.receipts[`resource:ability:${member.id}`] ||
           (member.state.abilityUses?.[ability.name] ?? 0) >= 1 ||
           turn.rolls.some((roll) => roll.memberId === member.id && !!roll.abilityName)
@@ -1122,7 +1464,13 @@ export class Game {
           ) ?? member;
         const healing =
           target.character.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal';
-        if (!isDead(target.state) && target.state.hp < target.state.maxHp && healing === ability.healing)
+        if (
+          !isDead(target.state) &&
+          (ability.effect === 'cleanse'
+            ? matchingCures(ability, target.state).length > 0
+            : (target.state.hp < target.state.maxHp || matchingCures(ability, target.state).length > 0) &&
+              healing === ability.healing)
+        )
           throw new GameError(
             `Execute ${member.character.name}'s requested ${ability.name} through use_resource.`,
           );
@@ -1216,14 +1564,40 @@ export class Game {
         }
         if (change.type === 'condition') {
           if (change.remove) {
-            state.conditions = state.conditions.filter((c) => c !== change.name);
-            delete state.conditionTurns[change.name];
-          } else if (
-            !member.character.traits.some((t) => t.immunities.some((condition) => condition === change.name))
-          ) {
-            if (!state.conditions.includes(change.name)) state.conditions.push(change.name);
-            state.conditionTurns[change.name] = 2;
-          }
+            removeCondition(state, change.name);
+          } else applyCondition(state, change.name, member.character);
+        }
+      }
+      // Combat receipts have already advanced ailments; only committed noncombat turns tick here.
+      if (row.number > 0 && !draft.receipts.combat) {
+        const actions = this.turn(row).actions;
+        const logs = draft.members
+          .filter((member) => member.active)
+          .flatMap((member) => {
+            const action = actions.find((action) => action.memberId === member.id);
+            // ponytail: common English/Dutch movement intents; no full natural-language parser.
+            const moving =
+              !!action &&
+              !action.passed &&
+              !incapacitatingCondition(member.state) &&
+              !action.abilityName &&
+              !action.supportAction &&
+              /\b(?:move|walk|run|flee|escape|crawl|climb|jump|loop|ren|vlucht|ontsnap|kruip|klim|spring|beweeg)\b/i.test(
+                action.text,
+              ) &&
+              !/\b(?:do not|don't|won't|will not|niet|geen)\b/i.test(action.text);
+            return tickConditions(member, moving);
+          });
+        draft.receipts.ailments = logs;
+        if (logs.length) {
+          const context = {
+            config: JSON.parse(this.campaign(id).config) as CampaignConfig,
+            members: draft.members,
+            turn: this.turn(row),
+          };
+          const facts = logs.map((log) => combatFact(context, log)).join('\n');
+          outcome.narration += `\n\n${facts}`;
+          outcome.summary += `\n\n${facts}`;
         }
       }
       for (const member of draft.members) {
@@ -1237,62 +1611,30 @@ export class Game {
           member.state.gold += outcome.gold;
         }
       }
+      const previousMembers = this.members(id);
+      const xpRewards = draft.members.flatMap((member) => {
+        const previous = previousMembers.find((saved) => saved.id === member.id)!;
+        const gained =
+          (member.state.level - previous.state.level) * 100 + member.state.xp - previous.state.xp;
+        return gained > 0 ? [`${member.character.name}: +${gained} XP.`] : [];
+      });
+      if (xpRewards.length) {
+        const dutch = (JSON.parse(this.campaign(id).config) as CampaignConfig).language === 'Nederlands';
+        outcome.summary += `\n\n${dutch ? 'XP-beloningen' : 'XP rewards'}:\n${xpRewards.join('\n')}`;
+      }
       // Keep the actors' identities even when a new life reuses their membership.
       const completedDraft = json(draft);
-      if (outcome.nextFloor) {
-        if (draft.members.some((m) => m.active && m.state.hp > 0 && m.state.pendingLevelUps > 0))
-          throw new GameError('Choose all level-up rewards before changing floors.');
+      if (outcome.location) {
         if (combatActive)
           throw new GameError('The party cannot leave an active combat through a narrative update.');
-        if (row.number > 0 && !draft.scene.floor.cleared)
-          throw new GameError('Resolve the floor boss or equivalent challenge before changing floors.');
-        const departedFloor = draft.scene.floor.number;
-        draft.scene.floor = {
-          number: row.number === 0 ? 1 : draft.scene.floor.number + 1,
-          ...outcome.nextFloor,
-          encounters: 0,
-          cleared: false,
-        };
-        draft.scene.encounter = null;
-        draft.scene.usedRest = false;
-        draft.scene.safeRest = false;
-        draft.scene.loot = [];
-        if (row.number > 0 && draft.members.some((member) => member.state.hp > 0)) {
-          for (const member of draft.members.filter((member) => isDead(member.state))) {
-            // Read the latest queue at the boundary; a turn draft may predate the player's choice.
-            const queued = this.db.prepare('SELECT replacement FROM members WHERE id = ?').get(member.id) as {
-              replacement: string | null;
-            };
-            if (!queued.replacement) continue;
-            const replacement = JSON.parse(queued.replacement) as NonNullable<Member['replacement']>;
-            // Older completed turns may lack a draft; preserve their actor names before changing a sheet.
-            this.db
-              .prepare(
-                "UPDATE turns SET draft = ? WHERE campaign_id = ? AND phase = 'complete' AND draft IS NULL",
-              )
-              .run(json({ members: this.members(id), scene: draft.scene, receipts: {} }), id);
-            this.db
-              .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
-              .run(
-                id,
-                turnId,
-                'character_replaced',
-                json({ member, floor: departedFloor, replacementCharacterId: replacement.characterId }),
-              );
-            member.characterId = replacement.characterId;
-            member.character = replacement.character;
-            member.state = initialState(member.character, randomUUID());
-            member.replacement = null;
-            this.db.prepare('UPDATE members SET replacement = NULL WHERE id = ?').run(member.id);
-            const language = (JSON.parse(this.campaign(id).config) as CampaignConfig).language;
-            outcome.narration +=
-              language === 'Nederlands'
-                ? `\n\n${member.character.name} sluit zich op floor ${draft.scene.floor.number} aan bij de groep als nieuw personage van level 1, met een nieuwe startuitrusting.`
-                : `\n\n${member.character.name} joins the party on floor ${draft.scene.floor.number} as a new level-1 character with fresh starting equipment.`;
-          }
-        }
-        for (const member of draft.members) resetAbilities(member.character, member.state, 'utility');
+        draft.scene.location = outcome.location;
       }
+      const successfulEncounter =
+        !!draft.receipts.challenge ||
+        !!(draft.receipts.combat as CombatReceipt | undefined)?.encounter.victory;
+      if (successfulEncounter)
+        for (const member of draft.members) if (isDead(member.state)) member.state.respawnReady = true;
+      const arrivals = this.activateReplacements(id, turnId, draft);
       if (outcome.safeRest && !combatActive) {
         draft.scene.safeRest = true;
       }
@@ -1323,7 +1665,10 @@ export class Game {
       this.db
         .prepare('UPDATE campaigns SET version = version + 1, scene = ?, status = ? WHERE id = ?')
         .run(json(draft.scene), ended ? 'ended' : 'active', id);
-      if (!ended) this.newTurn(id, row.number + 1, 'collecting');
+      if (!ended) {
+        this.newTurn(id, row.number + 1, 'collecting');
+        this.recordArrivals(id, this.pending(id)!.id, arrivals);
+      }
     })();
   }
   manageCharacter(
@@ -1354,10 +1699,17 @@ export class Game {
       const state = member.state;
       if (action.dropItemIds?.length && !['take', 'take-equip'].includes(action.type))
         throw new GameError('Choose items to drop only when taking scene loot.');
-      const inCombat = scene.encounter && !scene.encounter.victory && !scene.encounter.escaped;
+      const inCombat = isInCombat(scene, state);
+      if (
+        scene.encounter &&
+        !scene.encounter.victory &&
+        !scene.encounter.escaped &&
+        ['take', 'take-equip'].includes(action.type)
+      )
+        throw new GameError('Scene loot can only be taken outside combat, after the encounter ends.');
       if (inCombat && ['equip', 'unequip', 'take', 'take-equip', 'drop'].includes(action.type))
         throw new GameError('Equipment can only be changed outside combat.');
-      if (inCombat && ['heal', 'rest'].includes(action.type))
+      if (inCombat && (action.type === 'rest' || (action.type === 'heal' && action.abilityName)))
         throw new GameError('During combat, describe this as your main or minor action in chat.');
       const before = equippedItems(state);
       const source = action.itemId
@@ -1371,33 +1723,96 @@ export class Game {
       } else if (action.type === 'equip' && action.itemId && action.slot)
         equip(member.character, state, action.itemId, action.slot);
       else if (action.type === 'unequip' && action.slot) unequip(member.character, state, action.slot);
-      else if (action.type === 'heal') {
+      else if (action.type === 'help-up' || action.type === 'heal') {
+        const incapacitated = incapacitatingCondition(state);
+        if (
+          incapacitated &&
+          (incapacitated !== 'Stunned' ||
+            action.type === 'help-up' ||
+            action.abilityName ||
+            (action.targetId && action.targetId !== member.id))
+        )
+          throw new GameError('This character cannot use that action while incapacitated.');
         const target = action.targetId ? members.find((m) => m.id === action.targetId) : member;
         if (!target) throw new GameError('Choose an ally in this campaign.');
+        if (!canInteract(scene, state, target.state))
+          throw new GameError(
+            'Escaped characters cannot interact with party members still in combat. Rejoin the fight first.',
+          );
+        if (action.type === 'help-up' || (action.itemId && target.id !== member.id)) {
+          if (!row || c.status !== 'active' || !JSON.parse(row.roster).includes(member.id))
+            throw new GameError('Helping an ally requires your action in an active turn.');
+          if (target.id === member.id || !target.active || isDead(target.state))
+            throw new GameError(
+              isDead(target.state)
+                ? 'A dead character cannot be healed.'
+                : 'Choose a living ally in this campaign.',
+            );
+          if (action.type === 'help-up') helpUp(structuredClone(target.state));
+          else {
+            if (target.state.hp >= target.state.maxHp)
+              throw new GameError('The target is already at full health.');
+            healWithItem(member.character, structuredClone(state), action.itemId!, {
+              character: target.character,
+              state: structuredClone(target.state),
+            });
+          }
+          const dutch = (JSON.parse(c.config) as CampaignConfig).language === 'Nederlands';
+          const text =
+            action.type === 'help-up'
+              ? dutch
+                ? `Ik help ${target.character.name} overeind.`
+                : `I help up ${target.character.name}.`
+              : dutch
+                ? `Ik gebruik ${source!.name} op ${target.character.name}.`
+                : `Use ${source!.name} on ${target.character.name}.`;
+          this.submit(
+            id,
+            playerId,
+            row.id,
+            text,
+            false,
+            false,
+            null,
+            action.type === 'help-up'
+              ? { type: 'help-up', targetId: target.id }
+              : { type: 'heal-ally', targetId: target.id, itemId: action.itemId! },
+          );
+          this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
+          return;
+        }
+        if (action.abilityName) {
+          if (!row || c.status !== 'active') throw new GameError('Healing abilities require an active turn.');
+          const ability = availableAbility(member.character, state, action.abilityName, 'combat');
+          if (!['mend', 'cleanse'].includes(ability.effect))
+            throw new GameError('Choose a healing or cleansing ability.');
+          if (isDead(target.state)) throw new GameError('A dead character cannot be healed.');
+          if (ability.effect === 'cleanse' && !matchingCures(ability, target.state).length)
+            throw new GameError('The target has no matching ailment.');
+          if (
+            ability.effect === 'mend' &&
+            target.state.hp >= target.state.maxHp &&
+            !matchingCures(ability, target.state).length
+          )
+            throw new GameError('The target is already at full health.');
+          const healingMode =
+            target.character.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal';
+          if (ability.effect === 'mend' && healingMode !== ability.healing)
+            throw new GameError('This healing ability is incompatible with the target.');
+          this.submit(
+            id,
+            playerId,
+            row.id,
+            `Use ${ability.name} on ${target.character.name}.`,
+            false,
+            false,
+            ability.name,
+          );
+          return;
+        }
         if (!!action.itemId === !!action.abilityName)
           throw new GameError('Choose a healing item or a healing ability.');
-        const wasDowned = isDowned(target.state);
-        if (action.itemId) healWithItem(member.character, state, action.itemId, target);
-        else {
-          if (!row || c.status !== 'active') throw new GameError('Healing abilities require an active run.');
-          const receiptKey = `healing:${randomUUID()}`;
-          mendWithAbility(
-            member.character,
-            state,
-            action.abilityName!,
-            target,
-            (sides, label, _actor, stat, bonus, dc) =>
-              this.mechanicalDie(id, row.id, sides, label, member.id, stat, bonus, dc, receiptKey),
-          );
-        }
-        this.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(json(target.state), target.id);
-        if (wasDowned && target.active && row) {
-          const roster = JSON.parse(row.roster) as string[];
-          if (!roster.includes(target.id))
-            this.db
-              .prepare('UPDATE turns SET roster = ? WHERE id = ?')
-              .run(json([...roster, target.id]), row.id);
-        }
+        healWithItem(member.character, state, action.itemId!, target);
       } else if (action.type === 'drop' && action.itemId) {
         const item = removeItem(state, action.itemId);
         offerGroundItem(scene, item);
@@ -1412,11 +1827,10 @@ export class Game {
           action.dropItemIds,
         );
       } else if (action.type === 'rest') {
-        if (!scene.safeRest || state.restedFloor === scene.floor.number)
+        if (!scene.safeRest || state.restedEncounter === scene.encounters)
           throw new GameError('A safe rest is not available.');
         state.hp = Math.min(state.maxHp, state.hp + Math.ceil(state.maxHp / 4));
-        state.restedFloor = scene.floor.number;
-        resetAbilities(member.character, state, 'utility');
+        state.restedEncounter = scene.encounters;
       } else throw new GameError('Unknown character action.');
       if (row && ['equip', 'unequip', 'take', 'take-equip', 'drop'].includes(action.type)) {
         const dutch = (JSON.parse(c.config) as CampaignConfig).language === 'Nederlands';
@@ -1462,6 +1876,7 @@ export class Game {
         .run(json(scene), id);
     })();
     this.emit(id);
+    this.kick(id);
     return this.snapshot(id, playerId);
   }
   async levelUp(id: string, playerId: string, input: unknown) {
@@ -1501,7 +1916,10 @@ export class Game {
         state: member.state,
         choice,
         target: member.character.abilities[targetIndex] ?? null,
-        attributes: choice === 'attributes' ? [stats[this.die(id, 3) - 1], stats[this.die(id, 3) - 1]] : [],
+        attributes:
+          choice === 'attributes'
+            ? [stats[this.die(id, stats.length) - 1], stats[this.die(id, stats.length) - 1]]
+            : [],
       };
       const reward = validateLevelUpReward(context, await provider.levelUp(structuredClone(context)));
       this.db.transaction(() => {
@@ -1554,6 +1972,13 @@ export class Game {
           pendingReplacements: s.members
             .filter((member) => isDead(member.state) && member.replacement)
             .map((member) => ({ playerName: member.playerName, character: member.replacement!.character })),
+          arrivingCharacters: (
+            this.db
+              .prepare(
+                "SELECT payload FROM events WHERE turn_id = ? AND kind = 'character_joined' ORDER BY id",
+              )
+              .all(row.id) as { payload: string }[]
+          ).map((event) => JSON.parse(event.payload)),
           turn: s.turn!,
           history: s.history.slice(-12).map((t) => ({ summary: t.result!.summary })),
           journal: s.journal,
@@ -1571,6 +1996,7 @@ export class Game {
           context.resourceUses = Object.entries(saved.receipts)
             .filter(([key]) => key.startsWith('resource:'))
             .map(([, receipt]) => receipt as ResourceReceipt);
+          context.recoveryLogs = (saved.receipts.challenge as { recovery?: string[] } | undefined)?.recovery;
         }
         if (
           saved?.receipts.combat ||
@@ -1578,18 +2004,15 @@ export class Game {
         ) {
           let receipt = saved?.receipts.combat as CombatReceipt | undefined;
           if (!receipt) {
-            let plan = saved?.receipts.combatInput as CombatInput | undefined;
-            if (!plan) {
-              const suggested = await provider.planCombat?.(context);
-              plan = this.withDraft(id, row.id, (draft) => {
-                const input = normalizeCombatInput(
-                  { ...context, scene: draft.scene, members: draft.members },
-                  suggested,
-                );
-                draft.receipts.combatInput = input;
-                return input;
-              });
-            }
+            const suggested = saved?.receipts.combatInput ?? (await provider.planCombat?.(context));
+            const plan = this.withDraft(id, row.id, (draft) => {
+              const input = normalizeCombatInput(
+                { ...context, scene: draft.scene, members: draft.members },
+                suggested,
+              );
+              draft.receipts.combatInput = input;
+              return input;
+            });
             receipt = this.combat(id, row.id, plan);
           }
           const resolved = this.pending(id)!;
@@ -1603,16 +2026,43 @@ export class Game {
               receipt.characters.some((character) => character.id === member.id),
           );
           context.turn = this.turn(resolved);
+        } else if (context.turn.actions.some((action) => action.supportAction)) {
+          context.supportResults = this.resolveSupport(id, row.id);
+          const resolved = this.pending(id)!;
+          const draft: Draft = JSON.parse(resolved.draft!);
+          context.members = draft.members.filter(
+            (member) =>
+              context.turn.roster.includes(member.id) ||
+              isDowned(member.state) ||
+              context.supportResults!.some((result) => result.targetId === member.id),
+          );
+          context.scene = draft.scene;
+          context.turn = this.turn(resolved);
         }
-        const tools: GameTools = Object.assign((input: Check) => this.roll(id, row.id, input), {
-          startCombat: (enemies: unknown) => this.startCombat(id, row.id, enemies),
-          combat: (input: CombatInput) => this.combat(id, row.id, input),
-          offerLoot: (input: { item: LootBlueprint; reason: string }) => this.offerLoot(id, row.id, input),
-          completeChallenge: (input: { memberId: string; reason: string; bossEquivalent: boolean }) =>
-            this.completeChallenge(id, row.id, input),
-          useResource: (input: ResourceUse) => this.useResource(id, row.id, input),
-          validateResolution: (outcome: Outcome) => this.validateResolution(id, row.id, outcome),
-        });
+        const refreshContext = <T>(result: T): T => {
+          const resolved = this.pending(id)!;
+          if (!resolved.draft) return result;
+          const draft: Draft = JSON.parse(resolved.draft);
+          const participantIds = new Set(context.members.map((member) => member.id));
+          context.members = draft.members.filter(
+            (member) => participantIds.has(member.id) || isDowned(member.state),
+          );
+          context.scene = draft.scene;
+          context.turn = this.turn(resolved);
+          return result;
+        };
+        const tools: GameTools = Object.assign(
+          (input: Check) => refreshContext(this.roll(id, row.id, input)),
+          {
+            startCombat: (enemies: unknown) => this.startCombat(id, row.id, enemies),
+            combat: (input: CombatInput) => this.combat(id, row.id, input),
+            offerLoot: (input: { item: LootBlueprint; reason: string }) => this.offerLoot(id, row.id, input),
+            completeChallenge: (input: { memberId: string; reason: string; bossEquivalent: boolean }) =>
+              refreshContext(this.completeChallenge(id, row.id, input)),
+            useResource: (input: ResourceUse) => refreshContext(this.useResource(id, row.id, input)),
+            validateResolution: (outcome: Outcome) => this.validateResolution(id, row.id, outcome),
+          },
+        );
         const result = await provider.resolve(context, tools);
         this.commit(id, row.id, result);
       } catch (error) {

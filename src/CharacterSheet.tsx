@@ -1,5 +1,12 @@
-import { type Character, type CharacterState, type Item, stats, slots } from '../shared/schema';
-import { abilityMechanics, chooseStartingEquipment, initialState } from '../shared/rules';
+import { type Ability, type Character, type CharacterState, type Item, stats, slots } from '../shared/schema';
+import {
+  abilityMechanics,
+  abilityPowerSummary,
+  characterDrawbacks,
+  chooseStartingEquipment,
+  initialState,
+  modifier,
+} from '../shared/rules';
 
 export const slotLabels = {
   left: 'Left hand',
@@ -72,12 +79,16 @@ export function Abilities({
           </span>
           <h4>{ability.name}</h4>
           <p className="ability-mechanics">{abilityMechanics(ability)}</p>
+          {abilityPowerSummary(ability, state?.stats ?? character.stats) && (
+            <p className="small ability-power">
+              {abilityPowerSummary(ability, state?.stats ?? character.stats)}
+            </p>
+          )}
           <p>{ability.description}</p>
           {state && (
             <small className="ability-uses">
-              {ability.kind === 'combat' && !inCombat
-                ? 'Ready for the next combat'
-                : `${(state.abilityUses?.[ability.name] ?? 0) >= 1 ? 0 : 1}/1 uses remaining`}
+              {(state.abilityUses?.[ability.name] ?? 0) >= 1 ? 0 : 1}/1 uses remaining · Regain one after a
+              successful encounter
             </small>
           )}
           {onSelect && (
@@ -87,7 +98,13 @@ export function Abilities({
               aria-pressed={selected === ability.name}
               disabled={
                 disabled ||
-                ability.kind !== (inCombat ? 'combat' : 'utility') ||
+                (ability.kind !== (inCombat ? 'combat' : 'utility') &&
+                  !state?.conditions.includes('Escaped') &&
+                  !(
+                    !inCombat &&
+                    ability.kind === 'combat' &&
+                    ['mend', 'cleanse'].includes(ability.effect)
+                  )) ||
                 (state?.abilityUses?.[ability.name] ?? 0) >= 1
               }
               onClick={() => onSelect(selected === ability.name ? null : ability.name)}
@@ -186,7 +203,70 @@ export function EquipmentChoices({
   );
 }
 
-export function CharacterSheet({ character }: { character: Character }) {
+export function AbilityChoices({
+  character,
+  onChange,
+  disabled = false,
+}: {
+  character: Character;
+  onChange: (abilities: Ability[]) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <section className="ability-selection">
+      <h3>Choose your starting abilities</h3>
+      <p className="muted small">
+        Select 1 of 2 in-combat abilities and 1 of 2 out-of-combat abilities · {character.abilities.length}/2
+        selected.
+      </p>
+      {(['combat', 'utility'] as const).map((kind) => (
+        <div key={kind} className="ability-choice-group">
+          <h4>{kind === 'combat' ? 'In combat' : 'Out of combat'}</h4>
+          <div className="ability-grid ability-choices">
+            {character.abilityOptions
+              ?.filter((a) => a.kind === kind)
+              .map((ability) => {
+                const selected = character.abilities.some((a) => a.name === ability.name);
+                return (
+                  <button
+                    type="button"
+                    className="ability-card"
+                    key={ability.name}
+                    aria-pressed={selected}
+                    disabled={disabled}
+                    onClick={() =>
+                      onChange(
+                        [
+                          ...character.abilities.filter((a) => a.kind !== kind),
+                          ...(selected ? [] : [ability]),
+                        ].sort((a, b) => a.kind.localeCompare(b.kind)),
+                      )
+                    }
+                  >
+                    <b>{ability.name}</b>
+                    <p className="ability-mechanics">{abilityMechanics(ability)}</p>
+                    {abilityPowerSummary(ability, character.stats) && (
+                      <p className="small ability-power">{abilityPowerSummary(ability, character.stats)}</p>
+                    )}
+                    <p>{ability.description}</p>
+                    <span>{selected ? 'Selected' : 'Choose ability'}</span>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+export function CharacterSheet({
+  character,
+  showAbilities = true,
+}: {
+  character: Character;
+  showAbilities?: boolean;
+}) {
   return (
     <article className="character-sheet">
       <header>
@@ -240,10 +320,40 @@ export function CharacterSheet({ character }: { character: Character }) {
           ))}
         </div>
       </section>
-      <section>
-        <h3>Abilities</h3>
-        <Abilities character={character} />
-      </section>
+      {character.creationBonuses && (
+        <section className="small creation-compensation">
+          {character.creationBonuses.version === 2 && characterDrawbacks(character).length > 0 && (
+            <p>
+              Drawbacks:{' '}
+              {characterDrawbacks(character)
+                .map((d) => `${d.label} (${d.severity === 2 ? 'major' : 'minor'})`)
+                .join(' · ')}
+            </p>
+          )}
+          <p>
+            Drawback compensation:{' '}
+            {[
+              ...stats
+                .filter((stat) => character.creationBonuses!.attributes.includes(stat))
+                .map((stat) => {
+                  const points = character.creationBonuses!.attributes.filter((s) => s === stat).length;
+                  const gain = modifier(character.stats[stat]) - modifier(character.stats[stat] - points);
+                  return `+${points} ${stat}${character.creationBonuses!.version === 2 ? ` (+${gain} ${stat} modifier)` : ''}`;
+                }),
+              character.creationBonuses.abilityPower > 0 &&
+                `+${character.creationBonuses.abilityPower} power to either combat ability`,
+            ]
+              .filter(Boolean)
+              .join(' · ') || 'No mechanical drawbacks or compensation.'}
+          </p>
+        </section>
+      )}
+      {showAbilities && (
+        <section>
+          <h3>Abilities</h3>
+          <Abilities character={character} />
+        </section>
+      )}
       <p className="small muted">Starting healing item: {character.healingItemName}</p>
     </article>
   );

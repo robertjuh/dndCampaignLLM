@@ -20,7 +20,7 @@ export function openDatabase(filename: string) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 7) throw new Error('This database was created by a newer Gather version.');
+  if (version > 8) throw new Error('This database was created by a newer Gather version.');
   if (version === 0)
     db.transaction(() => {
       db.exec(`
@@ -115,7 +115,7 @@ export function openDatabase(filename: string) {
       const bestStat = (scores: Record<Stat, number>) =>
         stats.reduce((best, stat) => (scores[stat] > scores[best] ? stat : best), 'INT' as Stat);
       const migrateItem = <T extends Item>(item: T, fallback: Stat): T => {
-        const power = { Common: 1, Uncommon: 1, Rare: 2, Epic: 2, Legendary: 3, Cursed: 2 }[item.rarity];
+        const power = { Common: 1, Uncommon: 1, Rare: 2, Legendary: 3, Cursed: 2 }[item.rarity];
         return {
           ...item,
           scaling: ['focus', 'relic'].includes(item.kind) && !item.scaling.length ? [fallback] : item.scaling,
@@ -197,6 +197,74 @@ export function openDatabase(filename: string) {
   if (version < 7)
     db.transaction(() => {
       db.exec('ALTER TABLE members ADD COLUMN replacement TEXT; PRAGMA user_version = 7;');
+    })();
+  if (version < 8)
+    db.transaction(() => {
+      const columns = db.prepare('PRAGMA table_info(actions)').all() as { name: string }[];
+      if (!columns.some((column) => column.name === 'support_action'))
+        db.exec('ALTER TABLE actions ADD COLUMN support_action TEXT;');
+      // Migrate nested turn receipts too, so a saved resolution can still be retried.
+      const migrate = (input: unknown): any => {
+        if (Array.isArray(input)) return input.map(migrate);
+        if (!input || typeof input !== 'object') return input;
+        const value: Record<string, any> = Object.fromEntries(
+          Object.entries(input).map(([key, child]) => [key, migrate(child)]),
+        );
+        if (value.stats && 'STR' in value.stats) {
+          for (const stat of ['CHA', 'CON', 'WIS'])
+            value.stats[stat] ??= value.blocked
+              ? 0
+              : 5 +
+                (value.traits ?? []).reduce((sum: number, trait: any) => sum + (trait.stats[stat] ?? 0), 0);
+        }
+        if (value.requirements) for (const stat of ['CHA', 'CON', 'WIS']) value.requirements[stat] ??= 0;
+        if (value.floor && typeof value.floor === 'object') {
+          value.location = {
+            name: value.floor.biome,
+            atmosphere: value.floor.atmosphere,
+            hazard: value.floor.hazard,
+          };
+          value.encounters = value.floor.encounters;
+          delete value.floor;
+        }
+        if (typeof value.floor === 'number') delete value.floor;
+        if ('nextFloor' in value) {
+          value.location = value.nextFloor
+            ? {
+                name: value.nextFloor.biome,
+                atmosphere: value.nextFloor.atmosphere,
+                hazard: value.nextFloor.hazard,
+              }
+            : null;
+          delete value.nextFloor;
+        }
+        if ('restedFloor' in value) {
+          value.restedEncounter = null;
+          delete value.restedFloor;
+        }
+        if ('hp' in value && Array.isArray(value.conditions))
+          value.downedThisEncounter ??= value.conditions.includes('Downed');
+        return value;
+      };
+      for (const [table, fields] of [
+        ['characters', ['sheet']],
+        ['members', ['sheet', 'state', 'replacement']],
+        ['campaigns', ['scene']],
+        ['turns', ['draft', 'result']],
+        ['events', ['payload']],
+      ] as const) {
+        for (const row of db.prepare(`SELECT id, ${fields.join(', ')} FROM ${table}`).all() as Record<
+          string,
+          any
+        >[])
+          for (const field of fields)
+            if (row[field])
+              db.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).run(
+                JSON.stringify(migrate(JSON.parse(row[field]))),
+                row.id,
+              );
+      }
+      db.pragma('user_version = 8');
     })();
   // A model may have been interrupted after a roll. Keep its receipts and require a deliberate retry.
   db.prepare(

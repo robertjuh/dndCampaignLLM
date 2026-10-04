@@ -44,11 +44,13 @@ function fixture(filename = ':memory:') {
     fail: boolean;
     entered?: () => void;
     wait?: Promise<void>;
-  } = { mode: 'idle', fail: false };
+    arrivals: string[];
+  } = { mode: 'idle', fail: false, arrivals: [] };
   const draw = vi.fn((_sides: number) => 12);
   const provider: GameMaster = {
     resolve: async (ctx, tools) => {
       if (!ctx.turn.number) return outcome();
+      control.arrivals = (ctx.arrivingCharacters ?? []).map(({ character }) => character.name);
       if (control.mode === 'death' || control.mode === 'wipe') {
         for (const member of control.mode === 'death' ? ctx.members.slice(0, 1) : ctx.members)
           tools({
@@ -62,12 +64,17 @@ function fixture(filename = ':memory:') {
       }
       if (control.mode === 'advance') {
         tools({
-          memberId: ctx.members[0].id,
+          memberId: ctx.members.find((member) => member.state.hp > 0)!.id,
           stat: 'INT',
           dc: 10,
           reason: 'Find the staircase.',
           mode: 'normal',
           lethal: false,
+        });
+        tools.completeChallenge({
+          memberId: ctx.members.find((member) => member.state.hp > 0)!.id,
+          reason: 'Find a safe way across the broken terrain.',
+          bossEquivalent: false,
         });
         control.entered?.();
         await control.wait;
@@ -75,11 +82,9 @@ function fixture(filename = ':memory:') {
         return outcome({
           xp: 7,
           gold: 9,
-          nextFloor: { biome: 'A floating garden', atmosphere: 'Rain rises.', hazard: 'Moving roots.' },
+          location: { name: 'A floating garden', atmosphere: 'Rain rises.', hazard: 'Moving roots.' },
         });
       }
-      if (control.mode === 'wipe' && ctx.scene.floor.cleared)
-        return outcome({ nextFloor: { biome: 'An empty garden', atmosphere: 'Silent.', hazard: 'Thorns.' } });
       return outcome();
     },
   };
@@ -108,6 +113,9 @@ async function start(f: Fixture) {
   await f.game.idle();
 }
 async function killFirst(f: Fixture) {
+  const fallen = member(f);
+  fallen.state.downedThisEncounter = true;
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(fallen.state), fallen.id);
   f.control.mode = 'death';
   f.draw.mockReturnValue(1);
   const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
@@ -119,11 +127,6 @@ async function killFirst(f: Fixture) {
   f.draw.mockReturnValue(12);
   f.control.mode = 'idle';
 }
-function clearFloor(f: Fixture) {
-  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
-  scene.floor.cleared = true;
-  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
-}
 function submitSurvivor(f: Fixture) {
   const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
   f.game.submit(f.c.id, f.p2.id, turn.id, 'Find the staircase.', false);
@@ -134,7 +137,43 @@ function archives(f: Fixture) {
     .all(f.c.id) as { payload: string }[];
 }
 
-describe('replacement characters on the next floor', () => {
+describe('replacement characters after successful encounters', () => {
+  it('admits a replacement queued after a success to the next collecting turn and introduces them there', async () => {
+    const f = fixture();
+    await start(f);
+    await killFirst(f);
+    f.control.mode = 'advance';
+    submitSurvivor(f);
+    await f.game.idle();
+    expect(member(f).character.name).toBe('Mira');
+    expect(member(f).state.respawnReady).toBe(true);
+    const next = f.game.snapshot(f.c.id, f.host.id).turn!;
+    expect(next.roster).not.toContain(member(f).id);
+    const newcomer = f.game.identify();
+    const sheet = templateCharacter('Late traveller');
+    sheet.selectedEquipmentIds = sheet.equipmentOptions.slice(0, 2).map((item) => item.id);
+    const saved = f.game.saveCharacter(newcomer.id, sheet);
+    f.game.join(f.c.inviteCode!, newcomer.id, saved.id);
+    const lateMember = member(f, newcomer.id);
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.roster).not.toContain(lateMember.id);
+    f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id);
+    const fresh = member(f);
+    expect(fresh.character.name).toBe('Ash');
+    expect(fresh.state).toMatchObject({ level: 1, xp: 0, gold: 0, hp: fresh.state.maxHp });
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.id).toBe(next.id);
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.roster).toEqual([...next.roster, fresh.id]);
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.roster).not.toContain(lateMember.id);
+    expect(archives(f)).toHaveLength(1);
+    f.control.mode = 'idle';
+    f.game.submit(f.c.id, f.p1.id, next.id, 'Introduce myself.', false);
+    f.game.submit(f.c.id, f.p2.id, next.id, 'Welcome Ash.', false);
+    await f.game.idle();
+    expect(f.control.arrivals).toEqual(['Ash']);
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.roster).toContain(lateMember.id);
+    expect(archives(f)).toHaveLength(1);
+    expect(f.game.snapshot(f.c.id, f.host.id).history[1].actions[0].characterName).toBe('Mira');
+  });
+
   it('requires an active campaign, a dead member, ownership, and two saved starting choices', async () => {
     const f = fixture();
     expect(() => f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id)).toThrow();
@@ -162,7 +201,7 @@ describe('replacement characters on the next floor', () => {
     expect(() => f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id)).toThrow();
   });
 
-  it('keeps the old character dead until a successful floor transition and archives their life', async () => {
+  it('keeps the old character dead until a successful encounter and archives their life', async () => {
     const f = fixture();
     await start(f);
     await killFirst(f);
@@ -176,7 +215,7 @@ describe('replacement characters on the next floor', () => {
       pendingLevelUps: 2,
       kills: 9,
       bosses: 2,
-      restedFloor: 1,
+      restedEncounter: 1,
       conditions: ['Poisoned'],
       conditionTurns: { Poisoned: 2 },
       abilityUses: { 'Focused strike': 1 },
@@ -198,16 +237,6 @@ describe('replacement characters on the next floor', () => {
     f.control.mode = 'advance';
     submitSurvivor(f);
     await f.game.idle();
-    expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('failed');
-    expect(member(f).state.hp).toBe(0);
-    clearFloor(f);
-    // The failed check has already saved a draft, so mark its floor cleared as well.
-    const pending = f.game.pending(f.c.id)!;
-    const draft = JSON.parse(pending.draft!);
-    draft.scene.floor.cleared = true;
-    f.db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(JSON.stringify(draft), pending.id);
-    f.game.retry(f.c.id, f.host.id);
-    await f.game.idle();
     const fresh = member(f);
     expect(fresh.id).toBe(retired.id);
     expect(fresh.playerId).toBe(retired.playerId);
@@ -226,7 +255,7 @@ describe('replacement characters on the next floor', () => {
       conditionTurns: {},
       abilityUses: {},
       deathReason: null,
-      restedFloor: null,
+      restedEncounter: null,
       equipmentChosen: true,
       starterEquipment: [],
     });
@@ -248,7 +277,8 @@ describe('replacement characters on the next floor', () => {
     );
     expect(fresh.replacement).toBeNull();
     const snapshot = f.game.snapshot(f.c.id, f.host.id);
-    expect(snapshot.scene.floor.number).toBe(2);
+    expect(snapshot.scene.encounters).toBe(1);
+    expect(snapshot.scene.location.name).toBe('A floating garden');
     expect(snapshot.turn?.roster).toContain(fresh.id);
     expect(member(f, f.p2.id).state).toMatchObject({ xp: 7, gold: 9 });
     expect(snapshot.history[1].actions.find((action) => action.memberId === fresh.id)?.characterName).toBe(
@@ -257,8 +287,12 @@ describe('replacement characters on the next floor', () => {
     expect(archives(f)).toHaveLength(1);
     const archived = JSON.parse(archives(f)[0].payload);
     expect(archived).toMatchObject({
-      member: { id: retired.id, characterId: f.c1.id, character: retired.character, state: retired.state },
-      floor: 1,
+      member: {
+        id: retired.id,
+        characterId: f.c1.id,
+        character: retired.character,
+        state: { ...retired.state, respawnReady: true },
+      },
       replacementCharacterId: f.replacement.id,
     });
     expect(f.game.characters(f.p1.id).find((character) => character.id === f.c1.id)?.name).toBe('Mira');
@@ -276,16 +310,20 @@ describe('replacement characters on the next floor', () => {
     changed.selectedEquipmentIds = changed.equipmentOptions.slice(3, 5).map((item) => item.id);
     f.game.updateCharacter(f.p1.id, f.replacement.id, changed);
     expect(member(f).replacement?.character.name).toBe('Ash');
-    clearFloor(f);
     f.control.mode = 'advance';
     submitSurvivor(f);
     await f.game.idle();
     expect(member(f).character.name).toBe('Ash');
     expect(member(f).character.selectedEquipmentIds).toEqual(f.replacement.selectedEquipmentIds);
     const narration = f.game.snapshot(f.c.id, f.host.id).history.at(-1)!.result!.narration;
-    expect(narration).toContain('floor 2');
-    expect(narration).toContain('level 1');
-    expect(narration).not.toContain('joins the party');
+    expect(narration).not.toContain('floor');
+    expect(narration).not.toContain('Ash');
+    f.control.mode = 'idle';
+    const next = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p1.id, next.id, 'Introduce myself to the party.', false);
+    f.game.submit(f.c.id, f.p2.id, next.id, 'Welcome the new traveller.', false);
+    await f.game.idle();
+    expect(f.control.arrivals).toEqual(['Ash']);
     expect(f.game.characters(f.p1.id).find((character) => character.id === f.replacement.id)?.name).toBe(
       'A different future character',
     );
@@ -295,7 +333,6 @@ describe('replacement characters on the next floor', () => {
     const f = fixture();
     await start(f);
     await killFirst(f);
-    clearFloor(f);
     f.control.mode = 'advance';
     let release!: () => void;
     const entered = new Promise<void>((resolve) => (f.control.entered = resolve));
@@ -310,9 +347,8 @@ describe('replacement characters on the next floor', () => {
     expect(member(f).character.name).toBe('Mira');
     expect(member(f).state.hp).toBe(0);
     expect(member(f).replacement).toBeNull();
-    expect(f.game.snapshot(f.c.id, f.host.id).scene.floor.number).toBe(2);
+    expect(f.game.snapshot(f.c.id, f.host.id).scene.encounters).toBe(1);
     expect(archives(f)).toHaveLength(0);
-    clearFloor(f);
     let releaseAgain!: () => void;
     const enteredAgain = new Promise<void>((resolve) => (f.control.entered = resolve));
     f.control.wait = new Promise<void>((resolve) => (releaseAgain = resolve));
@@ -333,7 +369,6 @@ describe('replacement characters on the next floor', () => {
     await start(f);
     await killFirst(f);
     f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id);
-    clearFloor(f);
     f.control.mode = 'advance';
     f.control.fail = true;
     submitSurvivor(f);
@@ -353,7 +388,7 @@ describe('replacement characters on the next floor', () => {
     expect(member(f).character.name).toBe('Ash');
     expect(f.draw).toHaveBeenCalledTimes(drawCount);
     expect(archives(f)).toHaveLength(1);
-    expect(f.game.snapshot(f.c.id, f.host.id).scene.floor.number).toBe(2);
+    expect(f.game.snapshot(f.c.id, f.host.id).scene.encounters).toBe(1);
     expect(() => f.game.retry(f.c.id, f.host.id)).toThrow();
   });
 
@@ -363,7 +398,6 @@ describe('replacement characters on the next floor', () => {
     await killFirst(f);
     f.game.setActive(f.c.id, f.host.id, member(f).id, false);
     f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id);
-    clearFloor(f);
     f.control.mode = 'advance';
     submitSurvivor(f);
     await f.game.idle();
@@ -377,7 +411,6 @@ describe('replacement characters on the next floor', () => {
     await start(f);
     await killFirst(f);
     f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id);
-    clearFloor(f);
     f.control.mode = 'wipe';
     f.draw.mockReturnValue(1);
     const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
@@ -405,7 +438,7 @@ describe('replacement characters on the next floor', () => {
     const reopened = openDatabase(filename);
     cleanup.push(() => reopened.close());
     const restored = new Game(reopened, () => f.provider, f.draw);
-    expect(reopened.pragma('user_version', { simple: true })).toBe(7);
+    expect(reopened.pragma('user_version', { simple: true })).toBe(8);
     expect(restored.members(f.c.id).map((m) => ({ character: m.character, state: m.state }))).toEqual(
       before.map((m) => ({ character: m.character, state: m.state })),
     );

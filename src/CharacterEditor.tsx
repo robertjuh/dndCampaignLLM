@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { type CampaignConfig, type Character } from '../shared/schema';
-import { CharacterSheet, EquipmentChoices } from './CharacterSheet';
+import { AbilityChoices, CharacterSheet, EquipmentChoices } from './CharacterSheet';
 import { api, ApiError } from './api';
 import { ModelSelect } from './ModelSelect';
 
@@ -43,6 +43,9 @@ export function CharacterEditor({
   const [elapsed, setElapsed] = useState(0);
   const generation = useRef<AbortController | null>(null);
   const savedDraft = useRef<{ sheet: Character; character: Character & { id: string } } | null>(null);
+  const abilitiesChosen =
+    !sheet?.abilityOptions ||
+    (sheet.abilities.length === 2 && new Set(sheet.abilities.map((a) => a.kind)).size === 2);
   useEffect(() => () => generation.current?.abort(), []);
   useEffect(() => {
     if (generationStarted === null) return;
@@ -99,7 +102,7 @@ export function CharacterEditor({
   }
   async function save(e: FormEvent) {
     e.preventDefault();
-    if (!sheet || sheet.selectedEquipmentIds.length !== 2) return;
+    if (!sheet || sheet.selectedEquipmentIds.length !== 2 || !abilitiesChosen) return;
     setBusy(true);
     setError('');
     try {
@@ -226,13 +229,20 @@ export function CharacterEditor({
           </div>
         )}
         <p className="muted small">
-          Enter a name to keep it exactly, describe your concept, and choose two starting pieces. Players use
-          the host’s connected ChatGPT plan; no separate sign-in is needed.
+          Enter a name to keep it exactly, describe your concept, and choose your starting abilities and two
+          starting pieces. Players use the host’s connected ChatGPT plan; no separate sign-in is needed.
         </p>
       </div>
       {sheet && (
         <>
-          <CharacterSheet character={sheet} />
+          <CharacterSheet character={sheet} showAbilities={!sheet.abilityOptions} />
+          {sheet.abilityOptions && (
+            <AbilityChoices
+              character={sheet}
+              disabled={busy}
+              onChange={(abilities) => setSheet({ ...sheet, abilities })}
+            />
+          )}
           <EquipmentChoices
             character={sheet}
             items={sheet.equipmentOptions}
@@ -251,7 +261,10 @@ export function CharacterEditor({
         <span className="muted small">
           Saved templates can be reused. Every campaign gets independent HP, equipment, and progress.
         </span>
-        <button className="button" disabled={busy || !sheet || sheet.selectedEquipmentIds.length !== 2}>
+        <button
+          className="button"
+          disabled={busy || !sheet || sheet.selectedEquipmentIds.length !== 2 || !abilitiesChosen}
+        >
           Save character
         </button>
       </div>

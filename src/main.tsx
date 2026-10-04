@@ -33,24 +33,38 @@ import {
 } from 'lucide-react';
 import {
   stats,
+  slots,
   templateCharacter,
   type CampaignConfig,
   type Character,
+  type AbilityChoiceStats,
   type Item,
   type Member,
+  type Action,
   type Roll,
   type Snapshot,
   type CharacterState,
   levelUpChoices,
   type LevelUpChoice,
 } from '../shared/schema';
-import { modifier, defense, capacity, occupiedSlots, isDowned, isDead } from '../shared/rules';
-import { Abilities, CharacterSheet, EquipmentChoices } from './CharacterSheet';
+import {
+  modifier,
+  defense,
+  capacity,
+  occupiedSlots,
+  isDowned,
+  isDead,
+  isInCombat,
+  canInteract,
+} from '../shared/rules';
+import { ailments, conditionDescription, conditionDuration } from '../shared/ailments';
+import { Abilities, CharacterSheet, EquipmentChoices, ItemDetails, slotLabels } from './CharacterSheet';
 import { CharacterEditor } from './CharacterEditor';
 import { ModelSelect } from './ModelSelect';
 import { useNarration } from './useNarration';
 import { TurnImagePrompt } from './TurnImagePrompt';
 import { EquipmentPanel } from './EquipmentPanel';
+import { ThemeSelect } from './ThemeSelect';
 import { api } from './api';
 import './style.css';
 
@@ -215,6 +229,7 @@ function App() {
             <span className="note-rule" />
           </div>
           <nav className="bottom-nav">
+            <ThemeSelect />
             <a href="/settings" className={path === '/settings' ? 'active' : ''}>
               <Settings2 {...icon} />
               Settings
@@ -884,6 +899,89 @@ function ProfileAccess({ name }: { name: string }) {
   );
 }
 
+function AbilityBalance() {
+  const [data, setData] = useState<AbilityChoiceStats | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    setBusy(true);
+    setError('');
+    try {
+      setData(await api<AbilityChoiceStats>('/api/characters/ability-stats'));
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  return (
+    <section className="form-panel ability-balance" aria-label="Ability choice statistics">
+      <h3>Ability choice statistics</h3>
+      <p className="muted small">
+        Each saved character counts once. Edits replace its choices; joining campaigns adds no votes. This
+        measures saved preferences, not combat success. Names and character concepts are excluded.
+      </p>
+      <Button secondary disabled={busy} onClick={load}>
+        {busy ? 'Loading…' : 'Refresh statistics'}
+      </Button>
+      <ErrorBox error={error} />
+      {data && (
+        <>
+          <p>
+            {data.characters} saved characters · {data.offers} offers · {data.selections} selections
+          </p>
+          {data.rows.length ? (
+            <div
+              className="ability-balance-table"
+              tabIndex={0}
+              role="region"
+              aria-label="Ability selection rates"
+            >
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Ability</th>
+                    <th scope="col">Base power</th>
+                    <th scope="col">Offered</th>
+                    <th scope="col">Chosen</th>
+                    <th scope="col">Pick rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.rows.map((row) => (
+                    <tr key={JSON.stringify([row.kind, row.effect, row.stat, row.dice, row.bonus])}>
+                      <th scope="row">
+                        {row.kind === 'utility' ? 'Utility' : row.effect} · {row.stat}
+                      </th>
+                      <td>
+                        {row.dice
+                          ? `${row.dice}${row.bonus ? ` + ${row.bonus}` : ''}`
+                          : row.effect === 'guard'
+                            ? `+${3 + row.bonus} defense`
+                            : `Advantage${row.bonus ? ` + ${row.bonus}` : ''}`}
+                      </td>
+                      <td>{row.offered}</td>
+                      <td>{row.selected}</td>
+                      <td>{Math.round((row.selected / row.offered) * 100)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted small">
+              Save a character with ability choices to start measuring preferences.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
   const [auth, setAuth] = useState<Auth | null>(null);
   const [name, setName] = useState(me.name);
@@ -1041,7 +1139,27 @@ function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
         </p>
       </form>
       <ProfileAccess name={me.name} />
+      {['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) && auth?.shared !== true && (
+        <AbilityBalance />
+      )}
     </div>
+  );
+}
+
+const conditionDescriptions: Partial<Record<string, string>> = {
+  ...Object.fromEntries(ailments.map((name) => [name, conditionDescription(name)])),
+  Downed: 'At 0 HP and unable to act. An ally can help you up to 1 HP or heal you.',
+  Escaped: 'You have left the fight. Rejoining combat removes this condition.',
+};
+
+function ItemInspection({ item }: { item: Item }) {
+  return (
+    <details className="item-inspection">
+      <summary>
+        {item.name} <small>({item.kind})</small>
+      </summary>
+      <ItemDetails item={item} />
+    </details>
   );
 }
 
@@ -1051,12 +1169,16 @@ function MemberCard({
   current,
   host,
   onActive,
+  onHelpUp,
+  helpDisabled = false,
 }: {
   member: Member;
   ready: boolean;
   current: boolean;
   host?: boolean;
   onActive?: () => void;
+  onHelpUp?: () => void;
+  helpDisabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const state = member.state;
@@ -1084,7 +1206,7 @@ function MemberCard({
         </span>
         <span className={`ready-state ${ready ? 'ready' : ''} ${downed ? 'downed-state' : ''}`}>
           {downed
-            ? 'Downed · needs healing'
+            ? 'Downed · needs help'
             : dead
               ? 'Fallen'
               : !state.equipmentChosen
@@ -1108,9 +1230,20 @@ function MemberCard({
         <span>DEF {defense(member.character, state)}</span>
         <span>{state.gold} gold</span>
       </div>
-      {downed && <p className="downed-hint">An ally can help with a healing item or ability.</p>}
+      {downed && (
+        <>
+          <p className="downed-hint">An ally can spend their turn to help them up with 1 HP.</p>
+          {onHelpUp && (
+            <Button secondary disabled={helpDisabled} onClick={onHelpUp}>
+              Help up {member.character.name}
+            </Button>
+          )}
+        </>
+      )}
       {dead && member.replacement && (
-        <p className="replacement-ready">{member.replacement.character.name} joins next floor · Level 1</p>
+        <p className="replacement-ready">
+          {member.replacement.character.name} joins next turn after a victory · Level 1 · 0 XP
+        </p>
       )}
       <div className="small-stats">
         {stats.map((stat) => (
@@ -1131,7 +1264,16 @@ function MemberCard({
           {state.conditions
             .filter((c) => !c.startsWith('Rested:'))
             .map((c) => (
-              <span key={c}>{c}</span>
+              <span
+                key={c}
+                title={conditionDescriptions[c]}
+                aria-label={conditionDescriptions[c] ? `${c}: ${conditionDescriptions[c]}` : c}
+              >
+                {c}
+                {ailments.some((name) => name === c)
+                  ? ` · ${state.conditionTurns[c] ?? conditionDuration(c)} turns`
+                  : ''}
+              </span>
             ))}
         </div>
       )}
@@ -1150,10 +1292,10 @@ function MemberCard({
           <Abilities character={member.character} />
           <h4>Equipment</h4>
           <ul>
-            {Object.entries(state.equipment).map(([slot, item]) => (
+            {slots.map((slot) => (
               <li key={slot}>
-                <b>{slot}</b>
-                <span>{item?.name ?? 'None'}</span>
+                <b>{slotLabels[slot]}</b>
+                {state.equipment[slot] ? <ItemInspection item={state.equipment[slot]} /> : <span>None</span>}
               </li>
             ))}
           </ul>
@@ -1163,7 +1305,7 @@ function MemberCard({
           <ul>
             {state.inventory.map((item) => (
               <li key={item.id}>
-                {item.name}
+                <ItemInspection item={item} />
                 <span>×{item.quantity}</span>
               </li>
             ))}
@@ -1192,12 +1334,13 @@ function WorldStatus({ snapshot: s }: { snapshot: Snapshot }) {
   const encounter = s.scene.encounter;
   return (
     <div className="world-status">
-      <div className="floor-banner">
-        <span className="eyebrow">FLOOR {s.scene.floor.number}</span>
-        <h3>{s.scene.floor.biome}</h3>
-        <p>{s.scene.floor.atmosphere || s.config.premise}</p>
+      <div className="location-banner">
+        <span className="eyebrow">CURRENT LOCATION</span>
+        <h3>{s.scene.location.name}</h3>
+        <p>{s.scene.location.atmosphere || s.config.premise}</p>
         <small>
-          {s.scene.floor.encounters} encounters completed · {s.scene.floor.hazard}
+          {s.scene.encounters} encounters completed
+          {s.scene.location.hazard && ` · ${s.scene.location.hazard}`}
         </small>
       </div>
       {encounter && (
@@ -1230,9 +1373,20 @@ function WorldStatus({ snapshot: s }: { snapshot: Snapshot }) {
                 <b>{e.name}</b>
                 <p>{e.description}</p>
                 <span>
-                  {e.withdrawn ? 'Withdrawn · ' : ''}HP {e.hp}/{e.maxHp} · Defense {e.defense} · Attack +
-                  {e.attack} · Damage {e.damage}
+                  {e.withdrawn ? 'Withdrawn · ' : ''}HP {e.hp}/{e.maxHp} · Defense{' '}
+                  {e.defense - (e.conditions?.includes('Chilled') ? 2 : 0)} · Attack{' '}
+                  {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0) >= 0 ? '+' : ''}
+                  {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0)} · Damage {e.damage}
                 </span>
+                {!!e.conditions?.length && (
+                  <div className="conditions">
+                    {e.conditions.map((condition) => (
+                      <span key={condition} title={conditionDescription(condition)}>
+                        {condition} · {e.conditionTurns?.[condition] ?? conditionDuration(condition)} turns
+                      </span>
+                    ))}
+                  </div>
+                )}
               </article>
             ))}
           </div>
@@ -1276,16 +1430,16 @@ function ReplacementPicker({
     setCharacterId(member.replacement?.characterId ?? '');
   }, [member.replacement?.characterId]);
   return (
-    <section className="replacement-picker" aria-label="Next-floor character">
+    <section className="replacement-picker" aria-label="Next-turn character">
       <h3>Return with a new character</h3>
       <p>
-        Choose a saved character with two starting pieces. They join when the surviving party reaches the next
-        floor, at level 1 with fresh equipment. Your fallen character stays here until then.
+        Create and save a new character with two starting pieces, then queue them here. After a successful
+        encounter, the game master introduces them on the next turn at level 1 with zero experience.
       </p>
       {member.replacement && (
         <p className="replacement-ready" role="status">
-          <b>{member.replacement.character.name}</b> is ready for the next floor. Level 1 · Fresh starting
-          equipment.
+          <b>{member.replacement.character.name}</b> is ready for the next turn after a victory. Level 1 · 0
+          XP · Fresh starting equipment.
         </p>
       )}
       <Field label="Replacement character">
@@ -1311,7 +1465,7 @@ function ReplacementPicker({
           disabled={busy || loading || !characterId || characterId === member.replacement?.characterId}
           onClick={() => command('replacement', { characterId })}
         >
-          {member.replacement ? 'Change next-floor character' : 'Join on next floor'}
+          {member.replacement ? 'Change queued character' : 'Queue for next turn'}
         </Button>
         {member.replacement && (
           <Button secondary disabled={busy} onClick={() => command('replacement', { characterId: null })}>
@@ -1350,8 +1504,10 @@ function CharacterControls({
   const [rewardBusy, setRewardBusy] = useState(false);
   const manage = (body: unknown) => command('character', body);
   const state = member.state;
-  const inCombat = s.scene.encounter && !s.scene.encounter.victory && !s.scene.encounter.escaped;
-  const downedAllies = s.members.filter((ally) => ally.id !== member.id && isDowned(ally.state));
+  const inCombat = isInCombat(s.scene, state);
+  const downedAllies = s.members.filter(
+    (ally) => ally.id !== member.id && isDowned(ally.state) && canInteract(s.scene, state, ally.state),
+  );
   const locked =
     busy ||
     rewardBusy ||
@@ -1364,7 +1520,7 @@ function CharacterControls({
         <p>
           {s.status === 'ended'
             ? 'No party member remains able to help. This run has ended in defeat.'
-            : 'You cannot act while downed. An ally can help you up with a healing item or ability. You can keep watching the party until you recover.'}
+            : 'You cannot act while downed. An ally can spend their turn to help you up with 1 HP, or heal you. Once helped, you can act on the next turn. Going down again in this encounter is permanent death.'}
         </p>
       </div>
     );
@@ -1374,8 +1530,7 @@ function CharacterControls({
         <h2>FALLEN · {member.character.name}</h2>
         <p>{state.deathReason}</p>
         <p>
-          Level {state.level} · Floor {s.scene.floor.number} · {state.kills} enemies defeated · {state.bosses}{' '}
-          bosses defeated
+          Level {state.level} · {state.kills} enemies defeated · {state.bosses} bosses defeated
         </p>
         <p>Your character's death is permanent. You can keep watching the surviving party.</p>
         {s.status === 'active' ? (
@@ -1445,6 +1600,13 @@ function CharacterControls({
         </section>
       )}
       {state.lastLevelUp && <p className="reward-result">{state.lastLevelUp}</p>}
+      {state.conditions.includes('Escaped') && (
+        <p>
+          You are outside combat. You can act and use out-of-combat abilities, but must rejoin the fight
+          before interacting with anyone still fighting. Attacking or using an offensive combat ability
+          rejoins the fight.
+        </p>
+      )}
       <Abilities
         character={member.character}
         state={state}
@@ -1457,25 +1619,9 @@ function CharacterControls({
         <section>
           <h3>Help a downed ally</h3>
           <p>
-            {inCombat
-              ? 'Use your action chat to describe healing an ally with an item or select a healing ability. Include the ally’s name. A healing item uses your minor action; Mend uses your main action.'
-              : 'Use a healing item from Equipment & backpack, or use an available healing ability below.'}
+            Use Help up on their party card to spend your turn helping them recover with 1 HP. Healing an ally
+            with an item or ability also uses your turn. They can act on the next turn.
           </p>
-          {!inCombat &&
-            member.character.abilities
-              .filter((ability) => ability.effect === 'mend')
-              .flatMap((ability) =>
-                downedAllies.map((ally) => (
-                  <Button
-                    key={`${ability.name}-${ally.id}`}
-                    secondary
-                    disabled={locked || (state.abilityUses?.[ability.name] ?? 0) >= 1}
-                    onClick={() => manage({ type: 'heal', abilityName: ability.name, targetId: ally.id })}
-                  >
-                    {ability.name} · Help {ally.character.name}
-                  </Button>
-                )),
-              )}
         </section>
       )}
       {state.equipmentChosen && (
@@ -1483,13 +1629,24 @@ function CharacterControls({
           member={member}
           snapshot={s}
           command={command}
+          healingLockReason={
+            busy || rewardBusy
+              ? 'Saving your changes…'
+              : s.status === 'archived' || s.status === 'ended'
+                ? 'Healing is unavailable after this run.'
+                : s.turn && s.turn.phase !== 'collecting'
+                  ? 'Healing is locked while this round finishes.'
+                  : s.turn?.actions.some((action) => action.memberId === member.id)
+                    ? 'Your action is already submitted.'
+                    : ''
+          }
           lockReason={
             busy || rewardBusy
               ? 'Saving your changes…'
               : s.status === 'archived' || s.status === 'ended'
                 ? 'Equipment changes are unavailable after this run.'
                 : inCombat
-                  ? 'Equipment changes are available outside combat. Describe consumable use in your action chat.'
+                  ? 'Equipment changes are available outside combat. Healing items remain available.'
                   : s.turn && s.turn.phase !== 'collecting'
                     ? 'Equipment is locked while this round finishes.'
                     : s.turn?.actions.some((action) => action.memberId === member.id)
@@ -1501,7 +1658,7 @@ function CharacterControls({
       {s.scene.safeRest && !inCombat && (
         <Button
           secondary
-          disabled={locked || state.restedFloor === s.scene.floor.number}
+          disabled={locked || state.restedEncounter === s.scene.encounters}
           onClick={() => manage({ type: 'rest' })}
         >
           <Moon size={15} />
@@ -1512,34 +1669,57 @@ function CharacterControls({
   );
 }
 
-function RollReceipt({ roll, members }: { roll: Roll; members: Member[] }) {
+function RollReceipt({ roll, members, action }: { roll: Roll; members: Member[]; action?: Action }) {
   const member = members.find((m) => m.id === roll.memberId);
   return (
-    <div
-      className={`roll-receipt ${roll.success ? 'success' : 'miss'}`}
-      title={`${roll.reason} · ${roll.source}`}
-    >
-      <span className="die">
-        <Dices size={20} />
-      </span>
-      <div>
-        <b>{roll.label ?? `${member?.character.name ?? 'World'} · ${roll.stat}`} </b>
-        <small>
-          {roll.dice.join(', ')} {roll.modifier >= 0 ? '+' : '−'} {Math.abs(roll.modifier)}{' '}
-          {(!roll.notation || roll.notation === 'd20') && <span>vs DC {roll.dc}</span>}
-        </small>
-      </div>
-      <strong>{roll.total}</strong>
-      <span className="roll-result">
-        {roll.critical === 'success'
-          ? 'NAT 20'
-          : roll.critical === 'failure'
-            ? 'NAT 1'
-            : roll.success
-              ? 'Success'
-              : 'Setback'}
-      </span>
-    </div>
+    <details className={`roll-receipt ${roll.success ? 'success' : 'miss'}`}>
+      <summary>
+        <span className="die">
+          <Dices size={20} />
+        </span>
+        <div>
+          <b>
+            {roll.label ??
+              `${action?.characterName ?? member?.character.name ?? 'World'} · ${roll.stat}`}{' '}
+          </b>
+          <small>
+            {roll.dice.join(', ')} {roll.modifier >= 0 ? '+' : '−'} {Math.abs(roll.modifier)}{' '}
+            {(!roll.notation || roll.notation === 'd20') && <span>vs DC {roll.dc}</span>}
+          </small>
+        </div>
+        <strong>{roll.total}</strong>
+        <span className="roll-result">
+          {roll.critical === 'success'
+            ? 'NAT 20'
+            : roll.critical === 'failure'
+              ? 'NAT 1'
+              : roll.success
+                ? 'Success'
+                : 'Setback'}
+        </span>
+        <ChevronDown className="roll-chevron" size={16} aria-hidden="true" />
+      </summary>
+      <dl className="roll-details">
+        {action && !action.passed && (
+          <>
+            <dt>Submitted action</dt>
+            <dd>{action.text}</dd>
+          </>
+        )}
+        {(roll.abilityName || action?.abilityName) && (
+          <>
+            <dt>Ability</dt>
+            <dd>{roll.abilityName ?? action?.abilityName}</dd>
+          </>
+        )}
+        <dt>Check explanation</dt>
+        <dd>{roll.reason}</dd>
+        <dt>Roll mode</dt>
+        <dd>{roll.mode}</dd>
+        <dt>Dice source</dt>
+        <dd>{roll.source}</dd>
+      </dl>
+    </details>
   );
 }
 
@@ -1614,6 +1794,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     !!s.myMemberId &&
     turn?.roster.includes(s.myMemberId) &&
     turn.phase === 'collecting' &&
+    !mine?.supportAction &&
     !!myCharacter &&
     myCharacter.state.hp > 0 &&
     myCharacter.state.pendingLevelUps === 0 &&
@@ -1646,10 +1827,13 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           <a href="/">
             <Mark small />
           </a>
-          <span className="local-status">
-            <span className="dot" />
-            {connected ? 'Live at the table' : 'Reconnecting…'}
-          </span>
+          <div className="display-controls">
+            <ThemeSelect />
+            <span className="local-status">
+              <span className="dot" />
+              {connected ? 'Live at the table' : 'Reconnecting…'}
+            </span>
+          </div>
         </div>
       )}
       <div className="campaign-heading">
@@ -2012,6 +2196,18 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       ))}
                     </div>
                   )}
+                  {t.rolls.length > 0 && (
+                    <div className="rolls">
+                      {t.rolls.map((r) => (
+                        <RollReceipt
+                          key={r.id}
+                          roll={r}
+                          members={s.members}
+                          action={t.actions.find((a) => a.memberId === r.memberId)}
+                        />
+                      ))}
+                    </div>
+                  )}
                   <div className="narrator">
                     <span className="gm-avatar">
                       <Sparkles size={17} />
@@ -2040,13 +2236,6 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       ))}
                   </div>
                   <TurnImagePrompt config={s.config} turn={t} />
-                  {t.rolls.length > 0 && (
-                    <div className="rolls">
-                      {t.rolls.map((r) => (
-                        <RollReceipt key={r.id} roll={r} members={s.members} />
-                      ))}
-                    </div>
-                  )}
                   {t.result && (
                     <>
                       <div className="recap">
@@ -2115,7 +2304,12 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     <div className="failed-turn">
                       <ErrorBox error={turn.error ?? 'The turn could not finish.'} />
                       {turn.rolls.map((r) => (
-                        <RollReceipt key={r.id} roll={r} members={s.members} />
+                        <RollReceipt
+                          key={r.id}
+                          roll={r}
+                          members={s.members}
+                          action={turn.actions.find((a) => a.memberId === r.memberId)}
+                        />
                       ))}
                       {host && (
                         <div className="button-row">
@@ -2169,11 +2363,13 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     }}
                   >
                     <label htmlFor="action-input">
-                      {mine
-                        ? 'Your action is submitted. You can update it while the party decides.'
-                        : 'What does your character do?'}
+                      {mine?.supportAction
+                        ? 'Helping your party uses your turn. You can cancel while the party decides.'
+                        : mine
+                          ? 'Your action is submitted. Cancel it before rewriting to stop the party from advancing.'
+                          : 'What does your character do?'}
                     </label>
-                    {abilityName && (
+                    {abilityName && !mine?.supportAction && (
                       <p className="selected-ability">
                         Using <b>{abilityName}</b>. Describe the situation and your intended target below.
                         <button
@@ -2190,7 +2386,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       id="action-input"
                       aria-label="Your action"
                       rows={3}
-                      value={action}
+                      value={mine?.supportAction ? mine.text : action}
                       onChange={(e) => setAction(e.target.value)}
                       maxLength={2000}
                       disabled={!canAct || busy}
@@ -2206,6 +2402,22 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                         Your action will appear on the shared screen.
                       </span>
                       <div>
+                        {mine && turn.phase === 'collecting' && (
+                          <Button
+                            type="button"
+                            secondary
+                            disabled={busy}
+                            onClick={async () => {
+                              const updated = await command('action/cancel', { turnId: turn.id });
+                              if (updated) {
+                                if (!action.trim() || mine.supportAction) setAction(mine.text);
+                                setAbilityName(mine.abilityName ?? null);
+                              }
+                            }}
+                          >
+                            Cancel action
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           secondary
@@ -2247,6 +2459,18 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
               current={s.status === 'lobby' || !!turn?.roster.includes(m.id)}
               host={host}
               onActive={() => command('member', { memberId: m.id, active: !m.active })}
+              onHelpUp={
+                viewingCurrent &&
+                !screen &&
+                s.status === 'active' &&
+                myCharacter &&
+                m.id !== myCharacter.id &&
+                canInteract(s.scene, myCharacter.state, m.state) &&
+                m.active
+                  ? () => command('character', { type: 'help-up', targetId: m.id })
+                  : undefined
+              }
+              helpDisabled={!canAct || !!mine || busy}
             />
           ))}
           <div className="table-note">

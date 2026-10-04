@@ -23,7 +23,11 @@ test('turn pages follow the latest scene and preserve older scenes while browsin
     provider: 'practice',
     model: '',
   } satisfies CampaignConfig);
-  const playerContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const playerContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
   const displayContext = await browser.newContext();
   const player = await playerContext.newPage();
   const display = await displayContext.newPage();
@@ -61,6 +65,8 @@ test('turn pages follow the latest scene and preserve older scenes while browsin
         turnId: current.turn!.id,
         text: `Examine the road, round ${round}.`,
         passed: false,
+        abilityName:
+          round === 1 ? member.character.abilities.find((ability) => ability.kind === 'utility')!.name : null,
       });
       await expect(page.getByText(`Turn ${round + 1}`, { exact: true })).toBeVisible();
     }
@@ -70,6 +76,21 @@ test('turn pages follow the latest scene and preserve older scenes while browsin
       await expect(view.locator('.story-turn')).toHaveCount(1);
       await expect(view.getByText('Viewing turn 1', { exact: true })).toBeVisible();
       await expect(view.getByText('THE OPENING SCENE', { exact: true })).toHaveCount(0);
+      const roll = view.locator('.roll-receipt');
+      const details = roll.locator('.roll-details');
+      await expect(details).toBeHidden();
+      await expect(roll).not.toHaveAttribute('title');
+      if (view === player) await roll.locator('summary').tap();
+      else await roll.locator('summary').click();
+      await expect(details).toBeVisible();
+      await expect(details.locator('dd').first()).toHaveText('Examine the road, round 1.');
+      await expect(details).toContainText('Keen observation');
+      await expect(details).toContainText('advantage');
+      await expect(details).toContainText('Local OS cryptographic randomness');
+      expect(await view.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      if (view === player) await roll.locator('summary').tap();
+      else await roll.locator('summary').press('Enter');
+      await expect(details).toBeHidden();
       await view.getByRole('button', { name: 'Previous turn', exact: true }).click();
       await expect(view.getByText('Viewing opening scene', { exact: true })).toBeVisible();
       await expect(view.locator('.current-turn')).toHaveCount(0);
@@ -82,9 +103,14 @@ test('turn pages follow the latest scene and preserve older scenes while browsin
       await expect(view.getByText('Viewing opening scene', { exact: true })).toBeVisible();
       await view.getByRole('button', { name: 'Next turn', exact: true }).click();
       await expect(view.getByText('Viewing turn 1', { exact: true })).toBeVisible();
+      await view.locator('.roll-receipt summary').click();
+      await expect(view.locator('.roll-details dd').first()).toHaveText('Examine the road, round 1.');
       await expect(view.getByRole('button', { name: 'Next turn', exact: true })).toBeEnabled();
       await view.getByRole('button', { name: 'Current turn', exact: true }).click();
       await expect(view.getByText('Viewing turn 2', { exact: true })).toBeVisible();
+      await expect(view.locator('.roll-details')).toBeHidden();
+      await view.locator('.roll-receipt summary').click();
+      await expect(view.locator('.roll-details dd').first()).toHaveText('Examine the road, round 2.');
       await expect(view.getByRole('button', { name: 'Next turn', exact: true })).toBeDisabled();
       await expect(view.locator('.current-turn')).toBeVisible();
     }

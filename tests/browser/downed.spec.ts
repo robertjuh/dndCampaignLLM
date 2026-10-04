@@ -8,7 +8,7 @@ async function post<T>(request: APIRequestContext, path: string, data: unknown):
   return response.json();
 }
 
-test('downed players watch, allies target healing items and abilities, and recovered players can act', async ({
+test('helping and healing allies lock the turn, while self healing is instant during combat', async ({
   page,
 }) => {
   const character = templateCharacter('Mira');
@@ -45,6 +45,7 @@ test('downed players watch, allies target healing items and abilities, and recov
     character: healerCharacter,
     state: initialState(healerCharacter, 'healer'),
   };
+  neri.state.inventory.find((item) => item.healing > 0)!.quantity = 2;
   snapshot.members.push(neri);
   snapshot.status = 'active';
   snapshot.isHost = false;
@@ -68,46 +69,84 @@ test('downed players watch, allies target healing items and abilities, and recov
     });
   });
   await page.route(`**/api/campaigns/${campaign.id}`, (route) => route.fulfill({ json: snapshot }));
-  const commands: unknown[] = [];
+  const commands: Record<string, string>[] = [];
   await page.route(`**/api/campaigns/${campaign.id}/character`, async (route) => {
     const body = route.request().postDataJSON();
     commands.push(body);
-    mira.state.hp = 6;
-    mira.state.conditions = [];
-    snapshot.turn!.roster.push(mira.id);
-    if (body.abilityName) neri.state.abilityUses = { [body.abilityName]: 1 };
+    if (body.type === 'help-up' || body.targetId) {
+      snapshot.turn!.actions.push({
+        memberId: neri.id,
+        text:
+          body.type === 'help-up'
+            ? 'I help up Mira.'
+            : `I use ${neri.state.inventory.find((item) => item.id === body.itemId)!.name} on Mira.`,
+        passed: false,
+        supportAction:
+          body.type === 'help-up'
+            ? { type: 'help-up', targetId: mira.id }
+            : { type: 'heal-ally', targetId: mira.id, itemId: body.itemId },
+      });
+    } else {
+      const potion = neri.state.inventory.find((item) => item.id === body.itemId)!;
+      neri.state.hp = Math.min(neri.state.maxHp, neri.state.hp + potion.healing);
+      potion.quantity--;
+    }
     snapshot.version++;
     await route.fulfill({ json: snapshot });
   });
 
   await page.goto(`/campaign/${campaign.id}`);
   await expect(page.getByRole('heading', { name: 'DOWNED · Mira' })).toBeVisible();
-  await expect(page.getByText('Downed · needs healing', { exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Next-floor character' })).toHaveCount(0);
+  await expect(page.getByText('Downed · needs help', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Next-turn character' })).toHaveCount(0);
   await expect(page.getByLabel('Your action', { exact: true })).toHaveCount(0);
   await expect(page.getByText("Your character's death is permanent.", { exact: false })).toHaveCount(0);
 
   snapshot.myMemberId = neri.id;
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Help a downed ally' })).toBeVisible();
-  await page.getByRole('button', { name: 'Equipment & backpack' }).click();
-  const potion = neri.state.inventory.find((item) => item.healing > 0)!;
-  await page.getByRole('button', { name: 'Heal Mira', exact: true }).click();
-  await expect(page.getByText('Downed · needs healing', { exact: true })).toHaveCount(0);
-  expect(commands[0]).toEqual({ type: 'heal', itemId: potion.id, targetId: mira.id });
+  await page.getByRole('button', { name: 'Help up Mira', exact: true }).click();
+  expect(commands[0]).toEqual({ type: 'help-up', targetId: mira.id });
+  await expect(page.getByLabel('Your action', { exact: true })).toHaveValue('I help up Mira.');
+  await expect(page.getByLabel('Your action', { exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Pass', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Update action', exact: true })).toBeDisabled();
+  await expect(page.getByText('Downed · needs help', { exact: true })).toBeVisible();
 
-  mira.state.hp = 0;
-  mira.state.conditions = ['Downed'];
-  snapshot.turn.roster = [neri.id];
-  await page.reload();
-  await page.getByRole('button', { name: 'Restoring touch · Help Mira', exact: true }).click();
-  await expect(page.getByText('Downed · needs healing', { exact: true })).toHaveCount(0);
-  expect(commands[1]).toEqual({ type: 'heal', abilityName: 'Restoring touch', targetId: mira.id });
-
+  mira.state.hp = 1;
+  mira.state.conditions = [];
+  snapshot.turn!.id = crypto.randomUUID();
+  snapshot.turn!.number++;
+  snapshot.turn!.actions = [];
+  snapshot.turn!.roster.push(mira.id);
   snapshot.myMemberId = mira.id;
   await page.reload();
   await expect(page.getByLabel('Your action', { exact: true })).toBeEnabled();
+  for (const stat of ['STR', 'DEX', 'INT', 'CHA', 'CON', 'WIS'])
+    await expect(
+      page.locator('.member-card').first().locator('.small-stats span', { hasText: stat }),
+    ).toBeVisible();
 
+  snapshot.myMemberId = neri.id;
+  neri.state.hp = neri.state.maxHp - 7;
+  snapshot.scene.encounter = { enemies: [], round: 1, initiative: [], victory: false, escaped: false };
+  await page.reload();
+  await page.getByRole('button', { name: 'Equipment & backpack' }).click();
+  const potion = neri.state.inventory.find((item) => item.healing > 0)!;
+  const item = page.getByRole('article', { name: potion.name, exact: true });
+  await expect(item.getByRole('button', { name: 'Drop one', exact: true })).toBeDisabled();
+  await item.getByRole('button', { name: 'Use on self', exact: true }).click();
+  expect(commands[1]).toEqual({ type: 'heal', itemId: potion.id });
+  await expect(page.getByLabel('Your action', { exact: true })).toBeEnabled();
+  expect(snapshot.turn!.actions).toEqual([]);
+  await item.getByLabel(`Healing target for ${potion.name}`).selectOption(mira.id);
+  await page.getByRole('button', { name: 'Heal Mira', exact: true }).click();
+  expect(commands[2]).toEqual({ type: 'heal', itemId: potion.id, targetId: mira.id });
+  await expect(page.getByLabel('Your action', { exact: true })).toHaveValue(`I use ${potion.name} on Mira.`);
+  await expect(page.getByLabel('Your action', { exact: true })).toBeDisabled();
+  expect(mira.state.hp).toBe(1);
+
+  snapshot.myMemberId = mira.id;
   mira.state.hp = 0;
   mira.state.conditions = ['Downed'];
   neri.state.hp = 0;
@@ -117,5 +156,5 @@ test('downed players watch, allies target healing items and abilities, and recov
   await page.reload();
   await expect(page.getByText('The party has been defeated.', { exact: false })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'DOWNED · Mira' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Next-floor character' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Next-turn character' })).toHaveCount(0);
 });

@@ -101,7 +101,11 @@ test('a live host language change reaches the next GM output and preserves earli
     const updated = await snapshot(page, campaign.id);
     expect(updated.config.language).toBe('Nederlands');
     expect(updated.history[0]).toEqual(opening);
-    expect(updated.history.at(-1)!.result!.summary).toBe('De groep heeft een nieuwe oefenronde afgerond.');
+    expect(updated.history.at(-1)!.result!.summary).toContain(
+      'De groep heeft een nieuwe oefenronde afgerond.',
+    );
+    expect(updated.history.at(-1)!.result!.summary).toContain('XP-beloningen:');
+    await expect(page.locator('.recap')).toContainText('+20 XP.');
     await expect(page.locator('.roll-receipt')).toContainText('INT');
     await page.reload();
     await expect(languageControl(page)).toHaveValue('Nederlands');

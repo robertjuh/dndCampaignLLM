@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { baseItem } from '../../shared/rules';
+import { baseItem, rollCharacterCreation } from '../../shared/rules';
 import { templateCharacter } from '../../shared/schema';
 
 for (const failure of ['save', 'refresh'] as const) {
@@ -159,7 +159,22 @@ test('character generation shows progress, populates the draft, and keeps failur
   const ready = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const sheet = templateCharacter('Generated warrior', 'Sea creature');
+  const base = templateCharacter('Generated warrior', 'Sea creature');
+  base.abilities.push(
+    {
+      ...base.abilities[0],
+      name: 'Hold the line',
+      description: 'Brace yourself or an ally against an attack.',
+    },
+    {
+      ...base.abilities[1],
+      name: 'Read the tides',
+      description: 'Find safe routes across open water.',
+      stat: 'WIS',
+    },
+  );
+  base.traits[0].blocked = ['body'];
+  const sheet = rollCharacterCreation(base, 'strike', 1, (sides) => (sides === 3 ? 2 : 1));
   sheet.equipmentOptions[0] = {
     ...baseItem('fork', 'Sighting fork', 'focus'),
     scaling: ['INT'],
@@ -187,9 +202,12 @@ test('character generation shows progress, populates the draft, and keeps failur
   await expect(page.locator('.character-editor textarea')).toHaveCount(1);
   await expect(page.locator('.character-sheet input, .character-sheet select')).toHaveCount(0);
   await expect(page.locator('.equipment-choices button')).toHaveCount(5);
-  await expect(page.locator('.ability-card')).toHaveCount(2);
+  await expect(page.locator('.ability-choices button')).toHaveCount(4);
   await expect(page.locator('.ability-mechanics').nth(0)).toContainText('2d6 + STR modifier');
-  await expect(page.locator('.ability-mechanics').nth(1)).toContainText('Advantage');
+  await expect(page.locator('.ability-power').first()).toHaveText('4–14 damage');
+  await expect(page.locator('.creation-compensation')).toContainText('Cannot wear body armour (major)');
+  await expect(page.locator('.creation-compensation')).toContainText('+4 STR (+2 STR modifier)');
+  await expect(page.locator('.ability-mechanics').nth(2)).toContainText('Advantage');
   await expect(page.locator('.equipment-choices button').nth(0)).toContainText(
     '+1 INT attack rolls while equipped',
   );
@@ -201,7 +219,16 @@ test('character generation shows progress, populates the draft, and keeps failur
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
   await page.locator('.equipment-choices button').nth(1).click();
   await expect(page.locator('.equipment-choices button').nth(2)).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
+  await page.locator('.ability-choices button').nth(0).click();
+  await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
+  await page.locator('.ability-choices button').nth(2).click();
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeEnabled();
+  await page.locator('.ability-choices button').nth(1).click();
+  await expect(page.locator('.ability-choices [aria-pressed="true"]')).toHaveCount(2);
+  await expect(page.locator('.ability-choices button').nth(0)).toHaveAttribute('aria-pressed', 'false');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: 'test-results/character-result.png', fullPage: true });
   await page.unroute('**/api/characters/generate');
   await page.route('**/api/characters/generate', (route) =>
@@ -211,6 +238,59 @@ test('character generation shows progress, populates the draft, and keeps failur
   await expect(page.locator('.generate-box').getByRole('alert')).toContainText('ChatGPT took too long');
   await expect(page.getByRole('heading', { name: sheet.name, exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Generate from my concept' })).toBeEnabled();
+  await expect(page.locator('.ability-choices [aria-pressed="true"]')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Save character', exact: true }).click();
+  await expect(page.locator('.character-editor')).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Review saved character', exact: true }).click();
+  await expect(page.locator('.ability-choices [aria-pressed="true"]')).toHaveCount(2);
+  const me = await (await page.request.get('/api/me')).json();
+  expect(me.characters[0].abilities.map((a: { name: string }) => a.name)).toEqual([
+    'Hold the line',
+    'Keen observation',
+  ]);
+  expect(me.characters[0].abilities).toHaveLength(2);
+  await page.unroute('**/api/characters/generate');
+  await page.route('**/api/characters/generate', (route) => route.fulfill({ json: sheet }));
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  await expect(page.locator('.ability-choices [aria-pressed="true"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
+});
+
+test('the host can compare ability pick rates in Settings on desktop and mobile', async ({ page }) => {
+  await page.route('**/api/chatgpt', (route) =>
+    route.fulfill({
+      json: { connected: false, shared: false, email: null, usageUrl: 'https://chatgpt.com/settings/usage' },
+    }),
+  );
+  let loads = 0;
+  await page.route('**/api/characters/ability-stats', (route) => {
+    loads++;
+    return route.fulfill({
+      json: {
+        characters: 2,
+        offers: 8,
+        selections: 4,
+        rows: [
+          { kind: 'combat', effect: 'strike', stat: 'STR', dice: '2d4', bonus: 2, offered: 2, selected: 2 },
+          { kind: 'combat', effect: 'mend', stat: 'CON', dice: '1d8', bonus: 0, offered: 2, selected: 0 },
+          { kind: 'utility', effect: 'assist', stat: 'WIS', dice: null, bonus: 1, offered: 4, selected: 2 },
+        ],
+      },
+    });
+  });
+  await page.goto('/settings');
+  const report = page.getByRole('region', { name: 'Ability choice statistics', exact: true });
+  await expect(report).toContainText('2 saved characters · 8 offers · 4 selections');
+  await expect(report.getByRole('row', { name: /strike · STR/ })).toContainText('100%');
+  await expect(report.getByRole('row', { name: /mend · CON/ })).toContainText('0%');
+  await expect(report.getByRole('row', { name: /Utility · WIS/ })).toContainText('50%');
+  await report.getByRole('button', { name: 'Refresh statistics' }).click();
+  await expect(report.getByRole('button', { name: 'Refresh statistics' })).toBeEnabled();
+  expect(loads).toBe(2);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/ability-balance-mobile.png', fullPage: true });
 });
 
 test('cancelling generation preserves the draft and allows another attempt', async ({ page }) => {

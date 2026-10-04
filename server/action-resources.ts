@@ -16,13 +16,8 @@ const mentionsName = (text: string, name: string) =>
 export function requestsAbility(text: string): boolean {
   // ponytail: English/Dutch intent guard; the model handles other languages and idioms.
   text = resourceText(text);
-  return (
-    /\b(?:abilit(?:y|ies)|power|skill|technique|special move|vaardighe(?:id|den)|kracht|techniek|vermogen|speciale (?:aanval|actie|zet))\b/i.test(
-      text,
-    ) &&
-    /\b(?:use(?:d)?|using|activate(?:d)?|activating|invoke(?:d)?|perform|with|try|gebruik\w*|activeer\w*|met|zet\w*)\b/i.test(
-      text,
-    )
+  return /\b(?:use(?:d)?|using|activate(?:d)?|activating|invoke(?:d)?|perform|with|try|gebruik\w*|activeer\w*|met|zet\w*)\s+(?:(?:my|the|a|an|one|of|own|special|combat|utility|mijn|de|een|eigen|speciale)\s+)*(?:abilit(?:y|ies)|power|skill|technique|special move|vaardighe(?:id|den)|kracht|techniek|vermogen|speciale (?:aanval|actie|zet))\b/i.test(
+    text,
   );
 }
 
@@ -32,7 +27,7 @@ export function requestedAbility(
   kind: Ability['kind'],
   suggestedName?: string | null,
 ): Ability | undefined {
-  if (action.passed) return undefined;
+  if (action.passed || action.supportAction) return undefined;
   const abilities = character.abilities.filter((ability) => ability.kind === kind);
   if (action.abilityName) return abilities.find((ability) => ability.name === action.abilityName);
   const text = resourceText(action.text);
@@ -50,7 +45,7 @@ export function requestedConsumable(
   action: Action,
   suggestedId?: string | null,
 ): CharacterState['inventory'][number] | undefined {
-  if (action.passed) return undefined;
+  if (action.passed || action.supportAction) return undefined;
   const text = resourceText(action.text);
   if (
     !/\b(?:use(?:d)?|using|drink\w*|drank|consume\w*|take|apply|heal(?:ed|s)?|revive(?:d|s)?|gebruik\w*|neem|genees(?:t|de)?)\b/i.test(

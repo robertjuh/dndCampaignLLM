@@ -76,6 +76,12 @@ test('an escaped player can explore, update, pass, and reengage while the encoun
     result: null,
     error: null,
   };
+  const downed = structuredClone(members[1]);
+  downed.id = 'downed-member';
+  downed.character.name = 'Downed ally';
+  downed.state.hp = 0;
+  downed.state.conditions = ['Downed'];
+  snapshot.members.push(downed);
   await page.addInitScript(() => {
     Object.defineProperty(window, 'EventSource', {
       value: class {
@@ -97,6 +103,16 @@ test('an escaped player can explore, update, pass, and reengage while the encoun
   await expect(action).toBeEnabled();
   await expect(page.getByText('Combat · Round 2', { exact: true })).toBeVisible();
   await expect(page.getByText('0 / 2 ready', { exact: true })).toBeVisible();
+
+  const utility = page.locator('.character-controls .ability-card').filter({ hasText: 'Keen observation' });
+  await expect(utility.getByRole('button', { name: 'Use ability', exact: true })).toBeEnabled();
+  const strike = page.locator('.character-controls .ability-card').filter({ hasText: 'Focused strike' });
+  await expect(strike.getByRole('button', { name: 'Use ability', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Help up Downed ally', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Equipment & backpack', exact: true }).click();
+  const healingTargets = page.getByLabel(`Healing target for ${escaped.character.healingItemName}`);
+  await expect(healingTargets.locator('option')).toHaveCount(1);
+  await expect(healingTargets.locator('option')).toHaveText(['Self · Instant']);
 
   const exploration = 'Explore the corridor beyond the fight.';
   await action.fill(exploration);

@@ -6,6 +6,109 @@ import { createApp } from '../server/app';
 import { openDatabase } from '../server/db';
 import { ChatGPTAuth } from '../server/auth';
 import { templateCharacter, type Snapshot } from '../shared/schema';
+import { chooseStartingAbilities, rollCharacterCreation } from '../shared/rules';
+
+it('cancels only the authenticated player’s own submission while the turn is collecting', async () => {
+  const db = openDatabase(':memory:');
+  const { app, game } = await createApp({
+    db,
+    auth: new ChatGPTAuth(mkdtempSync(join(tmpdir(), 'gather-cancel-api-'))),
+  });
+  try {
+    const host = game.identify();
+    const player = game.identify();
+    const stranger = game.identify();
+    const campaign = game.create(host.id, {
+      name: 'Cancel table',
+      setting: 'Forest',
+      provider: 'practice',
+      premise: '',
+      tone: '',
+      language: 'English',
+      instructions: '',
+      custom: [],
+    });
+    const character = game.saveCharacter(player.id, templateCharacter('Mira'));
+    game.join(campaign.inviteCode!, player.id, character.id);
+    const member = game.members(campaign.id)[0];
+    game.manageCharacter(campaign.id, player.id, {
+      type: 'starter',
+      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+    });
+    game.start(campaign.id, host.id);
+    await game.idle();
+    game.pause(campaign.id, host.id, true);
+    const turn = game.snapshot(campaign.id, player.id).turn!;
+    game.submit(campaign.id, player.id, turn.id, 'Watch the gate.', false);
+    const cancel = (token: string, payload = { turnId: turn.id }) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/campaigns/${campaign.id}/action/cancel`,
+        headers: { 'x-gather-request': '1' },
+        cookies: { gather_session: token },
+        payload,
+      });
+    expect((await cancel(stranger.token!)).statusCode).toBe(403);
+    expect((await cancel(host.token!)).statusCode).toBe(403);
+    expect((await cancel(player.token!, { turnId: 'invalid' })).statusCode).toBe(400);
+    expect(game.snapshot(campaign.id, player.id).turn!.actions).toHaveLength(1);
+    const response = await cancel(player.token!);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().turn).toMatchObject({ phase: 'collecting', actions: [] });
+    game.submit(campaign.id, player.id, turn.id, '', true);
+    game.pause(campaign.id, host.id, false);
+    expect((await cancel(player.token!)).statusCode).toBe(409);
+    await game.idle();
+  } finally {
+    await app.close();
+    db.close();
+  }
+});
+
+it('reports aggregate saved ability choices only through the local host endpoint', async () => {
+  const db = openDatabase(':memory:');
+  const { app, game } = await createApp({
+    db,
+    auth: new ChatGPTAuth(mkdtempSync(join(tmpdir(), 'gather-stats-'))),
+  });
+  try {
+    const player = game.identify();
+    const sheet = templateCharacter('Private name');
+    sheet.concept = 'Private concept';
+    sheet.abilities.push(
+      { ...sheet.abilities[0], name: 'Other combat' },
+      { ...sheet.abilities[1], name: 'Other utility' },
+    );
+    const character = rollCharacterCreation(sheet, 'strike', 0, () => 1);
+    character.abilities = chooseStartingAbilities(character, ['Focused strike', 'Other utility']);
+    game.saveCharacter(player.id, character);
+    const local = await app.inject({
+      method: 'GET',
+      url: '/api/characters/ability-stats',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(local.statusCode).toBe(200);
+    expect(local.json()).toMatchObject({ characters: 1, offers: 4, selections: 2 });
+    for (const privateValue of [
+      'Private name',
+      'Private concept',
+      player.id,
+      'Other combat',
+      'Other utility',
+    ])
+      expect(local.body).not.toContain(privateValue);
+    const phone = await app.inject({
+      method: 'GET',
+      url: '/api/characters/ability-stats',
+      remoteAddress: '192.0.2.10',
+    });
+    expect(phone.statusCode).toBe(403);
+    expect(phone.body).not.toContain('rows');
+  } finally {
+    await app.close();
+    db.close();
+  }
+});
 
 it('rejects cross-origin mutations and keeps display access read-only', async () => {
   const db = openDatabase(':memory:');

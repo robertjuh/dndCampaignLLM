@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import { combatSchema, lootSchema, type CombatInput, type Member } from '../shared/schema';
 import { isDowned, naturalWeapon } from '../shared/rules';
 import type { GMContext } from './game';
-import { requestedAbility } from './action-resources';
+import { requestedAbility, requestedConsumable } from './action-resources';
 
 type CombatAction = CombatInput['actions'][number];
 const fields = combatSchema.shape.actions.element.shape;
@@ -72,7 +72,7 @@ function chooseWeapon(member: Member, text: string, action: CombatAction) {
     action.weaponSlot = namedSlot;
     return member.state.equipment[namedSlot]!;
   }
-  if (action.weaponSlot === 'natural' || /\bunarmed\b|\bfists?\b|\bpunch\b|\bkick\b|\bbite\b/.test(text)) {
+  if (/\bunarmed\b|\bfists?\b|\bpunch\b|\bkick\b|\bbite\b/.test(text)) {
     action.weaponSlot = 'natural';
     return naturalWeapon(member.character);
   }
@@ -96,25 +96,53 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       member.state.hp > 0 &&
       !member.state.conditions.includes('Escaped'),
   );
-  const healingTargets = context.members.filter(
-    (member) =>
-      (allies.includes(member) || isDowned(member.state)) && !member.state.conditions.includes('Escaped'),
-  );
+  const healingTargets = context.members.filter((member) => member.state.hp > 0 || isDowned(member.state));
   const actions = context.turn.actions
     .filter((action) => !action.passed)
     .map((submitted): CombatAction => {
       const member = context.members.find((member) => member.id === submitted.memberId)!;
       const chosen = suggested.find((action) => action.memberId === submitted.memberId) ?? {};
       const text = submitted.text.toLowerCase();
+      if (submitted.supportAction) {
+        const support = submitted.supportAction;
+        return {
+          memberId: member.id,
+          main: support.type === 'help-up' ? 'help-up' : 'heal',
+          mainItemId: support.type === 'heal-ally' ? support.itemId : null,
+          targetId: support.targetId,
+          stat: 'WIS',
+          description: submitted.text.slice(0, 500),
+          abilityName: null,
+          minor: 'none',
+          minorItemId: null,
+          minorTargetId: null,
+          minorSlot: null,
+          weaponSlot: null,
+        };
+      }
       const intent = submittedIntent(text, chosen.main) ?? (returningToCombat(text) ? 'move' : undefined);
-      const ability = requestedAbility(
+      const combatAbility = requestedAbility(
         member.character,
         submitted,
         'combat',
         typeof chosen.abilityName === 'string' ? chosen.abilityName : null,
       );
+      const utility =
+        member.state.conditions.includes('Escaped') &&
+        !returningToCombat(text) &&
+        !['attack', 'defend', 'creative'].includes(intent ?? '') &&
+        !(combatAbility && combatAbility.name === chosen.abilityName)
+          ? requestedAbility(
+              member.character,
+              submitted,
+              'utility',
+              typeof chosen.abilityName === 'string' ? chosen.abilityName : null,
+            )
+          : undefined;
+      const ability = utility ?? combatAbility;
       let main = ability ? 'ability' : (intent ?? parse(fields.main, chosen.main, 'interact'));
       if (!ability && main === 'ability') main = intent ?? 'interact';
+      if (main === 'heal' || main === 'help-up') main = 'interact';
       let effect =
         main === 'creative' && intent === 'creative'
           ? ('influence' as const)
@@ -124,33 +152,68 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       const compatible = chosen.main === main;
       if (neutral) effect = undefined;
       const support = ability && ability.effect !== 'strike';
-      const allyTargets = (ability?.effect === 'mend' ? healingTargets : allies).map((ally) => ({
+      const allyTargets = (
+        ability && ['mend', 'cleanse'].includes(ability.effect)
+          ? healingTargets
+          : context.members.filter((ally) => ally.state.hp > 0 && context.turn.roster.includes(ally.id))
+      ).map((ally) => ({
         id: ally.id,
         name: ally.character.name,
       }));
-      const targets = support ? allyTargets : neutral ? [...enemies, ...allyTargets] : enemies;
-      const target =
-        targets.find((target) => mentions(text, target.name)) ??
-        targets.find((target) => target.id === (!neutral || compatible ? chosen.targetId : null)) ??
-        (support ? targets.find((target) => target.id === member.id) : neutral ? undefined : targets[0]);
-      let minor = parse(fields.minor, chosen.minor, 'none');
-      const requestsHealing =
-        /\b(?:heal\w*|revive|drink|potion|medkit|bandag\w*|repair|genees\w*|drank|verband|repareer|help\s+.+\s+(?:up|overeind))\b/.test(
+      // ponytail: common English/Dutch restrictions; the model handles more complex targeting prose.
+      const allowRetarget =
+        !/\b(?:only|solely|exclusively|alleen|uitsluitend)\b/.test(text) &&
+        parse(fields.allowRetarget, chosen.allowRetarget, true) !== false;
+      const targets = support
+        ? allyTargets
+        : neutral
+          ? [...enemies, ...allyTargets]
+          : main === 'attack' || ability?.effect === 'strike'
+            ? (context.scene.encounter?.enemies ?? [])
+            : enemies;
+      const namedTargets = targets
+        .filter((target) => mentions(text, target.name))
+        .sort((a, b) => text.indexOf(a.name.toLowerCase()) - text.indexOf(b.name.toLowerCase()));
+      const vagueAttack =
+        /^(?:(?:i|ik)\s+)?(?:attack|strike|hit|aanvallen|aanval)(?:\s+(?:(?:the|an|a|de|een)\s+)?(?:enemy|opponent|foe|vijand))?\s*[.!?]?\s*$/.test(
           text,
         );
-      const namedHealingItem = member.state.inventory.find(
-        (item) => item.healing > 0 && mentions(text, item.name),
+      const target =
+        namedTargets[0] ??
+        targets.find(
+          (target) =>
+            target.id ===
+            ((main === 'attack' && allowRetarget && vagueAttack) || (neutral && !compatible)
+              ? null
+              : chosen.targetId),
+        ) ??
+        (support
+          ? targets.find((target) => target.id === member.id)
+          : neutral || main === 'attack'
+            ? undefined
+            : enemies[0]);
+      const fallbackText =
+        text.split(/\b(?:otherwise|else|anders)\b/)[1] ??
+        text.match(
+          /\b(?:if|als)\b.+?\b(?:attack|strike|hit|shoot|stab|aanval(?:len)?|schiet|sla|steek)\b(.+)/,
+        )?.[1];
+      const backups = enemies.filter(
+        (enemy) => enemy.id !== target?.id && fallbackText && mentions(fallbackText, enemy.name),
       );
-      if (
-        requestsHealing &&
-        (!ability || namedHealingItem) &&
-        minor === 'none' &&
-        (namedHealingItem ||
-          /\b(?:heal\w*|revive|potion|medkit|bandag\w*|genees\w*|verband|help\s+.+\s+(?:up|overeind))\b/.test(
-            text,
-          ))
-      )
-        minor = 'heal';
+      const backup = fallbackText
+        ? (backups.find((enemy) => enemy.id === chosen.backupTargetId) ?? backups[0])
+        : undefined;
+      let minor = parse(fields.minor, chosen.minor, 'none');
+      const healingItem = requestedConsumable(
+        member,
+        submitted,
+        typeof chosen.minorItemId === 'string'
+          ? chosen.minorItemId
+          : typeof chosen.mainItemId === 'string'
+            ? chosen.mainItemId
+            : null,
+      );
+      if (healingItem?.healing) minor = 'heal';
       if (
         minor === 'offhand' &&
         (!(main === 'attack' || (main === 'ability' && ability?.effect === 'strike')) ||
@@ -159,21 +222,24 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
           ))
       )
         minor = 'none';
-      if (minor === 'heal' && !requestsHealing) minor = 'none';
+      if (minor === 'heal' && !healingItem?.healing) minor = 'none';
       if (minor === 'equip') minor = 'none';
       const action: CombatAction = {
         memberId: member.id,
         main,
+        mainItemId: null,
         reengage:
           member.state.conditions.includes('Escaped') &&
           (returningToCombat(text) ||
             main === 'attack' ||
             main === 'defend' ||
             main === 'creative' ||
-            !!ability ||
+            (!!ability && ability.kind === 'combat' && !['mend', 'cleanse'].includes(ability.effect)) ||
             minor === 'offhand'),
         abilityName: ability?.name ?? null,
         targetId: target?.id ?? null,
+        allowRetarget,
+        backupTargetId: !support && !neutral && allowRetarget ? (backup?.id ?? null) : null,
         stat:
           ability?.stat ??
           parse(
@@ -198,13 +264,54 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         weaponSlot: neutral ? null : parse(fields.weaponSlot, chosen.weaponSlot, null),
         dc: neutral && !compatible ? undefined : parse(fields.dc, chosen.dc, undefined),
         effect,
+        cureCondition:
+          main === 'interact' && compatible ? parse(fields.cureCondition, chosen.cureCondition, null) : null,
       };
-      if (minor === 'heal')
-        action.minorItemId =
-          namedHealingItem?.id ??
-          member.state.inventory.find((item) => item.id === action.minorItemId && item.healing > 0)?.id ??
-          member.state.inventory.find((item) => item.healing > 0)?.id ??
-          null;
+      if (action.cureCondition) {
+        const treatmentTarget =
+          healingTargets.find((ally) => mentions(text, ally.character.name) && ally.id !== member.id) ??
+          healingTargets.find((ally) => ally.id === chosen.targetId) ??
+          member;
+        action.targetId = treatmentTarget.id;
+        action.weaponSlot = null;
+        action.mainItemId = requestedConsumable(member, submitted)?.id ?? null;
+        if (action.mainItemId) {
+          action.minor = 'none';
+          action.minorItemId = null;
+          action.minorTargetId = null;
+        }
+      }
+      if (minor === 'heal') action.minorItemId = healingItem?.id ?? null;
+      const namedAlly = context.members.find(
+        (ally) => ally.id !== member.id && mentions(text, ally.character.name),
+      );
+      const helpsUp = /\b(?:help\s+.+\s+(?:up|overeind)|help\s+.+\s+op)\b/.test(text);
+      if (!action.cureCondition && (!ability || healingItem) && (helpsUp || (healingItem && namedAlly))) {
+        action.main = healingItem ? 'heal' : 'help-up';
+        action.mainItemId = healingItem?.id ?? null;
+        action.targetId = namedAlly?.id ?? null;
+        action.abilityName = null;
+        action.minor = 'none';
+        action.minorItemId = null;
+        action.minorTargetId = null;
+        action.minorSlot = null;
+        action.weaponSlot = null;
+        action.effect = undefined;
+        action.dc = undefined;
+      }
+      if (namedAlly && (support || neutral || ['help-up', 'heal'].includes(action.main)))
+        action.targetId = namedAlly.id;
+      if (
+        (support || neutral) &&
+        !namedAlly &&
+        compatible &&
+        context.members.some((ally) => ally.id === chosen.targetId)
+      )
+        action.targetId = chosen.targetId as string;
+      if (utility) {
+        action.targetId = namedAlly?.id ?? (typeof chosen.targetId === 'string' ? chosen.targetId : null);
+        action.dc ??= 10;
+      }
       if (action.main === 'attack') action.stat = chooseWeapon(member, text, action).scaling[0] ?? 'STR';
       return action;
     });
@@ -232,7 +339,7 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       hands: 1,
       light: false,
       description:
-        `${context.config.language === 'Nederlands' ? 'Gevonden in' : 'Recovered in'} ${context.scene.floor.biome}.`.slice(
+        `${context.config.language === 'Nederlands' ? 'Gevonden in' : 'Recovered in'} ${context.scene.location.name}.`.slice(
           0,
           500,
         ),

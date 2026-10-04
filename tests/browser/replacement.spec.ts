@@ -8,7 +8,7 @@ async function post<T>(request: APIRequestContext, path: string, data: unknown):
   return response.json();
 }
 
-test('a fallen player queues and cancels a fresh character without changing this floor or past actions', async ({
+test('a fallen player queues and cancels a fresh character without changing the story or past actions', async ({
   page,
 }) => {
   const fallen = templateCharacter('Fallen Ivo');
@@ -18,9 +18,9 @@ test('a fallen player queues and cancels a fresh character without changing this
   await post(page.request, '/api/characters', templateCharacter('Unfinished character'));
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
     ruleset: 'roguelike-v1',
-    name: 'The next-floor road',
+    name: 'The road ahead',
     setting: 'A tower',
-    premise: 'Find the next floor.',
+    premise: 'Follow the road.',
     tone: 'Adventurous',
     language: 'English',
     instructions: '',
@@ -36,7 +36,7 @@ test('a fallen player queues and cancels a fresh character without changing this
   await post(page.request, `/api/campaigns/${campaign.id}/start`, {});
   const member = snapshot.members.find((candidate) => candidate.id === snapshot.myMemberId)!;
   snapshot.status = 'active';
-  snapshot.scene.floor.number = 2;
+  snapshot.scene.encounters = 2;
   member.state.hp = 0;
   member.state.deathReason = 'The bridge collapsed.';
   snapshot.history = [
@@ -80,7 +80,7 @@ test('a fallen player queues and cancels a fresh character without changing this
   await expect(page.getByText('Fallen Ivo fell while crossing the bridge.', { exact: true })).toBeVisible();
   for (const suggestion of ['Search the ruins', 'Follow the bridge'])
     await expect(page.getByRole('button', { name: suggestion, exact: true })).toHaveCount(0);
-  const picker = page.getByRole('region', { name: 'Next-floor character' });
+  const picker = page.getByRole('region', { name: 'Next-turn character' });
   const select = picker.getByRole('combobox', { name: 'Replacement character' });
   await expect(select).toBeEnabled();
   await expect(select.locator('option', { hasText: 'Unfinished character' })).toHaveCount(0);
@@ -111,6 +111,8 @@ test('a fallen player queues and cancels a fresh character without changing this
   await expect(
     library.locator('.character-sheet').getByRole('heading', { name: 'New Neri', exact: true }),
   ).toBeVisible();
+  await library.locator('.ability-choices button').nth(0).click();
+  await library.locator('.ability-choices button').nth(2).click();
   await library.locator('.equipment-choices button').nth(0).click();
   await library.locator('.equipment-choices button').nth(1).click();
   const saved = library.waitForResponse(
@@ -128,9 +130,9 @@ test('a fallen player queues and cancels a fresh character without changing this
   await picker.getByRole('button', { name: 'Refresh saved characters' }).click();
   await expect(select.locator('option', { hasText: 'New Neri' })).toHaveCount(1);
   await select.selectOption(newSaved.id);
-  await picker.getByRole('button', { name: 'Join on next floor', exact: true }).click();
+  await picker.getByRole('button', { name: 'Queue for next turn', exact: true }).click();
   await expect(picker.getByRole('status')).toContainText('New Neri');
-  await expect(picker.getByRole('status')).toContainText('Level 1 · Fresh starting equipment');
+  await expect(picker.getByRole('status')).toContainText('Level 1 · 0 XP · Fresh starting equipment');
   await expect(page.getByRole('heading', { name: `FALLEN · ${fallen.name}` })).toBeVisible();
   await page.reload();
   await expect(select).toHaveValue(newSaved.id);
@@ -140,13 +142,13 @@ test('a fallen player queues and cancels a fresh character without changing this
   await picker.getByRole('button', { name: 'Cancel replacement', exact: true }).click();
   await expect(picker.getByRole('status')).toHaveCount(0);
   await select.selectOption(newSaved.id);
-  await picker.getByRole('button', { name: 'Join on next floor', exact: true }).click();
+  await picker.getByRole('button', { name: 'Queue for next turn', exact: true }).click();
   expect(selections).toEqual([newSaved.id, null, newSaved.id]);
 
-  // The server replaces the member sheet only when the next floor arrives.
-  snapshot.scene.floor.number++;
+  // The server introduces the queued character on the turn after a successful encounter.
+  snapshot.scene.encounters++;
   member.character = newSaved;
-  member.state = initialState(newSaved, 'new-floor');
+  member.state = initialState(newSaved, 'new-turn');
   member.replacement = null;
   await page.reload();
   await expect(picker).toHaveCount(0);

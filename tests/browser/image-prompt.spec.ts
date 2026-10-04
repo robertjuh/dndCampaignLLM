@@ -82,8 +82,8 @@ async function setup(page: Page) {
   snapshot.status = 'active';
   snapshot.members = [member];
   snapshot.myMemberId = member.id;
-  snapshot.scene.floor.number = 9;
-  snapshot.scene.floor.atmosphere = 'A later floor that must not appear in the saved scene.';
+  snapshot.scene.location.name = 'A later location';
+  snapshot.scene.location.atmosphere = 'A later location that must not appear in the saved scene.';
   snapshot.history = [opening, latest];
   snapshot.turn = {
     ...latest,

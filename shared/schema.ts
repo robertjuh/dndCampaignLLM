@@ -1,21 +1,46 @@
 import { z } from 'zod';
+import { ailments } from './ailments';
 
-export const stats = ['STR', 'DEX', 'INT'] as const;
+export const ailmentSchema = z.enum(ailments);
+
+export const stats = ['STR', 'DEX', 'INT', 'CHA', 'CON', 'WIS'] as const;
 export const statSchema = z.enum(stats);
 export type Stat = z.infer<typeof statSchema>;
-export const statArray = [5, 5, 5];
+export const statArray = [5, 5, 5, 5, 5, 5];
 export const abilitySchema = z
   .object({
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(500),
     kind: z.enum(['combat', 'utility']),
-    effect: z.enum(['strike', 'mend', 'assist', 'guard']),
+    effect: z.enum(['strike', 'mend', 'assist', 'guard', 'cleanse']),
     level: z.number().int().min(1).default(1),
     stat: statSchema.default('INT'),
     healing: z.enum(['normal', 'repair', 'necrotic']).default('normal'),
+    dice: z.enum(['1d4', '1d6', '1d8', '1d12', '2d4', '2d6', '2d8']).optional(),
+    bonus: z.number().int().min(0).max(6).optional(),
+    inflicts: ailmentSchema.nullable().optional(),
+    cures: z.array(ailmentSchema).max(2).optional(),
   })
   .strict()
   .superRefine((ability, ctx) => {
+    if (ability.inflicts && (ability.kind !== 'combat' || ability.effect !== 'strike'))
+      ctx.addIssue({ code: 'custom', message: 'Only combat strikes inflict ailments.', path: ['inflicts'] });
+    if (ability.cures?.length && (ability.kind !== 'combat' || ability.effect === 'strike'))
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Only support combat abilities cure ailments.',
+        path: ['cures'],
+      });
+    if (ability.effect === 'cleanse' && !ability.cures?.length)
+      ctx.addIssue({ code: 'custom', message: 'Cleanse must cure at least one ailment.', path: ['cures'] });
+    if (new Set(ability.cures).size !== (ability.cures?.length ?? 0))
+      ctx.addIssue({ code: 'custom', message: 'Cures must be distinct.', path: ['cures'] });
+    if (ability.dice && !['strike', 'mend'].includes(ability.effect))
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Only strike and mend abilities roll effect dice.',
+        path: ['dice'],
+      });
     if (ability.kind === 'utility' && ability.effect !== 'assist')
       ctx.addIssue({
         code: 'custom',
@@ -30,12 +55,15 @@ export const itemSchema = z
     id: z.string().min(1).max(100),
     name: z.string().min(1).max(100),
     kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic']),
-    rarity: z.enum(['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Cursed']),
+    rarity: z.enum(['Common', 'Uncommon', 'Rare', 'Legendary', 'Cursed']),
     scaling: z.array(statSchema).max(2),
     requirements: z.object({
       STR: z.number().int().min(0).max(50),
       DEX: z.number().int().min(0).max(50),
       INT: z.number().int().min(0).max(50),
+      CHA: z.number().int().min(0).max(50).default(0),
+      CON: z.number().int().min(0).max(50).default(0),
+      WIS: z.number().int().min(0).max(50).default(0),
     }),
     hands: z.union([z.literal(1), z.literal(2)]),
     light: z.boolean(),
@@ -56,15 +84,18 @@ export const traitSchema = z
     description: z.string().min(1).max(700),
     stats: z
       .object({
-        STR: z.number().int().min(-3).max(4),
-        DEX: z.number().int().min(-3).max(4),
-        INT: z.number().int().min(-3).max(4),
+        STR: z.number().int().min(-5).max(8),
+        DEX: z.number().int().min(-5).max(8),
+        INT: z.number().int().min(-5).max(8),
+        CHA: z.number().int().min(-5).max(8).default(0),
+        CON: z.number().int().min(-5).max(8).default(0),
+        WIS: z.number().int().min(-5).max(8).default(0),
       })
       .strict(),
     blocked: z.array(z.enum(slots)).max(5),
     hp: z.number().int().min(-4).max(4),
     defense: z.number().int().min(0).max(1),
-    immunities: z.array(z.enum(['Bleeding', 'Burning', 'Poisoned', 'Stunned', 'Weakened'])).max(2),
+    immunities: z.array(ailmentSchema).max(2),
     healing: z.enum(['normal', 'repair', 'necrotic']),
     regeneration: z.number().int().min(0).max(1),
     natural: z.boolean(),
@@ -127,13 +158,39 @@ export const characterSchema = z
         STR: z.number().int().min(0).max(15),
         DEX: z.number().int().min(0).max(15),
         INT: z.number().int().min(0).max(15),
+        CHA: z.number().int().min(0).max(15).default(5),
+        CON: z.number().int().min(0).max(15).default(5),
+        WIS: z.number().int().min(0).max(15).default(5),
       })
       .strict(),
     abilities: z.array(abilitySchema),
+    abilityOptions: z.array(abilitySchema).length(4).optional(),
+    creationBonuses: z
+      .object({
+        attributes: z.array(statSchema).max(8),
+        abilityPower: z.number().int().min(0).max(4),
+        version: z.literal(2).optional(),
+      })
+      .strict()
+      .optional(),
     equipment: z.array(z.string().trim().min(1).max(80)).max(4),
   })
   .strict();
 export type Character = z.infer<typeof characterSchema>;
+export type AbilityChoiceStats = {
+  characters: number;
+  offers: number;
+  selections: number;
+  rows: {
+    kind: Ability['kind'];
+    effect: Ability['effect'];
+    stat: Stat;
+    dice: string | null;
+    bonus: number;
+    offered: number;
+    selected: number;
+  }[];
+};
 export const campaignLanguageSchema = z.enum(['English', 'Nederlands']);
 export const campaignSchema = z
   .object({
@@ -221,9 +278,9 @@ export const outcomeSchema = z
     gold: z.number().int().min(0).max(100).default(0),
     lethalWarning: z.string().max(1000).nullable().default(null),
     safeRest: z.boolean().default(false),
-    nextFloor: z
+    location: z
       .object({
-        biome: z.string().min(1).max(100),
+        name: z.string().min(1).max(100),
         atmosphere: z.string().min(1).max(1500),
         hazard: z.string().max(1000),
       })
@@ -261,7 +318,9 @@ export type CharacterState = {
   kills: number;
   bosses: number;
   deathReason: string | null;
-  restedFloor: number | null;
+  downedThisEncounter?: boolean;
+  respawnReady?: boolean;
+  restedEncounter: number | null;
   guarding?: boolean;
   abilityUses?: Record<string, number>;
   abilityGuard?: number;
@@ -278,14 +337,18 @@ export const enemySchema = z
     damage: z.string().regex(/^[1-4]d(?:4|6|8|10|12)$/),
     description: z.string().max(1000),
     tactic: z.string().max(500),
-    onHit: z.enum(['Bleeding', 'Burning', 'Poisoned', 'Stunned', 'Weakened']).nullable().default(null),
+    equipmentBlueprints: z.array(lootSchema).min(1).max(5).optional(),
+    onHit: ailmentSchema.nullable().default(null),
   })
   .strict();
 export type Enemy = z.infer<typeof enemySchema> & {
+  equipment?: Item[];
   maxHp: number;
   initiative: number;
   withdrawn?: boolean;
   stunned?: boolean;
+  conditions?: string[];
+  conditionTurns?: Record<string, number>;
 };
 export type Encounter = {
   enemies: Enemy[];
@@ -295,14 +358,12 @@ export type Encounter = {
   escaped: boolean;
 };
 export type Scene = {
-  floor: {
-    number: number;
-    biome: string;
+  location: {
+    name: string;
     atmosphere: string;
     hazard: string;
-    encounters: number;
-    cleared: boolean;
   };
+  encounters: number;
   encounter: Encounter | null;
   loot: (Item & { quantity: number })[];
   lethalWarning: string | null;
@@ -316,10 +377,23 @@ export const combatSchema = z
         z
           .object({
             memberId: z.string().uuid(),
-            main: z.enum(['attack', 'defend', 'flee', 'creative', 'ability', 'move', 'interact']),
+            main: z.enum([
+              'attack',
+              'defend',
+              'flee',
+              'creative',
+              'ability',
+              'move',
+              'interact',
+              'help-up',
+              'heal',
+            ]),
             reengage: z.boolean().optional(),
             abilityName: z.string().min(1).max(80).nullable().optional(),
             targetId: z.string().nullable(),
+            allowRetarget: z.boolean().optional(),
+            backupTargetId: z.string().nullable().optional(),
+            mainItemId: z.string().nullable().default(null),
             stat: statSchema,
             description: z.string().max(500),
             minor: z.enum(['none', 'heal', 'offhand', 'equip']),
@@ -328,6 +402,7 @@ export const combatSchema = z
             minorSlot: z.enum(slots).nullable().default(null),
             dc: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]).optional(),
             effect: z.enum(['damage', 'stun', 'influence']).optional(),
+            cureCondition: ailmentSchema.nullable().optional(),
             weaponSlot: z.enum(['left', 'right', 'natural']).nullable().optional(),
           })
           .strict(),
@@ -338,6 +413,13 @@ export const combatSchema = z
   })
   .strict();
 export type CombatInput = z.infer<typeof combatSchema>;
+export const supportActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('help-up'), targetId: z.string().uuid() }).strict(),
+  z
+    .object({ type: z.literal('heal-ally'), targetId: z.string().uuid(), itemId: z.string().min(1).max(100) })
+    .strict(),
+]);
+export type SupportAction = z.infer<typeof supportActionSchema>;
 export type Member = {
   id: string;
   playerId: string;
@@ -354,6 +436,7 @@ export type Action = {
   passed: boolean;
   acceptsLethalRisk?: boolean;
   abilityName?: string | null;
+  supportAction?: SupportAction;
   characterName?: string;
 };
 export type Roll = Check & {
@@ -401,7 +484,7 @@ export function blankTrait(name = 'Custom trait'): Trait {
     id: name,
     name,
     description: 'Describe a benefit and a drawback.',
-    stats: { STR: 0, DEX: 0, INT: 0 },
+    stats: { STR: 0, DEX: 0, INT: 0, CHA: 0, CON: 0, WIS: 0 },
     blocked: [],
     hp: 0,
     defense: 0,
@@ -425,7 +508,7 @@ export function templateCharacter(name = 'New character', species = 'Custom spec
     personality: '',
     motivation: '',
     weakness: '',
-    stats: { STR: 5, DEX: 5, INT: 5 },
+    stats: { STR: 5, DEX: 5, INT: 5, CHA: 5, CON: 5, WIS: 5 },
     equipment: [],
     abilities: [
       {
@@ -454,7 +537,7 @@ export function templateCharacter(name = 'New character', species = 'Custom spec
       kind: 'weapon' as const,
       rarity: 'Common' as const,
       scaling: [stats[i % stats.length]],
-      requirements: { STR: 0, DEX: 0, INT: 0 },
+      requirements: { STR: 0, DEX: 0, INT: 0, CHA: 0, CON: 0, WIS: 0 },
       hands: 1 as const,
       light: stats[i % stats.length] === 'DEX',
       damage: '1d6',
