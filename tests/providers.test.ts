@@ -1008,7 +1008,22 @@ describe('server-driven combat phases', () => {
     });
     const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
     const supplied = JSON.parse(request.input[0].content);
-    expect(supplied.members).toContainEqual(downed);
+    expect(supplied.members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: downed.id,
+          character: expect.objectContaining({
+            name: downed.character.name,
+            abilities: downed.character.abilities,
+          }),
+          state: expect.objectContaining({
+            hp: 0,
+            conditions: downed.state.conditions,
+            inventory: downed.state.inventory,
+          }),
+        }),
+      ]),
+    );
     expect(supplied.turn.roster).not.toContain(downed.id);
     expect(request.instructions).toContain('never invent actions for them');
     expect(request.instructions).toContain('optional minorTargetId');
@@ -1987,7 +2002,26 @@ describe('setting and character interactions', () => {
       expect(fetcher).toHaveBeenCalledTimes(phase === 'noncombat' ? 3 : 1);
       const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
       const input = JSON.parse(request.input[0].content);
-      expect(input).toMatchObject({ config: context.config, members: context.members, journal: [fact] });
+      expect(input).toMatchObject({ config: context.config, journal: [fact] });
+      expect(input.members).toMatchObject(
+        context.members.map(({ id, character, state }) => ({
+          id,
+          character: {
+            concept: character.concept,
+            species: character.species,
+            traits: character.traits,
+            abilities: character.abilities,
+            background: character.background,
+          },
+          state: {
+            stats: state.stats,
+            hp: state.hp,
+            conditions: state.conditions,
+            equipment: state.equipment,
+            inventory: state.inventory,
+          },
+        })),
+      );
       const policy = request.instructions.match(
         /Setting and character continuity:[\s\S]*?contradict a resolved result\./,
       )?.[0];

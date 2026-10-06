@@ -67,6 +67,92 @@ function fixture(provider: GameMaster = { resolve: async () => outcome() }, file
   return { game, db, host, p1, p2, c, c1, c2, draw };
 }
 
+it.each(['assist', 'mend'] as const)(
+  'resolves selected utility %s in combat and preserves its charge through retry',
+  async (effect) => {
+    let fail = true;
+    const f = fixture({
+      planCombat: async (ctx) => ({
+        actions: [
+          {
+            memberId: ctx.members[0].id,
+            main: effect === 'mend' ? 'ability' : 'creative',
+            abilityName: ctx.members[0].character.abilities[1].name,
+            targetId: effect === 'mend' ? ctx.members[1].id : 'foe',
+            stat: 'INT',
+            dc: 10,
+            ...(effect === 'assist' ? { effect: 'stun' } : {}),
+          },
+        ],
+      }),
+      resolve: async (ctx) => {
+        if (ctx.combatResult && fail) throw new Error('Interrupted utility narration');
+        return outcome();
+      },
+    });
+    const turn = await start(f);
+    const [actor, target] = f.game.members(f.c.id);
+    const ability = actor.character.abilities[1];
+    ability.effect = effect;
+    ability.stat = 'INT';
+    if (effect === 'mend') ability.cures = ['Shocked'];
+    target.state.hp = 10;
+    applyCondition(target.state, 'Shocked');
+    f.db.prepare('UPDATE members SET sheet = ? WHERE id = ?').run(JSON.stringify(actor.character), actor.id);
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(target.state), target.id);
+    const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+    scene.encounter = {
+      round: 1,
+      victory: false,
+      escaped: false,
+      initiative: [{ id: actor.id, total: 15 }],
+      enemies: [
+        {
+          id: 'foe',
+          name: 'Guard',
+          tier: 'normal',
+          hp: 60,
+          maxHp: 60,
+          defense: 10,
+          attack: 0,
+          damage: '1d4',
+          description: 'Guard',
+          tactic: 'Wait',
+          onHit: null,
+          initiative: 1,
+        },
+      ],
+    };
+    f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
+    f.draw.mockImplementation((sides) => Math.min(8, sides));
+    f.game.submit(
+      f.c.id,
+      f.p1.id,
+      turn.id,
+      effect === 'mend' ? `Use ${ability.name} on Rowan` : `Use ${ability.name} to distract the Guard`,
+      false,
+      false,
+      ability.name,
+    );
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+    expect(f.game.members(f.c.id)[0].state.abilityUses?.[ability.name] ?? 0).toBe(0);
+    const draws = f.draw.mock.calls.length;
+    fail = false;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    const result = f.game.snapshot(f.c.id, f.host.id);
+    expect(result.turn!.phase).toBe('collecting');
+    expect(f.draw.mock.calls.length).toBe(draws);
+    expect(result.members[0].state.abilityUses?.[ability.name]).toBe(1);
+    if (effect === 'mend') {
+      expect(result.members[1].state.hp).toBe(16);
+      expect(result.members[1].state.conditions).not.toContain('Shocked');
+    } else expect(result.scene.encounter!.enemies[0].stunned).toBe(true);
+  },
+);
+
 it('edits only owned templates and lobby characters, resets readiness, and preserves active runs', async () => {
   const { game, p1, p2, host, c, c1 } = fixture();
   expect(() => game.updateCharacter(p2.id, c1.id, templateCharacter('Stolen'))).toThrow('not found');
@@ -251,7 +337,7 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
   cleanup.unshift(() => db.close());
   const game = new Game(db, () => ({ resolve: async () => outcome() }));
   const restored = game.snapshot(f.c.id, f.host.id);
-  expect(db.pragma('user_version', { simple: true })).toBe(8);
+  expect(db.pragma('user_version', { simple: true })).toBe(11);
   expect(restored.members[0].state).toMatchObject({
     hp: 7,
     level: 3,
@@ -281,6 +367,44 @@ function submitBoth(f: ReturnType<typeof fixture>, turnId: string) {
   f.game.submit(f.c.id, f.p1.id, turnId, 'Investigate the door.', false);
   f.game.submit(f.c.id, f.p2.id, turnId, 'Watch the road.', false);
 }
+
+it('allows a legacy encounter introduction at a new location but blocks leaving an ongoing fight', async () => {
+  const deck = { name: 'Ship deck', atmosphere: 'Salt and smoke.', hazard: 'Armed defenders.' };
+  const f = fixture({
+    resolve: async (context, tools) => {
+      if (!context.turn.number) return outcome();
+      if (context.turn.number === 1) {
+        tools.startCombat([
+          {
+            id: 'defender',
+            name: 'Defender',
+            tier: 'normal',
+            hp: 60,
+            defense: 10,
+            attack: 0,
+            damage: '1d4',
+            description: 'Guards the helm.',
+            tactic: 'Guard',
+          },
+        ]);
+        return outcome({ location: deck });
+      }
+      return outcome({ location: { name: 'Open sea', atmosphere: 'Clear sky.', hazard: '' } });
+    },
+  });
+  f.draw.mockImplementation((sides: number) => Math.min(12, sides));
+  submitBoth(f, (await start(f)).id);
+  await f.game.idle();
+  const boarded = f.game.snapshot(f.c.id, f.host.id);
+  expect(boarded.turn!.phase).toBe('collecting');
+  expect(boarded.scene.location).toEqual(deck);
+  expect(boarded.scene.encounter).toMatchObject({ round: 1, victory: false });
+  submitBoth(f, boarded.turn!.id);
+  await f.game.idle();
+  const failed = f.game.snapshot(f.c.id, f.host.id);
+  expect(failed.turn!.error).toContain('The party cannot leave an active combat');
+  expect(failed.scene.location).toEqual(deck);
+});
 
 it('saves free equipment changes with their turn and includes them once in the summary after a restart and retry', async () => {
   let attempt = 0;
@@ -469,43 +593,47 @@ describe('downing and allied recovery', () => {
     expect(f.game.snapshot(f.c.id, f.host.id).turn!.number).toBe(4);
   });
 
-  it('uses a saved Mend ability outside combat to revive an ally and records its use and roll', async () => {
-    const f = await downFirst();
-    const [downed, healer] = f.game.members(f.c.id);
-    const ability = {
-      ...healer.character.abilities[0],
-      name: 'Field mend',
-      effect: 'mend' as const,
-      stat: 'INT' as const,
-    };
-    healer.character.abilities.push(ability);
-    f.db
-      .prepare('UPDATE members SET sheet = ? WHERE id = ?')
-      .run(JSON.stringify(healer.character), healer.id);
-    f.draw.mockReturnValue(4);
-    f.game.manageCharacter(f.c.id, healer.playerId, {
-      type: 'heal',
-      abilityName: ability.name,
-      targetId: downed.id,
-    });
-    await f.game.idle();
-    const restored = f.game.snapshot(f.c.id, f.host.id);
-    expect(restored.members[0].state.hp).toBe(4);
-    expect(restored.members[1].state.abilityUses?.[ability.name]).toBe(1);
-    expect(restored.history.at(-1)!.rolls.at(-1)).toMatchObject({
-      memberId: healer.id,
-      dice: [4],
-      notation: 'd6',
-    });
-    expect(() =>
+  it.each(['combat', 'utility'] as const)(
+    'uses a saved %s Mend ability outside combat to revive an ally and records its use and roll',
+    async (kind) => {
+      const f = await downFirst();
+      const [downed, healer] = f.game.members(f.c.id);
+      const ability = {
+        ...healer.character.abilities[0],
+        name: 'Field mend',
+        kind,
+        effect: 'mend' as const,
+        stat: 'INT' as const,
+      };
+      healer.character.abilities.push(ability);
+      f.db
+        .prepare('UPDATE members SET sheet = ? WHERE id = ?')
+        .run(JSON.stringify(healer.character), healer.id);
+      f.draw.mockReturnValue(4);
       f.game.manageCharacter(f.c.id, healer.playerId, {
         type: 'heal',
         abilityName: ability.name,
         targetId: downed.id,
-      }),
-    ).toThrow();
-    expect(f.draw).toHaveBeenCalledTimes(2);
-  });
+      });
+      await f.game.idle();
+      const restored = f.game.snapshot(f.c.id, f.host.id);
+      expect(restored.members[0].state.hp).toBe(4);
+      expect(restored.members[1].state.abilityUses?.[ability.name]).toBe(1);
+      expect(restored.history.at(-1)!.rolls.at(-1)).toMatchObject({
+        memberId: healer.id,
+        dice: [4],
+        notation: 'd6',
+      });
+      expect(() =>
+        f.game.manageCharacter(f.c.id, healer.playerId, {
+          type: 'heal',
+          abilityName: ability.name,
+          targetId: downed.id,
+        }),
+      ).toThrow();
+      expect(f.draw).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('downs the first critical impact or critical failure and prevents healing a permanently dead ally', async () => {
     for (const [impact, failsCritically] of [
@@ -1103,7 +1231,7 @@ describe('roguelike multiplayer lifecycle', () => {
     submitBoth(f, turn.id);
     await f.game.idle();
     turn = f.game.snapshot(f.c.id, f.host.id).turn!;
-    f.draw.mockImplementation(() => 6);
+    f.draw.mockImplementation((sides) => Math.min(6, sides));
     submitBoth(f, turn.id);
     await f.game.idle();
     const draws = f.draw.mock.calls.length;
@@ -1432,7 +1560,7 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   ability.level = 2;
   ability.bonus = 1;
   member.state.stats.INT = 7;
-  member.state.equipment.left = {
+  member.state.equipment.relic = {
     ...baseItem('relic', 'Remembered oath', 'relic'),
     scaling: ['INT'],
     checkBonus: 1,
@@ -1451,8 +1579,8 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   await f.game.idle();
   expect(receipts[0]).toMatchObject({
     dice: [4, 12],
-    modifier: 4,
-    total: 16,
+    modifier: 6,
+    total: 18,
     success: true,
     mode: 'advantage',
     abilityName: ability.name,
@@ -1802,69 +1930,75 @@ it.each(['Drink my potion.', 'Drink my Crimson potion.'])(
   },
 );
 
-it('requires inferred Mend usage before reviving an ally and repairs its omitted use on retry', async () => {
-  let useMend = false;
-  const f = fixture({
-    resolve: async (ctx, tools) => {
-      if (ctx.turn.number === 1)
-        return outcome({
-          changes: [{ type: 'hp', memberId: ctx.members[0].id, amount: -2, reason: 'A falling stone.' }],
-        });
-      if (ctx.turn.number === 2 && useMend) {
-        const healer = ctx.members.find((member) => member.character.name === 'Rowan')!;
-        const target = ctx.members.find((member) => member.character.name === 'Mira')!;
-        const input = {
-          memberId: healer.id,
-          itemId: null,
-          abilityName: healer.character.abilities[0].name,
-          targetId: target.id,
-        };
-        const receipt = tools.useResource!(input);
-        expect(tools.useResource!(input)).toEqual(receipt);
-        expect(receipt).toMatchObject({ targetId: target.id, restored: 4 });
-      }
-      return outcome();
-    },
-  });
-  const [target, healer] = f.game.members(f.c.id);
-  target.state.hp = 1;
-  healer.character.abilities[0] = {
-    ...healer.character.abilities[0],
-    name: 'Field mend',
-    effect: 'mend',
-    stat: 'INT',
-  };
-  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(target.state), target.id);
-  f.db.prepare('UPDATE members SET sheet = ? WHERE id = ?').run(JSON.stringify(healer.character), healer.id);
-  let turn = await start(f);
-  submitBoth(f, turn.id);
-  await f.game.idle();
-  expect(isDowned(f.game.members(f.c.id)[0].state)).toBe(true);
-  f.draw.mockReturnValue(4);
-  turn = f.game.snapshot(f.c.id, f.host.id).turn!;
-  f.game.submit(f.c.id, f.p2.id, turn.id, 'Use Field mend to help Mira up.', false);
-  await f.game.idle();
-  expect(f.game.snapshot(f.c.id, f.host.id).turn!).toMatchObject({
-    phase: 'failed',
-    error: expect.stringContaining('use_resource'),
-  });
-  expect(isDowned(f.game.members(f.c.id)[0].state)).toBe(true);
-  expect(f.game.members(f.c.id)[1].state.abilityUses?.['Field mend']).toBeUndefined();
-  useMend = true;
-  f.game.retry(f.c.id, f.host.id);
-  await f.game.idle();
-  const restored = f.game.snapshot(f.c.id, f.host.id);
-  expect(restored.turn!.phase).toBe('collecting');
-  expect(restored.members[0].state.hp).toBe(4);
-  expect(isDowned(restored.members[0].state)).toBe(false);
-  expect(restored.members[1].state.abilityUses?.['Field mend']).toBe(1);
-  expect(restored.history.at(-1)!.rolls.at(-1)).toMatchObject({
-    memberId: healer.id,
-    dice: [4],
-    notation: 'd6',
-  });
-  expect(restored.turn!.roster).toContain(target.id);
-});
+it.each(['combat', 'utility'] as const)(
+  'requires inferred %s Mend usage before reviving an ally and repairs its omitted use on retry',
+  async (kind) => {
+    let useMend = false;
+    const f = fixture({
+      resolve: async (ctx, tools) => {
+        if (ctx.turn.number === 1)
+          return outcome({
+            changes: [{ type: 'hp', memberId: ctx.members[0].id, amount: -2, reason: 'A falling stone.' }],
+          });
+        if (ctx.turn.number === 2 && useMend) {
+          const healer = ctx.members.find((member) => member.character.name === 'Rowan')!;
+          const target = ctx.members.find((member) => member.character.name === 'Mira')!;
+          const input = {
+            memberId: healer.id,
+            itemId: null,
+            abilityName: healer.character.abilities[0].name,
+            targetId: target.id,
+          };
+          const receipt = tools.useResource!(input);
+          expect(tools.useResource!(input)).toEqual(receipt);
+          expect(receipt).toMatchObject({ targetId: target.id, restored: 4 });
+        }
+        return outcome();
+      },
+    });
+    const [target, healer] = f.game.members(f.c.id);
+    target.state.hp = 1;
+    healer.character.abilities[0] = {
+      ...healer.character.abilities[0],
+      name: 'Field mend',
+      kind,
+      effect: 'mend',
+      stat: 'INT',
+    };
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(target.state), target.id);
+    f.db
+      .prepare('UPDATE members SET sheet = ? WHERE id = ?')
+      .run(JSON.stringify(healer.character), healer.id);
+    let turn = await start(f);
+    submitBoth(f, turn.id);
+    await f.game.idle();
+    expect(isDowned(f.game.members(f.c.id)[0].state)).toBe(true);
+    f.draw.mockReturnValue(4);
+    turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p2.id, turn.id, 'Use Field mend to help Mira up.', false);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!).toMatchObject({
+      phase: 'failed',
+      error: expect.stringContaining('use_resource'),
+    });
+    expect(isDowned(f.game.members(f.c.id)[0].state)).toBe(true);
+    expect(f.game.members(f.c.id)[1].state.abilityUses?.['Field mend']).toBeUndefined();
+    useMend = true;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    const restored = f.game.snapshot(f.c.id, f.host.id);
+    expect(restored.turn!.phase).toBe('collecting');
+    expect(restored.members[0].state.hp).toBe(4);
+    expect(isDowned(restored.members[0].state)).toBe(false);
+    expect(restored.members[1].state.abilityUses?.['Field mend']).toBe(1);
+    expect(restored.history.at(-1)!.rolls.at(-1)).toMatchObject({
+      memberId: healer.id,
+      dice: [4],
+      notation: 'd6',
+    });
+    expect(restored.turn!.roster).toContain(target.id);
+  },
+);
 
 it.each(['Use the cross slash ability on the Gatekeeper.', 'Use my combat ability on the Gatekeeper.'])(
   'uses the combat ability inferred from "%s" despite a conflicting attack plan',
@@ -2353,7 +2487,7 @@ it('uses a normal attack for an unselected ability proposal and saves selected a
   const member = f.game.members(f.c.id)[0];
   expect(() =>
     f.game.submit(f.c.id, f.p1.id, turn.id, 'Observe', false, false, member.character.abilities[1].name),
-  ).toThrow('current ability');
+  ).not.toThrow();
   f.game.submit(
     f.c.id,
     f.p1.id,
@@ -2389,7 +2523,7 @@ it('adds real powers to existing saved and equipped off-hand items while preserv
     ...member.character,
     equipmentOptions: [focus, relic, ...member.character.equipmentOptions.slice(2).map(stripBonuses)],
     selectedEquipmentIds: [focus.id, relic.id],
-    abilities: member.character.abilities.map(({ stat: _stat, healing: _healing, ...ability }) => ability),
+    abilities: member.character.abilities.map(({ stat: _stat, ...ability }) => ability),
   };
   const legacyState = {
     ...member.state,
@@ -2422,10 +2556,10 @@ it('adds real powers to existing saved and equipped off-hand items while preserv
   const after = restored.members(f.c.id)[0];
   expect(after.state).toMatchObject({ xp: 42, gold: 9, equipmentChosen: true });
   expect(after.state.equipment.right).toMatchObject({ id: focus.id, attackBonus: 1, scaling: ['INT'] });
-  expect(after.state.equipment.left).toMatchObject({ id: relic.id, checkBonus: 1, scaling: ['INT'] });
+  expect(after.state.equipment.relic).toMatchObject({ id: relic.id, checkBonus: 1, scaling: ['INT'] });
   expect(after.character.selectedEquipmentIds).toEqual([focus.id, relic.id]);
   expect(
-    after.character.abilities.every((ability) => ability.stat === 'INT' && ability.healing === 'normal'),
+    after.character.abilities.every((ability) => ability.stat === 'INT' && !('healing' in ability)),
   ).toBe(true);
   expect(restored.characters(member.playerId)[0].equipmentOptions[0].attackBonus).toBe(1);
   expect(restored.snapshot(f.c.id, f.host.id).scene.loot[0]).toMatchObject({
@@ -2522,9 +2656,14 @@ describe('ailments across party turns', () => {
     expect(f.game.members(f.c.id)[0].state.conditionTurns.Weakened).toBe(1);
   });
 
-  it.each(['mend', 'cleanse'] as const)(
-    'executes %s cures outside combat at full HP, with saved receipts on retry',
-    async (effect) => {
+  it.each([
+    ['combat', 'mend'],
+    ['utility', 'mend'],
+    ['combat', 'cleanse'],
+    ['utility', 'cleanse'],
+  ] as const)(
+    'executes %s %s cures outside combat at full HP, with saved receipts on retry',
+    async (kind, effect) => {
       let fail = true;
       const receipts: unknown[] = [];
       const f = fixture({
@@ -2546,7 +2685,7 @@ describe('ailments across party turns', () => {
       const turn = await start(f);
       f.draw.mockImplementation((sides) => Math.min(12, sides));
       const [actor, target] = f.game.members(f.c.id);
-      actor.character.abilities[0] = { ...actor.character.abilities[0], effect, cures: ['Shocked'] };
+      actor.character.abilities[0] = { ...actor.character.abilities[0], kind, effect, cures: ['Shocked'] };
       applyCondition(target.state, 'Shocked');
       f.db
         .prepare('UPDATE members SET sheet = ? WHERE id = ?')
@@ -2738,3 +2877,82 @@ it.each([true, false])(
     ).toThrow('dead');
   },
 );
+
+it('removes saved healing types from templates, gear, replacements and pending turns while retaining HP, charges and history', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gather-healing-migration-'));
+  cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+  const filename = join(directory, 'game.db');
+  const f = fixture(undefined, filename);
+  const member = f.game.members(f.c.id)[0];
+  const legacySheet = {
+    ...member.character,
+    traits: member.character.traits.map((trait) => ({ ...trait, healing: 'repair' })),
+    abilities: member.character.abilities.map((ability) => ({ ...ability, healing: 'necrotic' })),
+    creationBonuses: { attributes: ['STR'], abilityPower: 1, version: 2 },
+  };
+  const item = {
+    ...member.state.inventory[0],
+    description: 'Restores 6 HP. Healing mode: repair.',
+  };
+  const gear = {
+    ...baseItem('healing-gear', 'Mending relic', 'relic'),
+    grantedAbility: { ...member.character.abilities[0], effect: 'mend', healing: 'repair' },
+  };
+  const state = {
+    ...member.state,
+    hp: 7,
+    xp: 42,
+    gold: 9,
+    abilityUses: { [member.character.abilities[0].name]: 1 },
+    inventory: [item, gear],
+    equipment: { ...member.state.equipment, head: gear },
+  };
+  const draft = JSON.stringify({ members: [{ ...member, character: legacySheet, state }] });
+  f.db
+    .prepare('UPDATE characters SET sheet = ? WHERE id = ?')
+    .run(JSON.stringify(legacySheet), member.characterId);
+  f.db
+    .prepare('UPDATE members SET sheet = ?, state = ?, replacement = ? WHERE id = ?')
+    .run(
+      JSON.stringify(legacySheet),
+      JSON.stringify(state),
+      JSON.stringify({ characterId: member.characterId, character: legacySheet }),
+      member.id,
+    );
+  f.db
+    .prepare('INSERT INTO turns(id, campaign_id, number, phase, roster, draft) VALUES(?, ?, ?, ?, ?, ?)')
+    .run('old-healing-pending', f.c.id, 1, 'failed', '[]', draft);
+  f.db
+    .prepare('INSERT INTO turns(id, campaign_id, number, phase, roster, draft) VALUES(?, ?, ?, ?, ?, ?)')
+    .run('old-healing-history', f.c.id, 0, 'complete', '[]', draft);
+  f.db.pragma('user_version = 9');
+  f.db.close();
+  const db = openDatabase(filename);
+  cleanup.push(() => db.close());
+  const game = new Game(db, () => new PracticeGM());
+  const migrated = game.members(f.c.id)[0];
+  expect(migrated.character.traits.every((trait) => !('healing' in trait))).toBe(true);
+  expect(migrated.character.abilities.every((ability) => !('healing' in ability))).toBe(true);
+  expect(migrated.character.creationBonuses).toEqual(legacySheet.creationBonuses);
+  expect(game.characters(member.playerId)[0]).toEqual({ ...migrated.character, id: member.characterId });
+  expect(migrated.replacement?.character).toEqual(migrated.character);
+  expect(migrated.state).toMatchObject({ hp: 7, xp: 42, gold: 9, abilityUses: state.abilityUses });
+  expect(migrated.state.inventory[0]).toMatchObject({
+    healing: 6,
+    quantity: 1,
+    description: 'Restores 6 HP.',
+  });
+  expect(migrated.state.inventory[1].grantedAbility).not.toHaveProperty('healing');
+  expect(migrated.state.equipment.head?.grantedAbility).not.toHaveProperty('healing');
+  const pending = JSON.parse(
+    (db.prepare('SELECT draft FROM turns WHERE id = ?').get('old-healing-pending') as { draft: string })
+      .draft,
+  );
+  expect(pending.members[0].character).toEqual(migrated.character);
+  expect(pending.members[0].state).toEqual(migrated.state);
+  expect(
+    (db.prepare('SELECT draft FROM turns WHERE id = ?').get('old-healing-history') as { draft: string })
+      .draft,
+  ).toBe(draft);
+  expect(db.pragma('user_version', { simple: true })).toBe(11);
+});

@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { templateCharacter, type Snapshot } from '../../shared/schema';
-import { baseItem } from '../../shared/rules';
+import { baseItem, randomLoot } from '../../shared/rules';
 import { conditionDescription } from '../../shared/ailments';
 
 async function post<T>(request: APIRequestContext, path: string, data: unknown): Promise<T> {
@@ -48,6 +48,9 @@ test('shared-screen item inspection exposes types and mechanics without changing
   // Include a stowed weapon to verify that backpack items can also be inspected.
   snapshot.members[0].state.inventory.push({
     ...baseItem('spare-weapon', 'Spare blade', 'weapon'),
+    rarity: 'Legendary',
+    onHit: { ailment: 'Burning', chance: 25 },
+    grantedAbility: { ...character.abilities[0], name: 'Flame surge' },
     damage: '2d4',
     scaling: ['STR'],
     requirements: { STR: 7, DEX: 0, INT: 0, CHA: 0, CON: 0, WIS: 0 },
@@ -55,6 +58,11 @@ test('shared-screen item inspection exposes types and mechanics without changing
     description: 'A heavy spare blade.',
     quantity: 1,
   });
+  for (const kind of ['armour', 'helmet', 'boots', 'relic', 'tool'] as const)
+    snapshot.members[0].state.inventory.push({
+      ...baseItem(`spare-${kind}`, `Spare ${kind}`, kind),
+      quantity: 1,
+    });
   snapshot.isHost = false;
   snapshot.myMemberId = null;
   await page.addInitScript(() =>
@@ -89,6 +97,13 @@ test('shared-screen item inspection exposes types and mechanics without changing
     'Custom curse',
   );
   await card.getByRole('button', { name: 'Fransinator' }).click();
+  const itemIcons = card.locator('.item-inspection summary .item-icon');
+  await expect(itemIcons).toHaveCount(9);
+  for (const icon of await itemIcons.all()) {
+    await expect(icon).toBeVisible();
+    await expect(icon).toHaveAttribute('aria-hidden', 'true');
+  }
+  expect(new Set(await itemIcons.evaluateAll((icons) => icons.map((icon) => icon.innerHTML))).size).toBe(9);
   const focus = card.locator('.item-inspection').filter({ hasText: 'Pijnreservoir' });
   await expect(focus.locator('summary')).toHaveText('Pijnreservoir (focus)');
   await expect(focus.getByText(character.equipmentOptions[0].description, { exact: true })).not.toBeVisible();
@@ -101,6 +116,8 @@ test('shared-screen item inspection exposes types and mechanics without changing
   await expect(shield.locator('summary')).toHaveText('Afkickkliniekdeur (shield)');
   await shield.locator('summary').click();
   await expect(shield).toContainText('+1 defense');
+  await expect(shield).toContainText('1d4 block per enemy hit while equipped');
+  await expect(shield).toContainText('disabled while Stunned, Frozen or Electrocuted');
   await expect(card.locator('li').filter({ hasText: 'Body' })).toHaveText('BodyNone');
   const potion = card.locator('.item-inspection').filter({ hasText: character.healingItemName });
   await expect(potion.locator('summary')).toContainText('(consumable)');
@@ -110,9 +127,11 @@ test('shared-screen item inspection exposes types and mechanics without changing
   const weapon = card.locator('.item-inspection').filter({ hasText: 'Spare blade' });
   await expect(weapon.locator('summary')).toHaveText('Spare blade (weapon)');
   await weapon.locator('summary').click();
-  await expect(weapon).toContainText('2d4 + STR modifier');
+  await expect(weapon).toContainText('Innate dice + 2d4 + 2 × STR modifier');
   await expect(weapon).toContainText('Two-handed');
   await expect(weapon).toContainText('Requires 7 STR');
+  await expect(weapon).toContainText('25% chance to inflict Burning on weapon hits (100% on critical hits)');
+  await expect(weapon).toContainText('Grants Flame surge while equipped');
   await focus.locator('summary').click();
   await expect(focus.getByText(character.equipmentOptions[0].description, { exact: true })).not.toBeVisible();
   await expect(card.getByRole('button', { name: /Equip|Drop|Stow/ })).toHaveCount(0);
@@ -121,6 +140,60 @@ test('shared-screen item inspection exposes types and mechanics without changing
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: 'test-results/shared-item-inspection.png', fullPage: true });
+});
+
+test('starting and stowed relics use the designated relic slot without a hand selector', async ({ page }) => {
+  const character = templateCharacter('Relic bearer');
+  character.equipmentOptions[0] = {
+    ...baseItem('oath', 'Remembered oath', 'relic'),
+    scaling: ['INT'],
+    checkBonus: 1,
+  };
+  character.equipmentOptions[1].name = 'Oath blade';
+  const saved = await post<{ id: string }>(page.request, '/api/characters', character);
+  const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
+    name: 'Relic equipment',
+    setting: 'A quiet tower',
+    premise: '',
+    tone: '',
+    language: 'English',
+    instructions: '',
+    custom: [],
+    provider: 'practice',
+    model: '',
+  });
+  await post(page.request, '/api/join', {
+    code: campaign.inviteCode,
+    playerName: 'Relic player',
+    characterId: saved.id,
+  });
+  await page.goto(`/campaign/${campaign.id}`);
+  await page.locator('.equipment-choices button').nth(0).click();
+  await page.locator('.equipment-choices button').nth(1).click();
+  await expect(page.locator('.equipment-choices button .item-icon')).toHaveCount(5);
+  await expect(page.getByLabel('Starting loadout preview')).toContainText('Relic: Remembered oath');
+  await expect(page.getByLabel('Starting loadout preview')).toContainText('Right hand: Oath blade');
+  await page.getByRole('button', { name: 'Confirm starting equipment', exact: true }).click();
+  await page.getByRole('button', { name: 'Begin the story', exact: true }).click();
+  await expect(page.getByLabel('Your action')).toBeEnabled();
+  await page.getByRole('button', { name: 'Equipment & backpack', exact: true }).click();
+  const relicSlot = page.getByRole('article', { name: 'Relic', exact: true });
+  await expect(relicSlot).toContainText('Remembered oath');
+  await expect(relicSlot.locator('.item-icon')).toBeVisible();
+  await expect(page.getByRole('article', { name: 'Left hand', exact: true })).toContainText('Empty');
+  await expect(page.getByRole('article', { name: 'Right hand', exact: true })).toContainText('Oath blade');
+  await relicSlot.getByRole('button', { name: 'Stow item' }).click();
+  await expect(relicSlot).toContainText('Empty');
+  const stowed = page.getByRole('article', { name: 'Remembered oath', exact: true });
+  await expect(stowed.locator('.item-icon')).toBeVisible();
+  await expect(stowed.getByRole('combobox')).toHaveCount(0);
+  await stowed.getByRole('button', { name: 'Equip', exact: true }).click();
+  await expect(relicSlot).toContainText('Remembered oath');
+  await expect(page.locator('.gear-feedback')).toHaveText('Equipped Remembered oath (relic slot).');
+  const snapshot: Snapshot = await (await page.request.get(`/api/campaigns/${campaign.id}`)).json();
+  expect(snapshot.members[0].state.equipment.relic?.name).toBe('Remembered oath');
+  expect(snapshot.members[0].state.equipment.left).toBeNull();
+  expect(snapshot.members[0].state.equipment.right?.name).toBe('Oath blade');
 });
 
 test('mobile equipment previews swaps, equips nearby loot, and records free changes in the turn summary', async ({
@@ -257,6 +330,7 @@ test('equipment controls explain combat, full backpacks, and unmet requirements 
   snapshot.scene.loot = [
     { ...baseItem('great', 'Two-handed loot', 'weapon'), hands: 2, quantity: 1 },
     { ...baseItem('boots', 'Empty-slot boots', 'boots'), quantity: 1 },
+    { ...baseItem('oath', 'Empty-slot relic', 'relic'), quantity: 1 },
   ];
   await page.addInitScript(() =>
     Object.defineProperty(window, 'EventSource', {
@@ -281,6 +355,11 @@ test('equipment controls explain combat, full backpacks, and unmet requirements 
   const boots = page.getByRole('article', { name: 'Empty-slot boots', exact: true });
   await expect(boots.getByRole('button', { name: 'Take item' })).toBeDisabled();
   await expect(boots.getByRole('button', { name: 'Take & equip' })).toBeEnabled();
+  const relic = page.getByRole('article', { name: 'Empty-slot relic', exact: true });
+  await expect(relic.locator('.gear-item-info > b .item-icon')).toBeVisible();
+  await expect(relic.getByRole('combobox')).toHaveCount(0);
+  await expect(relic.getByRole('button', { name: 'Take item' })).toBeDisabled();
+  await expect(relic.getByRole('button', { name: 'Take & equip' })).toBeEnabled();
   snapshot.scene.encounter = { enemies: [], round: 1, initiative: [], victory: false, escaped: false };
   await page.reload();
   await page.getByRole('button', { name: 'Equipment & backpack', exact: true }).click();
@@ -292,4 +371,111 @@ test('equipment controls explain combat, full backpacks, and unmet requirements 
   await page.reload();
   await page.getByRole('button', { name: 'Equipment & backpack', exact: true }).click();
   await expect(page.locator('.gear-lock')).toContainText('after submitting your action');
+});
+
+test('Legendary gear exposes equipped abilities with the correct combat scope and item charge', async ({
+  page,
+}) => {
+  const character = templateCharacter('Mira');
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  const saved = await post<{ id: string }>(page.request, '/api/characters', character);
+  const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
+    name: 'Legendary gear',
+    setting: 'A tower',
+    premise: '',
+    tone: '',
+    language: 'English',
+    instructions: '',
+    custom: [],
+    provider: 'practice',
+    model: '',
+  });
+  const snapshot = await post<Snapshot>(page.request, '/api/join', {
+    code: campaign.inviteCode,
+    playerName: 'Mira player',
+    characterId: saved.id,
+  });
+  const member = snapshot.members[0];
+  const boots = randomLoot(
+    'legendary-boots',
+    1,
+    () => 1,
+    { name: 'Ember boots', kind: 'boots', scaling: [], hands: 1, light: false, description: '' },
+    'Legendary',
+  );
+  const focus = randomLoot(
+    'legendary-focus',
+    1,
+    () => 1,
+    { name: 'Ember focus', kind: 'focus', scaling: ['INT'], hands: 1, light: false, description: '' },
+    'Legendary',
+  );
+  member.character.abilities.push(
+    ...(['combat', 'utility'] as const).map((kind) => ({
+      name: `${kind} field mend`,
+      description: 'Heal and cure Burning.',
+      kind,
+      effect: 'mend' as const,
+      stat: 'WIS' as const,
+      level: 1,
+      cures: ['Burning' as const],
+    })),
+  );
+  member.state.equipment.boots = boots;
+  member.state.equipment.right = focus;
+  snapshot.status = 'active';
+  snapshot.turn = {
+    id: crypto.randomUUID(),
+    number: 1,
+    phase: 'collecting',
+    roster: [member.id],
+    actions: [],
+    rolls: [],
+    result: null,
+    error: null,
+  };
+  await page.addInitScript(() =>
+    Object.defineProperty(window, 'EventSource', {
+      value: class {
+        close() {}
+      },
+    }),
+  );
+  await page.route(`**/api/campaigns/${campaign.id}`, (route) => route.fulfill({ json: snapshot }));
+  await page.goto(`/campaign/${campaign.id}`);
+  const bootAbility = page.locator('.ability-card').filter({ hasText: 'Ember boots: insight' });
+  const focusAbility = page.locator('.ability-card').filter({ hasText: 'Ember focus: surge' });
+  await expect(bootAbility).toContainText('Utility');
+  await expect(bootAbility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
+  await expect(focusAbility).toContainText('Combat');
+  await expect(focusAbility.getByRole('button', { name: 'Use ability' })).toBeDisabled();
+  for (const kind of ['combat', 'utility']) {
+    const healing = page
+      .locator('.character-controls .ability-card')
+      .filter({ hasText: `${kind} field mend` });
+    await expect(healing).toContainText('In or out of combat');
+    await expect(healing.getByRole('button', { name: 'Use ability' })).toBeEnabled();
+  }
+  member.state.abilityUses = { 'equipment:legendary-boots': 1 };
+  await page.reload();
+  await expect(bootAbility).toContainText('0/1 uses remaining');
+  await expect(bootAbility.getByRole('button', { name: 'Use ability' })).toBeDisabled();
+  member.state.equipment.boots = null;
+  member.state.inventory.push({ ...boots, quantity: 1 });
+  snapshot.scene.encounter = { enemies: [], round: 1, initiative: [], victory: false, escaped: false };
+  await page.reload();
+  await expect(bootAbility).toHaveCount(0);
+  await expect(focusAbility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
+  const utility = page.locator('.character-controls .ability-card').filter({ hasText: 'Keen observation' });
+  await expect(utility).toContainText('Advantage and +2');
+  await expect(utility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
+  for (const kind of ['combat', 'utility']) {
+    const healing = page
+      .locator('.character-controls .ability-card')
+      .filter({ hasText: `${kind} field mend` });
+    await expect(healing.getByRole('button', { name: 'Use ability' })).toBeEnabled();
+  }
+  member.state.equipment.left = focus;
+  await page.reload();
+  await expect(focusAbility).toHaveCount(1);
 });

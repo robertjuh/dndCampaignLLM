@@ -2,6 +2,21 @@ import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 
 import type { DiceSource } from './random';
 import type { DB } from './db';
 import { normalizeCombatInput } from './combat';
+import { validateEnvironmentalAction } from './environment';
+import { adjudicationOutcome, engineEvents, resourceSlot, validateAdjudication } from './turn-resolution';
+import { repairTurnCheckpoints } from './turn-recovery';
+import {
+  actionId,
+  assembleResolvedNarration,
+  factualNarration,
+  narrationParagraphs,
+  turnResolutionSchema,
+  type TurnAdjudication,
+  type SavedTurnAdjudication,
+  type TurnResolution,
+  type TurnNarration,
+} from '../shared/turn-resolution';
+import type { CombatEvent } from '../shared/rules';
 import { requestedAbility, requestedConsumable, requestsAbility } from './action-resources';
 import {
   campaignSchema,
@@ -53,6 +68,8 @@ import {
   abilityDice,
   equipmentBonus,
   availableAbility,
+  availableAbilities,
+  abilityUseKey,
   spendAbility,
   recoverAfterEncounter,
   helpUp,
@@ -113,11 +130,25 @@ type TurnRow = {
   error: string | null;
   draft: string | null;
 };
+export type StageBudget = {
+  used: number;
+  limit: number;
+  signal?: AbortSignal;
+  requests?: {
+    request: number;
+    durationMs: number;
+    inputBytes: number;
+    outputBytes?: number;
+    failure?: string;
+  }[];
+  corrections?: { request: number; feedback: string }[];
+  fallback?: string;
+};
 export type GMContext = {
   config: CampaignConfig;
   members: Member[];
   turn: Turn;
-  history: Pick<Outcome, 'summary'>[];
+  history: (Pick<Outcome, 'summary'> & { source?: 'resolution' | 'legacy-summary' })[];
   journal: Outcome['journal'];
   scene: Scene;
   combatResult?: CombatReceipt;
@@ -126,6 +157,9 @@ export type GMContext = {
   arrivingCharacters?: { playerName: string; character: Character }[];
   supportResults?: SupportResult[];
   recoveryLogs?: string[];
+  startingMembers?: Member[];
+  receipts?: Record<string, unknown>;
+  requestBudget?: StageBudget;
 };
 type SupportResult = {
   memberId: string;
@@ -137,11 +171,13 @@ type SupportResult = {
 };
 export type CombatReceipt = {
   logs: string[];
+  events?: CombatEvent[];
   encounter: Encounter;
   characters: { id: string; name: string; state: CharacterState }[];
   loot: Scene['loot'];
 };
 export type ResourceReceipt = ResourceUse & {
+  slot?: 'main' | 'minor';
   sourceName: string;
   restored: number;
   cured?: string[];
@@ -151,14 +187,35 @@ export type ResourceReceipt = ResourceUse & {
 export type GameTools = ((check: Check) => Roll) & {
   startCombat: (enemies: unknown) => unknown;
   combat: (input: CombatInput) => unknown;
-  offerLoot: (input: { item: LootBlueprint; reason: string }) => unknown;
+  offerLoot: (input: {
+    item: LootBlueprint;
+    reason: string;
+    memberId?: string;
+    sourceId?: string;
+  }) => unknown;
   completeChallenge: (input: { memberId: string; reason: string; bossEquivalent: boolean }) => unknown;
   useResource?: (input: ResourceUse) => ResourceReceipt;
   validateResolution?: (outcome: Outcome) => void;
+  validateAdjudication?: (input: unknown) => TurnAdjudication;
 };
-type Draft = { members: Member[]; scene: Scene; receipts: Record<string, unknown> };
+type Draft = {
+  pipelineVersion?: 0 | 1;
+  members: Member[];
+  scene: Scene;
+  receipts: Record<string, unknown>;
+  startingMembers?: Member[];
+  context?: GMContext;
+  adjudication?: SavedTurnAdjudication;
+  resolution?: TurnResolution;
+  narration?: TurnNarration;
+  resolutionRevision?: number;
+  narrationRevision?: number;
+};
 export interface GameMaster {
-  resolve(context: GMContext, roll: GameTools): Promise<Outcome>;
+  /** Compatibility only: new providers implement adjudicate and narrate. */
+  resolve?(context: GMContext, roll: GameTools): Promise<Outcome>;
+  adjudicate?(context: GMContext, tools: GameTools): Promise<TurnAdjudication>;
+  narrate?(resolution: TurnResolution, config: CampaignConfig, budget?: StageBudget): Promise<TurnNarration>;
   planCombat?(context: GMContext): Promise<unknown>;
   generate?(concept: string, signal?: AbortSignal): Promise<Character>;
   levelUp?(context: LevelUpContext): Promise<LevelUpReward>;
@@ -193,14 +250,13 @@ export function validateLevelUpReward(context: LevelUpContext, input: unknown): 
       context.target &&
       (reward.ability.effect !== context.target.effect ||
         reward.ability.stat !== context.target.stat ||
-        reward.ability.healing !== context.target.healing ||
         reward.ability.dice !== context.target.dice ||
         (reward.ability.bonus ?? 0) !== (context.target.bonus ?? 0) ||
         (reward.ability.inflicts ?? null) !== (context.target.inflicts ?? null) ||
         JSON.stringify(reward.ability.cures ?? []) !== JSON.stringify(context.target.cures ?? []))
     )
       throw new GameError(
-        'An upgrade must preserve the ability’s effect, attribute, healing type, dice, and rolled bonus.',
+        'An upgrade must preserve the ability’s effect, attribute, dice, and rolled bonus.',
       );
     if (!context.target && (reward.ability.dice !== undefined || (reward.ability.bonus ?? 0) !== 0))
       throw new GameError(
@@ -214,15 +270,18 @@ const json = JSON.stringify;
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 export const secretEqual = (a: string, b: string) =>
   timingSafeEqual(Buffer.from(tokenHash(a)), Buffer.from(tokenHash(b)));
-const requiresUtilityCheck = (character: Character, action: Action) =>
-  !!requestedAbility(character, action, 'utility') ||
+const requiresUtilityCheck = (character: Character, action: Action, state?: CharacterState) =>
+  requestedAbility(character, action, 'utility', null, state)?.effect === 'assist' ||
   (!action.abilityName &&
     requestsAbility(action.text) &&
     !/\b(?:or|of)\b/i.test(action.text) &&
-    character.abilities.some((ability) => ability.kind === 'utility') &&
-    !character.abilities.some(
+    availableAbilities(character, state).some(
+      (ability) => ability.kind === 'utility' && ability.effect === 'assist',
+    ) &&
+    !availableAbilities(character, state).some(
       (ability) =>
-        ability.kind === 'combat' && action.text.toLowerCase().includes(ability.name.toLowerCase()),
+        (ability.kind === 'combat' || ability.effect !== 'assist') &&
+        action.text.toLowerCase().includes(ability.name.toLowerCase()),
     ));
 
 export class Game {
@@ -563,6 +622,32 @@ export class Game {
       roster: JSON.parse(row.roster),
       result: row.result ? JSON.parse(row.result) : null,
       error: row.error,
+      automaticRetry: !!this.db
+        .prepare("SELECT 1 FROM events WHERE turn_id = ? AND kind = 'turn_auto_retry'")
+        .get(row.id),
+      diagnostics: [
+        ...new Set(
+          (
+            this.db
+              .prepare(
+                "SELECT kind, payload FROM events WHERE turn_id = ? AND kind LIKE 'stage:%' ORDER BY id",
+              )
+              .all(row.id) as { kind: string; payload: string }[]
+          ).flatMap((event) => {
+            const stage = event.kind.slice('stage:'.length);
+            const data = JSON.parse(event.payload);
+            return [
+              ...(data.fallback
+                ? [`${stage}: ${data.fallback}`]
+                : data.failure
+                  ? [`${stage}: ${data.failure}`]
+                  : []),
+              ...(data.corrections ?? []).map((item: { feedback: string }) => `${stage}: ${item.feedback}`),
+            ];
+          }),
+        ),
+      ],
+      resolution: row.draft ? (JSON.parse(row.draft) as Draft).resolution : undefined,
       equipmentChanges: (
         this.db
           .prepare("SELECT payload FROM events WHERE turn_id = ? AND kind = 'equipment_changed' ORDER BY id")
@@ -612,6 +697,9 @@ export class Game {
       version: c.version,
       isHost: c.owner_id === playerId,
       myMemberId: members.find((m) => m.playerId === playerId)?.id ?? null,
+      leaderName: (
+        this.db.prepare('SELECT name FROM players WHERE id = ?').get(c.owner_id) as { name: string }
+      ).name,
       members,
       turn: pending ? this.turn(pending) : null,
       history: (
@@ -676,25 +764,9 @@ export class Game {
       if (abilityName) {
         const scene: Scene = JSON.parse(this.campaign(id).scene!);
         const inCombat = scene.encounter && !scene.encounter.victory && !scene.encounter.escaped;
-        const healingAbility = member.character.abilities.some(
-          (ability) =>
-            ability.name === abilityName &&
-            ability.kind === 'combat' &&
-            ['mend', 'cleanse'].includes(ability.effect),
-        );
-        availableAbility(
-          member.character,
-          member.state,
-          abilityName,
-          (inCombat && !member.state.conditions.includes('Escaped')) ||
-            healingAbility ||
-            (inCombat &&
-              member.character.abilities.some(
-                (ability) => ability.name === abilityName && ability.kind === 'combat',
-              ))
-            ? 'combat'
-            : 'utility',
-        );
+        const ability = availableAbility(member.character, member.state, abilityName);
+        if (!inCombat && ability.kind === 'combat' && !['mend', 'cleanse'].includes(ability.effect))
+          throw new GameError('Choose a utility, healing, or cleansing ability outside combat.');
       }
       this.db
         .prepare(
@@ -843,6 +915,8 @@ export class Game {
     const check = checkSchema.parse(input);
     const row = this.pending(id);
     if (!row || row.id !== turnId || row.phase !== 'resolving') throw new GameError('No active resolution.');
+    if (row.draft && (JSON.parse(row.draft) as Draft).adjudication)
+      throw new GameError('Gameplay is locked after accepted adjudication.');
     const turn = this.turn(row);
     const action = turn.actions.find((action) => action.memberId === check.memberId && !action.passed);
     if (!action || turn.number === 0 || !turn.roster.includes(check.memberId))
@@ -861,38 +935,83 @@ export class Game {
         original.dc !== check.dc ||
         original.mode !== check.mode ||
         original.lethal !== check.lethal ||
-        (original.abilityName ?? null) !== (check.abilityName ?? null)
+        (original.abilityName ?? null) !== (check.abilityName ?? null) ||
+        (original.assistsMemberId ?? null) !== (check.assistsMemberId ?? null) ||
+        json([...(original.assistedBy ?? [])].sort()) !== json([...(check.assistedBy ?? [])].sort())
       )
         throw new GameError('A check is already locked for this character. Use its saved result.');
       return JSON.parse(prior.result);
     }
     const result = this.withDraft(id, turnId, (draft) => {
       const scene = draft.scene;
+      if ((draft.receipts.loot as { memberId?: string } | undefined)?.memberId === check.memberId)
+        throw new GameError(
+          'Resolve uncertain searches before offering their loot. This discovery is already recorded as routine.',
+        );
       if (scene.encounter && !scene.encounter.victory && !scene.encounter.escaped)
         throw new GameError('Use resolve_combat to adjudicate a combat round.');
       const member = draft.members.find((member) => member.id === check.memberId)!;
       if (incapacitatingCondition(member.state))
         throw new GameError('This character cannot make a check while incapacitated.');
-      const itemUse = draft.receipts[`resource:item:${member.id}`] as ResourceReceipt | undefined;
-      if (draft.receipts[`resource:ability:${member.id}`] || (itemUse && itemUse.targetId !== member.id))
+      if (check.assistsMemberId) {
+        const target = draft.members.find((candidate) => candidate.id === check.assistsMemberId);
+        if (
+          !target ||
+          target.id === member.id ||
+          target.state.hp <= 0 ||
+          !turn.roster.includes(target.id) ||
+          !turn.actions.some((submitted) => submitted.memberId === target.id && !submitted.passed)
+        )
+          throw new GameError('Assistance requires another living character acting this turn.');
+        if (turn.rolls.some((roll) => roll.memberId === target.id && !roll.notation))
+          throw new GameError('Resolve assistance before the dependent check; its dice are already locked.');
+      }
+      const helpers = check.assistedBy ?? [];
+      if (new Set(helpers).size !== helpers.length || helpers.includes(member.id))
+        throw new GameError('Assisting characters must be distinct from the acting character.');
+      for (const helper of helpers) {
+        const receipt = turn.rolls.find((roll) => roll.memberId === helper && !roll.notation);
+        if (!receipt?.success || receipt.assistsMemberId !== member.id)
+          throw new GameError('Assistance needs an earlier successful check supporting this character.');
+      }
+      if (
+        Object.entries(draft.receipts).some(
+          ([key, value]) =>
+            key.startsWith('resource:') &&
+            (value as ResourceReceipt).memberId === member.id &&
+            resourceSlot(value as ResourceReceipt) === 'main',
+        )
+      )
         throw new GameError(
           'This character has already spent their main action helping an ally or using a healing ability.',
         );
-      const requested = requestedAbility(member.character, action, 'utility', check.abilityName);
+      const requested = requestedAbility(
+        member.character,
+        action,
+        'utility',
+        check.abilityName,
+        member.state,
+      );
       if (check.abilityName && requested?.name !== check.abilityName)
         throw new GameError('Use a saved utility ability requested in the player’s action.');
-      if (!check.abilityName && requiresUtilityCheck(member.character, action))
+      if (!check.abilityName && requiresUtilityCheck(member.character, action, member.state))
         throw new GameError('Resolve the requested utility ability with its saved name and stat.');
       const ability = check.abilityName
         ? availableAbility(member.character, member.state, check.abilityName, 'utility')
         : null;
+      if (ability && ability.effect !== 'assist')
+        throw new GameError('Execute Mend or Cleanse through use_resource, not a utility check.');
       if (ability && ability.stat !== check.stat)
         throw new GameError('This ability must use its saved attribute for the relevant check.');
-      const mode = ability ? (check.mode === 'disadvantage' ? 'normal' : 'advantage') : check.mode;
+      const mode =
+        ability || helpers.length ? (check.mode === 'disadvantage' ? 'normal' : 'advantage') : check.mode;
       const dice = Array.from({ length: mode === 'normal' ? 1 : 2 }, () => this.die(id, 20));
       if (dice.some((die) => !Number.isInteger(die) || die < 1 || die > 20))
         throw new Error('Random source returned an invalid die.');
       const selected = mode === 'disadvantage' ? Math.min(...dice) : Math.max(...dice);
+      const equipmentBonuses = equippedItems(member.state)
+        .filter((item) => item.scaling.includes(check.stat) && item.checkBonus)
+        .map((item) => ({ itemId: item.id, name: item.name, bonus: item.checkBonus }));
       const bonus =
         modifier(member.state.stats[check.stat]) +
         equipmentBonus(member.state, check.stat, 'checkBonus') +
@@ -905,6 +1024,7 @@ export class Game {
         id: randomUUID(),
         dice,
         modifier: bonus,
+        equipmentBonuses,
         total,
         success: selected !== 1 && (selected === 20 || total >= check.dc),
         critical: selected === 1 ? 'failure' : selected === 20 ? 'success' : undefined,
@@ -915,14 +1035,19 @@ export class Game {
         .prepare('INSERT INTO rolls VALUES(?, ?, ?, ?, ?)')
         .run(result.id, turnId, check.memberId, json(check), json(result));
       if (ability) spendAbility(member.state, ability);
-      if (check.lethal && selected === 1)
+      if (check.lethal && selected === 1) {
         damage(member.state, member.state.hp, `Catastrophic failure: ${check.reason}`, true);
+        draft.receipts[`check-effect:${result.id}`] = {
+          memberId: member.id,
+          fact: `${member.character.name} ${isDowned(member.state) ? 'is Downed at 0 HP' : 'dies permanently'} after a catastrophic failed check.`,
+        };
+      }
       return result;
     });
     this.emit(id);
     return result;
   }
-  private withDraft<T>(id: string, turnId: string, callback: (draft: Draft) => T): T {
+  private withDraft<T>(id: string, turnId: string, callback: (draft: Draft) => T, checkpoint = false): T {
     const result = this.db.transaction(() => {
       const row = this.pending(id);
       if (!row || row.id !== turnId || row.phase !== 'resolving')
@@ -935,6 +1060,10 @@ export class Game {
             receipts: {},
           };
       try {
+        if (!checkpoint && (draft.adjudication || draft.resolution))
+          throw new GameError(
+            'Gameplay is locked after accepted adjudication. Retry narration from the saved result.',
+          );
         const value = callback(draft);
         this.db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(json(draft), turnId);
         return { value };
@@ -1009,6 +1138,7 @@ export class Game {
             requiresUtilityCheck(
               draft.members.find((member) => member.id === action.memberId)!.character,
               action,
+              draft.members.find((member) => member.id === action.memberId)!.state,
             ) &&
             !turn.rolls.some(
               (roll) =>
@@ -1102,9 +1232,19 @@ export class Game {
         throw new GameError(
           'Interpret exactly the submitted non-pass actions; never invent player decisions.',
         );
+      const journal = parsed.actions.some((action) => action.environment)
+        ? (this.db
+            .prepare('SELECT kind, name, detail FROM journal WHERE campaign_id = ?')
+            .all(id) as Outcome['journal'])
+        : [];
       for (const action of parsed.actions) {
         const submitted = turn.actions.find((submitted) => submitted.memberId === action.memberId)!;
         const member = draft.members.find((member) => member.id === action.memberId)!;
+        if (action.environment) {
+          const checked = validateEnvironmentalAction({ scene: draft.scene, journal }, action.environment);
+          if (json(checked) !== json(action.environment))
+            throw new GameError('Reuse the saved validated environmental profile.');
+        }
         if (submitted.supportAction) {
           const support = submitted.supportAction;
           if (
@@ -1115,18 +1255,19 @@ export class Game {
           )
             throw new GameError('Resolve exactly the ally support action selected by the player.');
         }
-        const kind =
-          member.state.conditions.includes('Escaped') &&
-          !action.reengage &&
-          member.character.abilities.some(
-            (ability) => ability.name === action.abilityName && ability.kind === 'utility',
-          )
-            ? 'utility'
-            : 'combat';
-        const ability = requestedAbility(member.character, submitted, kind, action.abilityName);
+        const ability = requestedAbility(
+          member.character,
+          submitted,
+          undefined,
+          action.abilityName,
+          member.state,
+        );
+        const utilityCheck = ability?.kind === 'utility' && ability.effect === 'assist';
         if (
           (action.abilityName ?? null) !== (ability?.name ?? null) ||
-          (action.main === 'ability') !== !!ability
+          (utilityCheck
+            ? !['creative', 'flee', 'move', 'interact', 'ability'].includes(action.main)
+            : (action.main === 'ability') !== !!ability)
         )
           throw new GameError('Resolve exactly the combat ability selected by the player.');
       }
@@ -1149,8 +1290,18 @@ export class Game {
           draft.scene.encounter.initiative.push({ id: member.id, total });
         }
       draft.scene.encounter.initiative.sort((a, b) => b.total - a.total);
-      const logs = runCombat(active, draft.scene.encounter, parsed, (sides, label, actor, stat, bonus, dc) =>
-        this.mechanicalDie(id, turnId, sides, label, actor, stat, bonus, dc),
+      const events: CombatEvent[] = [];
+      const logs = runCombat(
+        active,
+        draft.scene.encounter,
+        parsed,
+        (sides, label, actor, stat, bonus, dc) =>
+          this.mechanicalDie(id, turnId, sides, label, actor, stat, bonus, dc),
+        (event) => events.push(event),
+        draft.scene.environment ??
+          (parsed.actions.some((action) => action.environment)
+            ? (draft.scene.environment = { sources: {}, spentResources: [] })
+            : undefined),
       );
       if (draft.scene.encounter.victory) {
         logs.push(
@@ -1180,6 +1331,16 @@ export class Game {
       }
       const receipt: CombatReceipt = {
         logs,
+        events: [
+          ...events,
+          ...logs.slice(events.length).map((fact): CombatEvent => ({
+            actorId: null,
+            phase: 'aftermath',
+            status: null,
+            fact,
+            presentation: 'log',
+          })),
+        ],
         encounter: structuredClone(draft.scene.encounter),
         characters: active.map((m) => ({ id: m.id, name: m.character.name, state: m.state })),
         loot: draft.scene.loot,
@@ -1197,12 +1358,6 @@ export class Game {
       const action = turn.actions.find((action) => action.memberId === use.memberId && !action.passed);
       if (!action || turn.number === 0 || !turn.roster.includes(use.memberId))
         throw new GameError('Only a character acting this turn can use a resource.');
-      if (
-        draft.receipts.startCombat ||
-        draft.receipts.combat ||
-        (draft.scene.encounter && !draft.scene.encounter.victory && !draft.scene.encounter.escaped)
-      )
-        throw new GameError('Use resolve_combat for item and ability usage during combat.');
       const targetId = use.targetId ?? use.memberId;
       const key = `resource:${use.itemId ? 'item' : 'ability'}:${use.memberId}`;
       const prior = draft.receipts[key] as ResourceReceipt | undefined;
@@ -1215,6 +1370,29 @@ export class Game {
           throw new GameError('This resource use is already locked. Reuse its saved result.');
         return prior;
       }
+      if (
+        draft.receipts.startCombat ||
+        draft.receipts.combat ||
+        (draft.scene.encounter && !draft.scene.encounter.victory && !draft.scene.encounter.escaped)
+      )
+        throw new GameError('Use resolve_combat for item and ability usage during combat.');
+      const slot = resourceSlot({ ...use, targetId });
+      const spent = Object.entries(draft.receipts).some(
+        ([key, value]) =>
+          key.startsWith('resource:') &&
+          (value as ResourceReceipt).memberId === use.memberId &&
+          resourceSlot(value as ResourceReceipt) === slot,
+      );
+      if (
+        spent ||
+        (slot === 'main' &&
+          (action.supportAction ||
+            (draft.receipts.support as SupportResult[] | undefined)?.some(
+              (receipt) => receipt.memberId === use.memberId,
+            ) ||
+            turn.rolls.some((roll) => roll.memberId === use.memberId && !roll.notation)))
+      )
+        throw new GameError(`This character has already spent their ${slot} action.`);
       const member = draft.members.find((member) => member.id === use.memberId)!;
       const target = draft.members.find((member) => member.id === targetId);
       if (!target) throw new GameError('Choose an ally in this campaign.');
@@ -1224,11 +1402,6 @@ export class Game {
         throw new GameError('This character cannot use that action while incapacitated.');
       if (action.supportAction)
         throw new GameError('This support action has already been resolved by the server.');
-      if (
-        (use.abilityName || targetId !== member.id) &&
-        turn.rolls.some((roll) => roll.memberId === member.id && !roll.notation)
-      )
-        throw new GameError('This character has already spent their main action on a check.');
       if (isDead(target.state)) throw new GameError('A dead character cannot be healed.');
       let restored = 0;
       const originalConditions = [...target.state.conditions];
@@ -1242,10 +1415,11 @@ export class Game {
         if (item.healing) restored = healWithItem(member.character, member.state, item.id, target);
         else removeItem(member.state, item.id);
       } else {
-        if (requestedAbility(member.character, action, 'combat', use.abilityName)?.name !== use.abilityName)
+        if (
+          requestedAbility(member.character, action, undefined, use.abilityName, member.state)?.name !==
+          use.abilityName
+        )
           throw new GameError('Use a saved healing ability requested in the player’s action.');
-        if (turn.rolls.some((roll) => roll.memberId === member.id && !roll.notation))
-          throw new GameError('This character has already spent their main action on a check.');
         sourceName = use.abilityName!;
         restored = mendWithAbility(
           member.character,
@@ -1259,6 +1433,7 @@ export class Game {
       const receipt: ResourceReceipt = {
         ...use,
         targetId,
+        slot,
         sourceName,
         restored,
         cured: originalConditions.filter(
@@ -1271,8 +1446,13 @@ export class Game {
       return receipt;
     });
   }
-  offerLoot(id: string, turnId: string, input: { item: LootBlueprint; reason: string }) {
+  offerLoot(id: string, turnId: string, input: Parameters<GameTools['offerLoot']>[0]) {
     const blueprint = lootSchema.parse(input.item);
+    const sourceId = input.sourceId?.normalize('NFKC').trim().toLowerCase();
+    if (input.sourceId !== undefined && (!sourceId || sourceId.length > 200))
+      throw new GameError('Loot needs a stable, location-qualified source ID of at most 200 characters.');
+    if (blueprint.kind === 'tool' && (!input.memberId || !sourceId))
+      throw new GameError('A story item needs its searching character and discovery source.');
     this.mechanicalIndex.set(turnId, 200);
     return this.withDraft(id, turnId, (draft) => {
       if (draft.receipts.loot) return draft.receipts.loot;
@@ -1287,6 +1467,17 @@ export class Game {
       if (draft.scene.encounter && !draft.scene.encounter.victory && !draft.scene.encounter.escaped)
         throw new GameError('Combat loot is awarded by resolve_combat.');
       if (draft.receipts.combat) throw new GameError('Combat rewards have already been offered.');
+      if (input.memberId) {
+        if (!turn.actions.some((action) => action.memberId === input.memberId && !action.passed))
+          throw new GameError('Loot must belong to a submitted discovery action.');
+        const check = turn.rolls.find((roll) => roll.memberId === input.memberId && !roll.notation);
+        if (check && !check.success)
+          throw new GameError(
+            'A failed search cannot produce its requested loot. Preserve the failed result.',
+          );
+      }
+      if (sourceId && Object.hasOwn(draft.scene.searchedLoot ?? {}, sourceId))
+        return { exhausted: true, sourceId, itemName: draft.scene.searchedLoot![sourceId] };
       const item = randomLoot(
         randomUUID(),
         Math.max(1, ...draft.members.map((member) => member.state.level)),
@@ -1294,7 +1485,13 @@ export class Game {
         blueprint,
       );
       offerGroundItem(draft.scene, item);
-      draft.receipts.loot = { item, reason: input.reason };
+      if (sourceId) draft.scene.searchedLoot = { ...draft.scene.searchedLoot, [sourceId]: item.name };
+      draft.receipts.loot = {
+        item,
+        reason: input.reason,
+        ...(sourceId ? { sourceId } : {}),
+        ...(input.memberId ? { memberId: input.memberId } : {}),
+      };
       return draft.receipts.loot;
     });
   }
@@ -1328,6 +1525,7 @@ export class Game {
             member.state.bosses++;
           }
       }
+      const downed = draft.members.filter((member) => member.active && isDowned(member.state));
       const recovery = recoverAfterEncounter(draft.members.filter((member) => member.active));
       for (const member of draft.members) if (isDead(member.state)) member.state.respawnReady = true;
       draft.scene.safeRest = true;
@@ -1335,23 +1533,35 @@ export class Game {
       draft.receipts.challenge = {
         reason: input.reason,
         recovery,
+        logRecovery: true,
+        revived: downed.filter((member) => member.state.hp > 0).map((member) => member.character.name),
         xp: input.bossEquivalent ? 100 : 0,
         members: draft.members.filter((m) => turn.roster.includes(m.id)),
       };
       return draft.receipts.challenge;
     });
   }
-  private assertResolved(turn: Turn, draft: Draft, outcome: Outcome) {
+  private assertResolved(turn: Turn, draft: Draft, outcome: Outcome, adjudication = draft.adjudication) {
     const encounter = draft.scene.encounter;
     const combatActive = encounter && !encounter.victory && !encounter.escaped;
+    const blocked = (action: Action, phase: 'main' | 'minor') => {
+      if (adjudication?.version !== 2) return false;
+      const component = adjudication.actions.find((item) => item.memberId === action.memberId)?.components[
+        phase
+      ];
+      return component?.status === 'blocked' && component.basis === 'none' && !component.receiptRefs.length;
+    };
     const describeAction = (action: Action) => {
       const member = draft.members.find((member) => member.id === action.memberId);
-      const ability = member && requestedAbility(member.character, action, 'utility');
+      const ability = member && requestedAbility(member.character, action, 'utility', null, member.state);
       const text = action.text.length > 100 ? `${action.text.slice(0, 100)}…` : action.text;
       return `${action.characterName ?? member?.character.name ?? action.memberId}${ability ? ` · ${ability.name} (${ability.stat})` : ''}: ${action.passed ? 'passed' : JSON.stringify(text)}`;
     };
     if (turn.number === 0 && outcome.changes.length)
       throw new GameError('The opening scene cannot change characters.');
+    // A location update may place the party in the encounter introduced this turn.
+    if (combatActive && outcome.location && !draft.receipts.startCombat)
+      throw new GameError('The party cannot leave an active combat through a narrative update.');
     if (combatActive && !draft.receipts.startCombat && !draft.receipts.combat)
       throw new GameError(
         `The GM skipped combat resolution for round ${encounter.round} against ${encounter.enemies
@@ -1413,14 +1623,15 @@ export class Game {
         draft.receipts.combat ||
         (combatActive && !draft.receipts.startCombat) ||
         action.supportAction ||
+        blocked(action, 'main') ||
         draft.receipts[`resource:ability:${action.memberId}`]
       )
         return false;
       const member = draft.members.find((member) => member.id === action.memberId)!;
       if (incapacitatingCondition(member.state)) return false;
-      const ability = requestedAbility(member.character, action, 'utility');
+      const ability = requestedAbility(member.character, action, 'utility', null, member.state);
       return (
-        requiresUtilityCheck(member.character, action) &&
+        requiresUtilityCheck(member.character, action, member.state) &&
         !turn.rolls.some(
           (roll) =>
             roll.memberId === action.memberId &&
@@ -1444,16 +1655,22 @@ export class Game {
         )
           continue;
         const item = requestedConsumable(member, action);
-        if (item && !draft.receipts[`resource:item:${member.id}`])
+        if (
+          item &&
+          !draft.receipts[`resource:item:${member.id}`] &&
+          !blocked(action, 'main') &&
+          !blocked(action, 'minor')
+        )
           throw new GameError(
             `Execute ${member.character.name}'s requested ${item.name} through use_resource.`,
           );
-        const ability = requestedAbility(member.character, action, 'combat');
+        const ability = requestedAbility(member.character, action, undefined, null, member.state);
         if (
           !ability ||
+          blocked(action, 'main') ||
           !['mend', 'cleanse'].includes(ability.effect) ||
           draft.receipts[`resource:ability:${member.id}`] ||
-          (member.state.abilityUses?.[ability.name] ?? 0) >= 1 ||
+          (member.state.abilityUses?.[abilityUseKey(ability)] ?? 0) >= 1 ||
           turn.rolls.some((roll) => roll.memberId === member.id && !!roll.abilityName)
         )
           continue;
@@ -1462,14 +1679,11 @@ export class Game {
             (ally) =>
               ally.id !== member.id && action.text.toLowerCase().includes(ally.character.name.toLowerCase()),
           ) ?? member;
-        const healing =
-          target.character.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal';
         if (
           !isDead(target.state) &&
           (ability.effect === 'cleanse'
             ? matchingCures(ability, target.state).length > 0
-            : (target.state.hp < target.state.maxHp || matchingCures(ability, target.state).length > 0) &&
-              healing === ability.healing)
+            : target.state.hp < target.state.maxHp || matchingCures(ability, target.state).length > 0)
         )
           throw new GameError(
             `Execute ${member.character.name}'s requested ${ability.name} through use_resource.`,
@@ -1489,6 +1703,282 @@ export class Game {
         };
     this.assertResolved(this.turn(row), draft, outcomeSchema.parse(outcome));
   }
+  private finalize(id: string, turnId: string) {
+    const saved: Draft = JSON.parse(this.pending(id)!.draft!);
+    if (saved.resolution) return saved.resolution;
+    if (!saved.adjudication) throw new GameError('Finalization requires saved adjudication.');
+    const outcome = adjudicationOutcome(saved.adjudication);
+    const criticalImpacts = new Set<number>();
+    if (outcome.changes.some((change) => change.type === 'hp' && change.amount < 0))
+      this.withDraft(
+        id,
+        turnId,
+        (draft) => {
+          const turn = this.turn(this.pending(id)!);
+          this.assertResolved(turn, draft, outcome);
+          const health = new Map(draft.members.map((member) => [member.id, member.state.hp]));
+          outcome.changes.forEach((change, index) => {
+            if (change.type !== 'hp') return;
+            const hp = health.get(change.memberId) ?? 0;
+            if (change.amount < 0 && hp > 0) {
+              const failedCritically = turn.rolls.some(
+                (roll) => roll.memberId === change.memberId && !roll.notation && roll.critical === 'failure',
+              );
+              if (
+                failedCritically ||
+                (-change.amount >= hp &&
+                  this.mechanicalDie(
+                    id,
+                    turnId,
+                    20,
+                    `Environmental impact (${change.amount} HP): ${change.reason}`,
+                    change.memberId,
+                    'DEX',
+                    0,
+                    10,
+                    `impact:${change.memberId}`,
+                  ) === 20)
+              )
+                criticalImpacts.add(index);
+            }
+            health.set(change.memberId, Math.max(0, hp + change.amount));
+          }, true);
+        },
+        true,
+      );
+    return this.withDraft(
+      id,
+      turnId,
+      (draft) => {
+        if (draft.resolution) return draft.resolution;
+        const row = this.pending(id)!;
+        const adjudication = draft.adjudication!;
+        const config = draft.context!.config;
+        const turn = this.turn(row);
+        this.assertResolved(turn, draft, outcome);
+        const events: TurnResolution['events'][number][] = structuredClone(adjudication.events);
+        const add = (fact: string, memberId: string | null, receiptRefs: string[]) => {
+          events.push({
+            id: `final:${events.length}`,
+            sequence: events.length,
+            kind: 'mechanics',
+            memberId,
+            actionId: null,
+            fact: combatFact({ config, members: draft.members, turn }, fact),
+            receiptRefs,
+            dependsOn: [],
+            ...(adjudication.version === 2 ? { phase: 'aftermath' as const, result: null } : {}),
+          });
+        };
+        for (const [index, change] of outcome.changes.entries()) {
+          const member = draft.members.find((member) => member.id === change.memberId)!;
+          if (isDead(member.state)) throw new GameError('Permadeath cannot be undone by narrative changes.');
+          if (change.type === 'hp') {
+            if (isDowned(member.state)) throw new GameError('A downed character needs healing from an ally.');
+            const before = member.state.hp;
+            damage(member.state, -change.amount, change.reason, criticalImpacts.has(index));
+            add(
+              `${member.character.name} loses ${before - member.state.hp} HP: ${change.reason}${member.state.hp === 0 ? (isDowned(member.state) ? ' They are Downed at 0 HP.' : ' They die permanently.') : ''}`,
+              member.id,
+              turn.rolls.filter((roll) => roll.memberId === member.id).map((roll) => `roll:${roll.id}`),
+            );
+          } else if (change.type === 'condition') {
+            if (change.remove) removeCondition(member.state, change.name);
+            else applyCondition(member.state, change.name, member.character);
+            add(
+              `${member.character.name} ${change.remove ? 'loses' : 'gains'} ${change.name}: ${change.reason}`,
+              member.id,
+              [],
+            );
+          }
+        }
+        if (row.number > 0 && !draft.receipts.combat) {
+          const logs: string[] = [];
+          for (const member of draft.members.filter((member) => member.active)) {
+            const action = turn.actions.find((action) => action.memberId === member.id);
+            const moving =
+              !!action &&
+              !action.passed &&
+              !incapacitatingCondition(member.state) &&
+              !action.abilityName &&
+              !action.supportAction &&
+              /\b(?:move|walk|run|flee|escape|crawl|climb|jump|loop|ren|vlucht|ontsnap|kruip|klim|spring|beweeg)\b/i.test(
+                action.text,
+              ) &&
+              !/\b(?:do not|don't|won't|will not|niet|geen)\b/i.test(action.text);
+            for (const fact of tickConditions(member, moving)) {
+              logs.push(fact);
+              add(fact, member.id, ['tool:ailments']);
+            }
+          }
+          draft.receipts.ailments = logs;
+        }
+        const combatActive =
+          draft.scene.encounter && !draft.scene.encounter.victory && !draft.scene.encounter.escaped;
+        for (const member of draft.members) {
+          if (row.number > 0 && !draft.receipts.combat && !combatActive && turn.roster.includes(member.id)) {
+            grantXp(member.character, member.state, draft.receipts.bossReward ? 0 : outcome.xp);
+            member.state.gold += outcome.gold;
+          }
+        }
+        const rewards = draft.members.flatMap((member) => {
+          const previous = draft.startingMembers!.find((previous) => previous.id === member.id)!;
+          const xp = (member.state.level - previous.state.level) * 100 + member.state.xp - previous.state.xp;
+          const gold = member.state.gold - previous.state.gold;
+          return xp || gold
+            ? [
+                {
+                  memberId: member.id,
+                  characterName: member.character.name,
+                  xp,
+                  gold,
+                  reason: draft.receipts.combat
+                    ? 'Resolved combat rewards.'
+                    : draft.receipts.bossReward
+                      ? 'Completed significant challenge.'
+                      : adjudication.rewards.reason,
+                },
+              ]
+            : [];
+        });
+        if (outcome.location) draft.scene.location = outcome.location;
+        if (
+          draft.receipts.challenge ||
+          (draft.receipts.combat as CombatReceipt | undefined)?.encounter.victory
+        )
+          for (const member of draft.members) if (isDead(member.state)) member.state.respawnReady = true;
+        if (outcome.safeRest && !combatActive) draft.scene.safeRest = true;
+        draft.scene.lethalWarning = null;
+        const resolution = turnResolutionSchema.parse({
+          version: adjudication.version,
+          turnId,
+          actions: adjudication.actions.map((action) => {
+            const actor = draft.startingMembers!.find((member) => member.id === action.memberId)!;
+            return { ...action, characterId: actor.characterId, characterName: actor.character.name };
+          }),
+          events,
+          rewards,
+          characters: draft.members.map((member) => ({
+            memberId: member.id,
+            characterName: member.character.name,
+            hp: member.state.hp,
+            maxHp: member.state.maxHp,
+            conditions: member.state.conditions,
+            abilityUses: member.state.abilityUses ?? {},
+            level: member.state.level,
+            xp: member.state.xp,
+            gold: member.state.gold,
+          })),
+          changes: outcome.changes,
+          journal: outcome.journal,
+          location: draft.scene.location,
+          safeRest: draft.scene.safeRest,
+          executionContext: [
+            ...draft.startingMembers!.map((member) => ({
+              actorId: member.id,
+              name: member.character.name,
+              description: member.character.appearance,
+              equipment: equippedItems(member.state).map(({ name, kind, description }) => ({
+                name,
+                kind,
+                description,
+              })),
+            })),
+            ...(draft.context!.scene.encounter?.enemies ?? []).map((enemy) => ({
+              actorId: enemy.id,
+              name: enemy.name,
+              description: enemy.description,
+              equipment: (enemy.equipment ?? []).map(({ name, kind, description }) => ({
+                name,
+                kind,
+                description,
+              })),
+            })),
+          ],
+          actionDescriptions: Object.fromEntries(
+            turn.actions
+              .filter((action) => !action.passed)
+              .map((action) => [actionId(turnId, action.memberId), action.text]),
+          ),
+          factualRecap: [
+            ...events.map((event) => event.fact),
+            `Location: ${JSON.stringify(draft.scene.location)}. Safe rest: ${draft.scene.safeRest}.`,
+            ...outcome.journal.map((entry) => `${entry.kind} ${entry.name}: ${entry.detail}`),
+          ].join('\n'),
+        });
+        draft.resolution = resolution;
+        draft.resolutionRevision ??= 0;
+        return resolution;
+      },
+      true,
+    );
+  }
+
+  private publish(id: string, turnId: string) {
+    this.db.transaction(() => {
+      const row = this.pending(id);
+      if (!row || row.id !== turnId || row.phase !== 'resolving')
+        throw new GameError('This turn is no longer resolving.', 409);
+      const draft: Draft = JSON.parse(row.draft!);
+      if (!draft.resolution || !draft.narration)
+        throw new GameError('Publication requires a saved resolution and accepted narration.');
+      if ((draft.narrationRevision ?? 0) !== (draft.resolutionRevision ?? 0))
+        throw new GameError('The saved narration belongs to an earlier resolution. Retry narration.');
+      const resolution = draft.resolution;
+      const narration = assembleResolvedNarration(resolution, draft.narration);
+      const dutch = draft.context!.config.language === 'Nederlands';
+      const rewards = resolution.rewards.filter((reward) => reward.xp > 0);
+      const equipmentChanges = this.turn(row).equipmentChanges ?? [];
+      const summary = [
+        narration.summary,
+        ...(rewards.length
+          ? [
+              `${dutch ? 'XP-beloningen' : 'XP rewards'}:\n${rewards.map((reward) => `${reward.characterName}: +${reward.xp} XP.`).join('\n')}`,
+            ]
+          : []),
+        ...(equipmentChanges.length
+          ? [
+              `${dutch ? 'Uitrustingswijzigingen' : 'Equipment changes'}:\n${equipmentChanges.map((change) => `${change.characterName}: ${change.description}`).join('\n')}`,
+            ]
+          : []),
+      ].join('\n\n');
+      // Prose has already been validated. Engine appendices may exceed the model summary limit.
+      const outcome: Outcome = {
+        ...adjudicationOutcome(draft.adjudication!),
+        narration: narrationParagraphs(resolution, narration).join('\n\n'),
+        summary,
+      };
+      const completedDraft = json(draft);
+      // Only next-turn lifecycle decisions use live replacement metadata.
+      const arrivals = this.activateReplacements(id, turnId, draft);
+      for (const member of draft.members)
+        this.db
+          .prepare('UPDATE members SET state = ?, sheet = ?, character_id = ? WHERE id = ?')
+          .run(json(member.state), json(member.character), member.characterId, member.id);
+      for (const entry of resolution.journal)
+        this.db
+          .prepare(
+            'INSERT INTO journal VALUES(?, ?, ?, ?) ON CONFLICT(campaign_id, kind, name) DO UPDATE SET detail = excluded.detail',
+          )
+          .run(id, entry.kind, entry.name, entry.detail);
+      this.db
+        .prepare("UPDATE turns SET phase = 'complete', result = ?, draft = ?, error = NULL WHERE id = ?")
+        .run(json(outcome), completedDraft, turnId);
+      this.db
+        .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
+        .run(id, turnId, 'turn_committed', json({ changes: resolution.changes, mechanics: draft.receipts }));
+      const members = this.members(id);
+      const ended = members.length > 0 && members.every((member) => member.state.hp <= 0);
+      this.db
+        .prepare('UPDATE campaigns SET version = version + 1, scene = ?, status = ? WHERE id = ?')
+        .run(json(draft.scene), ended ? 'ended' : 'active', id);
+      if (!ended) {
+        this.newTurn(id, row.number + 1, 'collecting');
+        this.recordArrivals(id, this.pending(id)!.id, arrivals);
+      }
+    })();
+  }
+
   private commit(id: string, turnId: string, input: Outcome) {
     const outcome = outcomeSchema.parse(input);
     outcome.lethalWarning = null;
@@ -1624,11 +2114,7 @@ export class Game {
       }
       // Keep the actors' identities even when a new life reuses their membership.
       const completedDraft = json(draft);
-      if (outcome.location) {
-        if (combatActive)
-          throw new GameError('The party cannot leave an active combat through a narrative update.');
-        draft.scene.location = outcome.location;
-      }
+      if (outcome.location) draft.scene.location = outcome.location;
       const successfulEncounter =
         !!draft.receipts.challenge ||
         !!(draft.receipts.combat as CombatReceipt | undefined)?.encounter.victory;
@@ -1783,7 +2269,7 @@ export class Game {
         }
         if (action.abilityName) {
           if (!row || c.status !== 'active') throw new GameError('Healing abilities require an active turn.');
-          const ability = availableAbility(member.character, state, action.abilityName, 'combat');
+          const ability = availableAbility(member.character, state, action.abilityName);
           if (!['mend', 'cleanse'].includes(ability.effect))
             throw new GameError('Choose a healing or cleansing ability.');
           if (isDead(target.state)) throw new GameError('A dead character cannot be healed.');
@@ -1795,10 +2281,6 @@ export class Game {
             !matchingCures(ability, target.state).length
           )
             throw new GameError('The target is already at full health.');
-          const healingMode =
-            target.character.traits.find((trait) => trait.healing !== 'normal')?.healing ?? 'normal';
-          if (ability.effect === 'mend' && healingMode !== ability.healing)
-            throw new GameError('This healing ability is incompatible with the target.');
           this.submit(
             id,
             playerId,
@@ -1840,6 +2322,7 @@ export class Game {
           body: 'body',
           head: 'head',
           boots: 'feet',
+          relic: 'relic slot',
         };
         const dutchDestinations = {
           left: 'linkerhand',
@@ -1847,12 +2330,14 @@ export class Game {
           body: 'lichaam',
           head: 'hoofd',
           boots: 'voeten',
+          relic: 'relikwieslot',
         };
         const equipped = action.type === 'equip' || action.type === 'take-equip';
+        const bothHands = (action.slot === 'left' || action.slot === 'right') && source?.hands === 2;
         let description = equipped
           ? dutch
-            ? `${source!.name} uitgerust (${source!.hands === 2 ? 'beide handen' : dutchDestinations[action.slot!]}).`
-            : `Equipped ${source!.name} (${source!.hands === 2 ? 'both hands' : destinations[action.slot!]}).`
+            ? `${source!.name} uitgerust (${bothHands ? 'beide handen' : dutchDestinations[action.slot!]}).`
+            : `Equipped ${source!.name} (${bothHands ? 'both hands' : destinations[action.slot!]}).`
           : `${({ unequip: dutch ? 'Opgeborgen' : 'Stowed', take: dutch ? 'Opgepakt' : 'Took', drop: dutch ? 'Neergelegd' : 'Dropped' } as Record<string, string>)[action.type]} ${source!.name}.`;
         const displaced = before.filter(
           (item) => !equippedItems(state).some((equipped) => equipped.id === item.id),
@@ -1952,18 +2437,299 @@ export class Game {
       this.leveling.delete(member.id);
     }
   }
+  private async resolutionStage<T>(
+    id: string,
+    turnId: string,
+    stage: string,
+    budget: StageBudget,
+    work: () => Promise<T> | T,
+  ) {
+    while (true) {
+      const started = Date.now();
+      budget.used = 0;
+      budget.requests = [];
+      budget.corrections = [];
+      budget.fallback = undefined;
+      budget.signal = AbortSignal.timeout(stage === 'adjudication' ? 360_000 : 180_000);
+      const attempt =
+        (
+          this.db
+            .prepare('SELECT COUNT(*) AS count FROM events WHERE turn_id = ? AND kind = ?')
+            .get(turnId, `stage:${stage}`) as { count: number }
+        ).count + 1;
+      let failure: string | null = null;
+      let failureCategory: string | null = null;
+      try {
+        return await work();
+      } catch (error) {
+        failure = error instanceof Error ? error.message.slice(0, 2000) : 'Unknown failure';
+        const timedOut = error instanceof Error && error.name === 'TimeoutError';
+        failureCategory = timedOut
+          ? 'timeout'
+          : error instanceof GameError
+            ? 'validation-or-provider'
+            : error instanceof SyntaxError
+              ? 'format'
+              : 'interruption';
+        // Durable per-turn limit also applies across stages, manual retries and server restarts.
+        if (
+          timedOut &&
+          ['adjudication', 'narration'].includes(stage) &&
+          !this.db.prepare("SELECT 1 FROM events WHERE turn_id = ? AND kind = 'turn_auto_retry'").get(turnId)
+        ) {
+          this.db
+            .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
+            .run(id, turnId, 'turn_auto_retry', json({ stage, reason: failure }));
+          this.emit(id);
+          continue;
+        }
+        throw new GameError(`${stage}: ${failure} Retry resumes from the last saved checkpoint.`, 500);
+      } finally {
+        this.db.prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)').run(
+          id,
+          turnId,
+          `stage:${stage}`,
+          json({
+            attempt,
+            requests: budget.used,
+            durationMs: Date.now() - started,
+            failure,
+            failureCategory,
+            requestDiagnostics: budget.requests,
+            corrections: budget.corrections,
+            fallback: budget.fallback,
+          }),
+        );
+      }
+    }
+  }
+
+  private resolutionContext(draft: Draft, row: TurnRow): GMContext {
+    return {
+      ...draft.context!,
+      members: draft.members,
+      startingMembers: draft.startingMembers,
+      scene: draft.scene,
+      turn: this.turn(row),
+      receipts: draft.receipts,
+      resourceUses: Object.entries(draft.receipts)
+        .filter(([key]) => key.startsWith('resource:'))
+        .map(([, receipt]) => receipt as ResourceReceipt),
+      supportResults: draft.receipts.support as SupportResult[] | undefined,
+      recoveryLogs: (draft.receipts.challenge as { recovery?: string[] } | undefined)?.recovery,
+      combatResult: draft.receipts.combat as CombatReceipt | undefined,
+    };
+  }
+
+  private recoverTurnCheckpoints(id: string, turnId: string): Draft {
+    return this.db.transaction(() => {
+      const row = this.pending(id);
+      if (!row || row.id !== turnId || row.phase !== 'resolving')
+        throw new GameError('This turn is no longer resolving.', 409);
+      const draft: Draft = JSON.parse(row.draft!);
+      const repair = repairTurnCheckpoints(draft, this.resolutionContext(draft, row));
+      if (repair) {
+        this.db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(json(draft), turnId);
+        this.db
+          .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
+          .run(id, turnId, 'checkpoint_repaired', json(repair));
+      }
+      return draft;
+    })();
+  }
+
+  private async runResolvedTurn(id: string, turnId: string, provider: GameMaster) {
+    let saved = this.recoverTurnCheckpoints(id, turnId);
+    const config = saved.context!.config;
+    const budget: StageBudget = { used: 0, limit: 8 };
+    if (!saved.adjudication)
+      await this.resolutionStage(id, turnId, 'adjudication', budget, async () => {
+        if (this.diceFor && saved.context!.turn.number > 0) await this.diceFor(config).prepare();
+        const context: GMContext = structuredClone(saved.context!);
+        context.requestBudget = budget;
+        const refresh = <T>(result: T): T => {
+          const row = this.pending(id)!;
+          saved = JSON.parse(row.draft!);
+          Object.assign(context, this.resolutionContext(saved, row));
+          return result;
+        };
+        refresh(undefined);
+        let toolCalls = 0;
+        const startingEncounter = saved.context!.scene.encounter;
+        if (
+          !saved.receipts.combat &&
+          !saved.receipts.startCombat &&
+          startingEncounter &&
+          !startingEncounter.victory &&
+          !startingEncounter.escaped
+        ) {
+          const suggested = saved.receipts.combatInput ?? (await provider.planCombat?.(context));
+          const plan = this.withDraft(id, turnId, (draft) => {
+            const plan = normalizeCombatInput(context, suggested);
+            draft.receipts.combatInput = plan;
+            return plan;
+          });
+          toolCalls++;
+          refresh(this.combat(id, turnId, plan));
+        } else if (!saved.receipts.combat && context.turn.actions.some((action) => action.supportAction)) {
+          toolCalls++;
+          refresh(this.resolveSupport(id, turnId));
+        }
+        const execute = <T>(work: () => T): T => {
+          if (++toolCalls > 20) throw new GameError('Adjudication reached its twenty-tool limit.');
+          const result = refresh(work());
+          this.withDraft(id, turnId, (draft) => {
+            draft.receipts.executionEvents = engineEvents(context);
+          });
+          return refresh(result);
+        };
+        const validate = (input: unknown) => {
+          refresh(undefined);
+          const value = validateAdjudication(context, input);
+          this.assertResolved(context.turn, saved, adjudicationOutcome(value), value);
+          return value;
+        };
+        const tools: GameTools = Object.assign(
+          (input: Check) => execute(() => this.roll(id, turnId, input)),
+          {
+            startCombat: (enemies: unknown) => execute(() => this.startCombat(id, turnId, enemies)),
+            combat: (input: CombatInput) => execute(() => this.combat(id, turnId, input)),
+            offerLoot: (input: Parameters<GameTools['offerLoot']>[0]) =>
+              execute(() => this.offerLoot(id, turnId, input)),
+            completeChallenge: (input: { memberId: string; reason: string; bossEquivalent: boolean }) =>
+              execute(() => this.completeChallenge(id, turnId, input)),
+            useResource: (input: ResourceUse) => execute(() => this.useResource(id, turnId, input)),
+            validateAdjudication: validate,
+            validateResolution: (outcome: Outcome) => this.assertResolved(context.turn, saved, outcome),
+          },
+        );
+        const accepted = validate(await provider.adjudicate!(context, tools));
+        this.withDraft(
+          id,
+          turnId,
+          (draft) => {
+            draft.adjudication = accepted;
+          },
+          true,
+        );
+      });
+    saved = JSON.parse(this.pending(id)!.draft!);
+    if (!saved.resolution)
+      await this.resolutionStage(id, turnId, 'finalization', { used: 0, limit: 0 }, async () => {
+        if (this.diceFor && saved.context!.turn.number > 0) await this.diceFor(config).prepare();
+        return this.finalize(id, turnId);
+      });
+    saved = JSON.parse(this.pending(id)!.draft!);
+    const narrationBudget: StageBudget = { used: 0, limit: 4 };
+    if (!saved.narration)
+      await this.resolutionStage(id, turnId, 'narration', narrationBudget, async () => {
+        const revision = saved.resolutionRevision ?? 0;
+        const proposed = await provider.narrate!(structuredClone(saved.resolution!), config, narrationBudget);
+        let narration: TurnNarration;
+        try {
+          narration = assembleResolvedNarration(saved.resolution!, proposed);
+          const values = narrationParagraphs(saved.resolution!, narration).concat(narration.summary);
+          for (const action of saved.context!.turn.actions) {
+            if (
+              action.text.trim() &&
+              values.some(
+                (value) => value.trim() === action.text.trim() || /\b(?:attempts|probeert)\s*:/i.test(value),
+              )
+            )
+              throw new GameError('Narration copied a submission instead of describing its outcome.');
+          }
+        } catch (error) {
+          narrationBudget.fallback =
+            error instanceof Error ? error.message.slice(0, 2000) : 'Invalid narration.';
+          narration = factualNarration(saved.resolution!, config.language);
+        }
+        this.withDraft(
+          id,
+          turnId,
+          (draft) => {
+            if ((draft.resolutionRevision ?? 0) !== revision)
+              throw new GameError(
+                'The resolution changed while narration was being written. Retry narration.',
+              );
+            draft.narration = narration;
+            draft.narrationRevision = revision;
+          },
+          true,
+        );
+      });
+    await this.resolutionStage(id, turnId, 'publication', { used: 0, limit: 0 }, () =>
+      this.publish(id, turnId),
+    );
+  }
+
   kick(id: string) {
     if (this.running.has(id)) return;
     const row = this.pending(id);
     if (row?.phase !== 'queued') return;
-    // Claim synchronously before awaiting the provider; only one worker can own the turn.
-    const claim = this.db
-      .prepare("UPDATE turns SET phase = 'resolving' WHERE id = ? AND phase = 'queued'")
-      .run(row.id);
-    if (!claim.changes) return;
+    const c = this.campaign(id);
+    const snapshot = this.snapshot(id, c.owner_id);
+    const provider = this.providers(c.owner_id, snapshot.config);
+    // Freeze before the first await: late joins and participation changes belong to the next turn.
+    const claim = this.db.transaction(() => {
+      const claimed = this.db
+        .prepare("UPDATE turns SET phase = 'resolving' WHERE id = ? AND phase = 'queued'")
+        .run(row.id);
+      if (!claimed.changes) return false;
+      const previous: Draft | null = row.draft ? JSON.parse(row.draft) : null;
+      const executed =
+        (!!previous && Object.keys(previous.receipts).length > 0) || snapshot.turn!.rolls.length > 0;
+      const pipelineVersion =
+        previous?.pipelineVersion ?? (provider.adjudicate && provider.narrate && !executed ? 1 : 0);
+      const draft: Draft = previous ?? { members: snapshot.members, scene: snapshot.scene, receipts: {} };
+      draft.pipelineVersion = pipelineVersion;
+      draft.startingMembers ??= structuredClone(draft.members);
+      draft.context ??= {
+        config: snapshot.config,
+        members:
+          pipelineVersion === 1
+            ? draft.members
+            : draft.members.filter(
+                (member) => snapshot.turn!.roster.includes(member.id) || isDowned(member.state),
+              ),
+        turn: this.turn({ ...row, phase: 'resolving' }),
+        history: snapshot.history.slice(-12).map((turn) => ({
+          summary: turn.resolution?.factualRecap ?? turn.result!.summary,
+          source: turn.resolution ? 'resolution' : 'legacy-summary',
+        })),
+        journal: snapshot.journal,
+        scene: draft.scene,
+        pendingReplacements: snapshot.members
+          .filter((member) => isDead(member.state) && member.replacement)
+          .map((member) => ({ playerName: member.playerName, character: member.replacement!.character })),
+        arrivingCharacters: (
+          this.db
+            .prepare("SELECT payload FROM events WHERE turn_id = ? AND kind = 'character_joined' ORDER BY id")
+            .all(row.id) as { payload: string }[]
+        ).map((event) => JSON.parse(event.payload)),
+      };
+      this.db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(json(draft), row.id);
+      return true;
+    })();
+    if (!claim) return;
     const work = Promise.resolve().then(async () => {
       this.emit(id);
       try {
+        const route: Draft = JSON.parse(this.pending(id)!.draft!);
+        if (route.pipelineVersion === 1) {
+          if (!provider.adjudicate || !provider.narrate)
+            throw new GameError(
+              'The saved turn requires a provider with separate adjudication and narration.',
+            );
+          await this.runResolvedTurn(id, row.id, provider);
+          return;
+        }
+        if (
+          this.db.prepare("SELECT id FROM rolls WHERE turn_id = ? AND check_key LIKE 'impact:%'").get(row.id)
+        )
+          throw new GameError(
+            'Legacy environmental dice are preserved, but their accepted proposal was not saved. This turn needs a compatible legacy proposal before it can finish.',
+          );
+
         const c = this.campaign(id);
         const s = this.snapshot(id, c.owner_id);
         const context: GMContext = {
@@ -1984,9 +2750,8 @@ export class Game {
           journal: s.journal,
           scene: s.scene,
         };
-        const provider = this.providers(c.owner_id, s.config);
         if (this.diceFor && s.turn!.number > 0) await this.diceFor(s.config).prepare();
-        const saved: Draft | null = row.draft ? JSON.parse(row.draft) : null;
+        const saved: Draft | null = JSON.parse(this.pending(id)!.draft!);
         if (saved) {
           const participantIds = new Set(context.members.map((member) => member.id));
           context.members = saved.members.filter(
@@ -2056,13 +2821,15 @@ export class Game {
           {
             startCombat: (enemies: unknown) => this.startCombat(id, row.id, enemies),
             combat: (input: CombatInput) => this.combat(id, row.id, input),
-            offerLoot: (input: { item: LootBlueprint; reason: string }) => this.offerLoot(id, row.id, input),
+            offerLoot: (input: Parameters<GameTools['offerLoot']>[0]) => this.offerLoot(id, row.id, input),
             completeChallenge: (input: { memberId: string; reason: string; bossEquivalent: boolean }) =>
               refreshContext(this.completeChallenge(id, row.id, input)),
             useResource: (input: ResourceUse) => refreshContext(this.useResource(id, row.id, input)),
             validateResolution: (outcome: Outcome) => this.validateResolution(id, row.id, outcome),
           },
         );
+        if (!provider.resolve)
+          throw new GameError('This legacy turn requires its compatible resolution provider.');
         const result = await provider.resolve(context, tools);
         this.commit(id, row.id, result);
       } catch (error) {

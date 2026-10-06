@@ -102,7 +102,7 @@ test('a live host language change reaches the next GM output and preserves earli
     expect(updated.config.language).toBe('Nederlands');
     expect(updated.history[0]).toEqual(opening);
     expect(updated.history.at(-1)!.result!.summary).toContain(
-      'De groep heeft een nieuwe oefenronde afgerond.',
+      updated.scene.safeRest ? 'Veilig rusten is mogelijk.' : 'Veilig rusten is niet mogelijk.',
     );
     expect(updated.history.at(-1)!.result!.summary).toContain('XP-beloningen:');
     await expect(page.locator('.recap')).toContainText('+20 XP.');

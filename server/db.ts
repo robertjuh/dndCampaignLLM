@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { rollStartingEquipment } from '../shared/rules';
+import { rollStartingEquipment, grantEquipmentPowers } from '../shared/rules';
 import { localDice } from './random';
 import {
   abilitySchema,
@@ -20,7 +20,7 @@ export function openDatabase(filename: string) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 8) throw new Error('This database was created by a newer Gather version.');
+  if (version > 11) throw new Error('This database was created by a newer Gather version.');
   if (version === 0)
     db.transaction(() => {
       db.exec(`
@@ -130,10 +130,6 @@ export function openDatabase(filename: string) {
             ...ability,
             effect: ability.kind === 'utility' ? 'assist' : ability.effect,
             stat: ability.stat ?? stat,
-            healing:
-              ability.healing ??
-              sheet.traits.find((trait) => trait.healing !== 'normal')?.healing ??
-              'normal',
           }),
         );
         sheet.equipmentOptions = sheet.equipmentOptions.map((item) => migrateItem(item, stat));
@@ -265,6 +261,134 @@ export function openDatabase(filename: string) {
               );
       }
       db.pragma('user_version = 8');
+    })();
+  if (version < 9)
+    db.transaction(() => {
+      // Give every copy of an existing item the same saved powers; keep completed history intact.
+      const powers = new Map<string, Pick<Item, 'immunities' | 'onHit' | 'grantedAbility'>>();
+      const migrate = (input: unknown): any => {
+        if (Array.isArray(input)) return input.map(migrate);
+        if (!input || typeof input !== 'object') return input;
+        const value: Record<string, any> = Object.fromEntries(
+          Object.entries(input).map(([key, child]) => [key, migrate(child)]),
+        );
+        if (
+          value.id &&
+          value.requirements &&
+          value.damage &&
+          value.kind !== 'consumable' &&
+          ['Rare', 'Legendary', 'Cursed'].includes(value.rarity)
+        ) {
+          if (!powers.has(value.id)) {
+            const item = grantEquipmentPowers(value as Item, localDice.draw);
+            powers.set(value.id, {
+              immunities: item.immunities,
+              onHit: item.onHit,
+              grantedAbility: item.grantedAbility,
+            });
+          }
+          Object.assign(value, powers.get(value.id));
+        }
+        return value;
+      };
+      for (const [table, fields] of [
+        ['characters', ['sheet']],
+        ['members', ['sheet', 'state', 'replacement']],
+        ['campaigns', ['scene']],
+        ['turns', ['draft']],
+      ] as const) {
+        const where = table === 'turns' ? " WHERE phase != 'complete'" : '';
+        for (const row of db.prepare(`SELECT id, ${fields.join(', ')} FROM ${table}${where}`).all() as Record<
+          string,
+          any
+        >[])
+          for (const field of fields)
+            if (row[field])
+              db.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).run(
+                JSON.stringify(migrate(JSON.parse(row[field]))),
+                row.id,
+              );
+      }
+      db.pragma('user_version = 9');
+    })();
+  if (version < 10)
+    db.transaction(() => {
+      // Remove legacy types everywhere an active character or item can be restored.
+      // Numeric item healing, saved compensation and completed history stay intact.
+      const migrate = (input: unknown): any => {
+        if (Array.isArray(input)) return input.map(migrate);
+        if (!input || typeof input !== 'object') return input;
+        return Object.fromEntries(
+          Object.entries(input)
+            .filter(([key, value]) => !(key === 'healing' && typeof value === 'string'))
+            .map(([key, value]) => [
+              key,
+              key === 'description' && typeof value === 'string'
+                ? value.replace(/\s*Healing mode: (normal|repair|necrotic)\./g, '')
+                : migrate(value),
+            ]),
+        );
+      };
+      for (const [table, fields] of [
+        ['characters', ['sheet']],
+        ['members', ['sheet', 'state', 'replacement']],
+        ['campaigns', ['scene']],
+        ['turns', ['draft']],
+      ] as const) {
+        const where = table === 'turns' ? " WHERE phase != 'complete'" : '';
+        for (const row of db.prepare(`SELECT id, ${fields.join(', ')} FROM ${table}${where}`).all() as Record<
+          string,
+          any
+        >[])
+          for (const field of fields)
+            if (row[field])
+              db.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).run(
+                JSON.stringify(migrate(JSON.parse(row[field]))),
+                row.id,
+              );
+      }
+      db.pragma('user_version = 10');
+    })();
+  if (version < 11)
+    db.transaction(() => {
+      const migrate = (input: unknown): any => {
+        if (Array.isArray(input)) return input.map(migrate);
+        if (!input || typeof input !== 'object') return input;
+        const value: Record<string, any> = Object.fromEntries(
+          Object.entries(input).map(([key, child]) => [key, migrate(child)]),
+        );
+        if (value.equipment && !Array.isArray(value.equipment) && Array.isArray(value.inventory)) {
+          value.equipment.relic ??= null;
+          for (const hand of ['right', 'left']) {
+            const item = value.equipment[hand];
+            if (item?.kind !== 'relic') continue;
+            for (const slot of ['right', 'left'])
+              if (value.equipment[slot]?.id === item.id) value.equipment[slot] = null;
+            if (!value.equipment.relic) value.equipment.relic = item;
+            else if (value.equipment.relic.id !== item.id) {
+              // Preserve a second relic even if the legacy backpack is already full.
+              const owned = value.inventory.find((owned: Item) => owned.id === item.id);
+              if (owned) owned.quantity++;
+              else value.inventory.push({ ...item, quantity: 1 });
+            }
+          }
+        }
+        return value;
+      };
+      for (const [table, field, where] of [
+        ['members', 'state', ''],
+        ['turns', 'draft', " WHERE phase != 'complete'"],
+      ])
+        for (const row of db.prepare(`SELECT id, ${field} FROM ${table}${where}`).all() as Record<
+          string,
+          string
+        >[])
+          if (row[field])
+            db.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).run(
+              JSON.stringify(migrate(JSON.parse(row[field]))),
+              row.id,
+            );
+      db.pragma('user_version = 11');
     })();
   // A model may have been interrupted after a roll. Keep its receipts and require a deliberate retry.
   db.prepare(

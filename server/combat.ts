@@ -3,6 +3,7 @@ import { combatSchema, lootSchema, type CombatInput, type Member } from '../shar
 import { isDowned, naturalWeapon } from '../shared/rules';
 import type { GMContext } from './game';
 import { requestedAbility, requestedConsumable } from './action-resources';
+import { validateEnvironmentalAction } from './environment';
 
 type CombatAction = CombatInput['actions'][number];
 const fields = combatSchema.shape.actions.element.shape;
@@ -126,32 +127,71 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         submitted,
         'combat',
         typeof chosen.abilityName === 'string' ? chosen.abilityName : null,
+        member.state,
       );
-      const utility =
-        member.state.conditions.includes('Escaped') &&
-        !returningToCombat(text) &&
-        !['attack', 'defend', 'creative'].includes(intent ?? '') &&
-        !(combatAbility && combatAbility.name === chosen.abilityName)
-          ? requestedAbility(
-              member.character,
-              submitted,
-              'utility',
-              typeof chosen.abilityName === 'string' ? chosen.abilityName : null,
-            )
-          : undefined;
-      const ability = utility ?? combatAbility;
-      let main = ability ? 'ability' : (intent ?? parse(fields.main, chosen.main, 'interact'));
+      const utilityAbility = requestedAbility(
+        member.character,
+        submitted,
+        'utility',
+        typeof chosen.abilityName === 'string' ? chosen.abilityName : null,
+        member.state,
+      );
+      const utility = utilityAbility?.effect === 'assist' ? utilityAbility : undefined;
+      const ability = combatAbility ?? utilityAbility;
+      const utilityCheck = !!utility && ability === utility;
+      let environment: CombatAction['environment'];
+      let blockedReason = parse(fields.blockedReason, chosen.blockedReason, null);
+      const environmental =
+        chosen.environment != null &&
+        !ability &&
+        !diplomatic(text) &&
+        !['defend', 'flee', 'move', 'interact'].includes(intent ?? '');
+      if (environmental) {
+        try {
+          environment = validateEnvironmentalAction(context, chosen.environment);
+        } catch (error) {
+          if (context.requestBudget)
+            (context.requestBudget.corrections ??= []).push({
+              request: context.requestBudget.used,
+              feedback:
+                `Environmental proposal rejected: ${error instanceof Error ? error.message : 'Invalid profile.'}`.slice(
+                  0,
+                  1000,
+                ),
+            });
+          blockedReason =
+            context.config.language === 'Nederlands'
+              ? 'Met de beschikbare omgeving en middelen kan deze aanval niet worden uitgevoerd.'
+              : 'The available surroundings and supplies cannot support this action.';
+        }
+      }
+      const utilityMain = intent ?? parse(fields.main, chosen.main, 'ability');
+      let main = utilityCheck
+        ? ['flee', 'move', 'interact'].includes(utilityMain)
+          ? utilityMain
+          : chosen.effect || intent === 'creative'
+            ? 'creative'
+            : 'ability'
+        : ability
+          ? 'ability'
+          : environmental
+            ? environment?.operation === 'reload'
+              ? 'interact'
+              : 'creative'
+            : (intent ?? parse(fields.main, chosen.main, 'interact'));
       if (!ability && main === 'ability') main = intent ?? 'interact';
       if (main === 'heal' || main === 'help-up') main = 'interact';
       let effect =
-        main === 'creative' && intent === 'creative'
-          ? ('influence' as const)
-          : parse(fields.effect, chosen.effect, undefined);
+        environmental && main === 'creative'
+          ? ('damage' as const)
+          : main === 'creative' && intent === 'creative'
+            ? ('influence' as const)
+            : parse(fields.effect, chosen.effect, undefined);
       if (main === 'creative' && !effect) main = 'interact';
-      const neutral = main === 'move' || main === 'interact';
-      const compatible = chosen.main === main;
+      const neutral = main === 'move' || main === 'interact' || (utilityCheck && main === 'ability');
+      const compatible = chosen.main === main || environmental || utilityCheck;
       if (neutral) effect = undefined;
-      const support = ability && ability.effect !== 'strike';
+      const support = ability && !utilityCheck && ability.effect !== 'strike';
       const allyTargets = (
         ability && ['mend', 'cleanse'].includes(ability.effect)
           ? healingTargets
@@ -266,6 +306,8 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         effect,
         cureCondition:
           main === 'interact' && compatible ? parse(fields.cureCondition, chosen.cureCondition, null) : null,
+        ...(environment ? { environment, weaponSlot: null, cureCondition: null } : {}),
+        ...(blockedReason ? { blockedReason } : {}),
       };
       if (action.cureCondition) {
         const treatmentTarget =
@@ -298,6 +340,8 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         action.weaponSlot = null;
         action.effect = undefined;
         action.dc = undefined;
+        delete action.environment;
+        delete action.blockedReason;
       }
       if (namedAlly && (support || neutral || ['help-up', 'heal'].includes(action.main)))
         action.targetId = namedAlly.id;
@@ -311,6 +355,11 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       if (utility) {
         action.targetId = namedAlly?.id ?? (typeof chosen.targetId === 'string' ? chosen.targetId : null);
         action.dc ??= 10;
+      }
+      if (action.environment?.operation === 'reload') {
+        action.targetId = null;
+        action.dc = undefined;
+        action.effect = undefined;
       }
       if (action.main === 'attack') action.stat = chooseWeapon(member, text, action).scaling[0] ?? 'STR';
       return action;

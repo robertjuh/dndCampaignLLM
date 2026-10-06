@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ailments } from './ailments';
+import type { TurnResolution } from './turn-resolution';
 
 export const ailmentSchema = z.enum(ailments);
 
@@ -7,54 +8,77 @@ export const stats = ['STR', 'DEX', 'INT', 'CHA', 'CON', 'WIS'] as const;
 export const statSchema = z.enum(stats);
 export type Stat = z.infer<typeof statSchema>;
 export const statArray = [5, 5, 5, 5, 5, 5];
-export const abilitySchema = z
-  .object({
-    name: z.string().min(1).max(80),
-    description: z.string().min(1).max(500),
-    kind: z.enum(['combat', 'utility']),
-    effect: z.enum(['strike', 'mend', 'assist', 'guard', 'cleanse']),
-    level: z.number().int().min(1).default(1),
-    stat: statSchema.default('INT'),
-    healing: z.enum(['normal', 'repair', 'necrotic']).default('normal'),
-    dice: z.enum(['1d4', '1d6', '1d8', '1d12', '2d4', '2d6', '2d8']).optional(),
-    bonus: z.number().int().min(0).max(6).optional(),
-    inflicts: ailmentSchema.nullable().optional(),
-    cures: z.array(ailmentSchema).max(2).optional(),
-  })
-  .strict()
-  .superRefine((ability, ctx) => {
-    if (ability.inflicts && (ability.kind !== 'combat' || ability.effect !== 'strike'))
-      ctx.addIssue({ code: 'custom', message: 'Only combat strikes inflict ailments.', path: ['inflicts'] });
-    if (ability.cures?.length && (ability.kind !== 'combat' || ability.effect === 'strike'))
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Only support combat abilities cure ailments.',
-        path: ['cures'],
-      });
-    if (ability.effect === 'cleanse' && !ability.cures?.length)
-      ctx.addIssue({ code: 'custom', message: 'Cleanse must cure at least one ailment.', path: ['cures'] });
-    if (new Set(ability.cures).size !== (ability.cures?.length ?? 0))
-      ctx.addIssue({ code: 'custom', message: 'Cures must be distinct.', path: ['cures'] });
-    if (ability.dice && !['strike', 'mend'].includes(ability.effect))
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Only strike and mend abilities roll effect dice.',
-        path: ['dice'],
-      });
-    if (ability.kind === 'utility' && ability.effect !== 'assist')
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Out-of-combat abilities assist a relevant check.',
-        path: ['effect'],
-      });
-  });
-export const slots = ['left', 'right', 'body', 'head', 'boots'] as const;
+// Accept old character exports while discarding their healing-type mechanic.
+const discardHealingType = (input: unknown) => {
+  if (
+    input &&
+    typeof input === 'object' &&
+    'healing' in input &&
+    typeof input.healing === 'string' &&
+    ['normal', 'repair', 'necrotic'].includes(input.healing)
+  ) {
+    const { healing: _legacy, ...value } = input;
+    return value;
+  }
+  return input;
+};
+export const abilitySchema = z.preprocess(
+  discardHealingType,
+  z
+    .object({
+      name: z.string().min(1).max(80),
+      description: z.string().min(1).max(500),
+      kind: z.enum(['combat', 'utility']),
+      effect: z.enum(['strike', 'mend', 'assist', 'guard', 'cleanse']),
+      level: z.number().int().min(1).default(1),
+      stat: statSchema.default('INT'),
+      dice: z.enum(['1d4', '1d6', '1d8', '1d12', '2d4', '2d6', '2d8']).optional(),
+      bonus: z.number().int().min(0).max(6).optional(),
+      inflicts: ailmentSchema.nullable().optional(),
+      cures: z.array(ailmentSchema).max(2).optional(),
+    })
+    .strict()
+    .superRefine((ability, ctx) => {
+      if (ability.inflicts && (ability.kind !== 'combat' || ability.effect !== 'strike'))
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Only combat strikes inflict ailments.',
+          path: ['inflicts'],
+        });
+      if (
+        ability.cures?.length &&
+        (ability.effect === 'strike' || (ability.kind === 'utility' && ability.effect === 'assist'))
+      )
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Only support combat abilities and Mend or Cleanse utility abilities cure ailments.',
+          path: ['cures'],
+        });
+      if (ability.effect === 'cleanse' && !ability.cures?.length)
+        ctx.addIssue({ code: 'custom', message: 'Cleanse must cure at least one ailment.', path: ['cures'] });
+      if (new Set(ability.cures).size !== (ability.cures?.length ?? 0))
+        ctx.addIssue({ code: 'custom', message: 'Cures must be distinct.', path: ['cures'] });
+      if (ability.dice && !['strike', 'mend'].includes(ability.effect))
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Only strike and mend abilities roll effect dice.',
+          path: ['dice'],
+        });
+      if (ability.kind === 'utility' && !['assist', 'mend', 'cleanse'].includes(ability.effect))
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Utility abilities assist a relevant check, Mend, or Cleanse.',
+          path: ['effect'],
+        });
+    }),
+);
+export const slots = ['left', 'right', 'body', 'head', 'boots', 'relic'] as const;
 export type Slot = (typeof slots)[number];
 export const itemSchema = z
   .object({
     id: z.string().min(1).max(100),
     name: z.string().min(1).max(100),
-    kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic']),
+    kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic', 'tool']),
     rarity: z.enum(['Common', 'Uncommon', 'Rare', 'Legendary', 'Cursed']),
     scaling: z.array(statSchema).max(2),
     requirements: z.object({
@@ -73,36 +97,88 @@ export const itemSchema = z
     healing: z.number().int().min(0).max(12),
     attackBonus: z.number().int().min(0).max(3).default(0),
     checkBonus: z.number().int().min(0).max(3).default(0),
+    immunities: z.array(ailmentSchema).max(2).optional(),
+    onHit: z
+      .object({ ailment: ailmentSchema, chance: z.number().int().min(1).max(100) })
+      .strict()
+      .optional(),
+    grantedAbility: abilitySchema.optional(),
     description: z.string().max(700),
   })
-  .strict();
+  .strict()
+  .superRefine((item, ctx) => {
+    if (
+      item.kind === 'tool' &&
+      (item.scaling.length ||
+        item.defense ||
+        item.healing ||
+        item.attackBonus ||
+        item.checkBonus ||
+        item.initiativePenalty ||
+        stats.some((stat) => item.requirements[stat]) ||
+        item.immunities?.length ||
+        item.onHit ||
+        item.grantedAbility)
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Story tools carry a fictional purpose, not equipment powers.',
+      });
+    if (
+      (item.immunities?.length || item.onHit || item.grantedAbility) &&
+      (item.kind === 'consumable' || !['Rare', 'Legendary', 'Cursed'].includes(item.rarity))
+    )
+      ctx.addIssue({ code: 'custom', message: 'Equipment powers require Rare or higher equippable gear.' });
+    if (item.onHit && !['weapon', 'focus'].includes(item.kind))
+      ctx.addIssue({ code: 'custom', message: 'Only weapons and focuses grant on-hit ailments.' });
+    if (item.onHit && item.onHit.chance !== (item.kind === 'focus' ? 100 : 25))
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Weapon ailments use a 25% hit chance; focus ailments use 100%.',
+      });
+    if (
+      item.grantedAbility &&
+      (item.rarity !== 'Legendary' ||
+        item.grantedAbility.kind !==
+          (['weapon', 'shield', 'focus'].includes(item.kind) ? 'combat' : 'utility'))
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'Legendary weapons, shields and focuses grant combat abilities; other Legendary gear grants utility abilities.',
+      });
+    if (new Set(item.immunities).size !== (item.immunities?.length ?? 0))
+      ctx.addIssue({ code: 'custom', message: 'Equipment immunities must be distinct.' });
+  });
 export type Item = z.infer<typeof itemSchema>;
-export const traitSchema = z
-  .object({
-    id: z.string().min(1).max(80),
-    name: z.string().min(1).max(80),
-    description: z.string().min(1).max(700),
-    stats: z
-      .object({
-        STR: z.number().int().min(-5).max(8),
-        DEX: z.number().int().min(-5).max(8),
-        INT: z.number().int().min(-5).max(8),
-        CHA: z.number().int().min(-5).max(8).default(0),
-        CON: z.number().int().min(-5).max(8).default(0),
-        WIS: z.number().int().min(-5).max(8).default(0),
-      })
-      .strict(),
-    blocked: z.array(z.enum(slots)).max(5),
-    hp: z.number().int().min(-4).max(4),
-    defense: z.number().int().min(0).max(1),
-    immunities: z.array(ailmentSchema).max(2),
-    healing: z.enum(['normal', 'repair', 'necrotic']),
-    regeneration: z.number().int().min(0).max(1),
-    natural: z.boolean(),
-    heavyRestricted: z.boolean(),
-    lifesteal: z.boolean(),
-  })
-  .strict();
+export const traitSchema = z.preprocess(
+  discardHealingType,
+  z
+    .object({
+      id: z.string().min(1).max(80),
+      name: z.string().min(1).max(80),
+      description: z.string().min(1).max(700),
+      stats: z
+        .object({
+          STR: z.number().int().min(-5).max(8),
+          DEX: z.number().int().min(-5).max(8),
+          INT: z.number().int().min(-5).max(8),
+          CHA: z.number().int().min(-5).max(8).default(0),
+          CON: z.number().int().min(-5).max(8).default(0),
+          WIS: z.number().int().min(-5).max(8).default(0),
+        })
+        .strict(),
+      blocked: z.array(z.enum(slots)).max(slots.length),
+      hp: z.number().int().min(-4).max(4),
+      defense: z.number().int().min(0).max(1),
+      immunities: z.array(ailmentSchema).max(2),
+      regeneration: z.number().int().min(0).max(1),
+      natural: z.boolean(),
+      heavyRestricted: z.boolean(),
+      lifesteal: z.boolean(),
+    })
+    .strict(),
+);
 export type Trait = z.infer<typeof traitSchema>;
 export type Ability = z.infer<typeof abilitySchema>;
 export const levelUpChoices = {
@@ -130,7 +206,7 @@ export type LevelUpReward = z.infer<typeof levelUpRewardSchema>;
 export const lootSchema = z
   .object({
     name: z.string().min(1).max(100),
-    kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic']),
+    kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic', 'tool']),
     scaling: z.array(statSchema).max(2),
     hands: z.union([z.literal(1), z.literal(2)]),
     light: z.boolean(),
@@ -222,6 +298,8 @@ export const checkSchema = z
     mode: z.enum(['normal', 'advantage', 'disadvantage']),
     lethal: z.boolean().default(false),
     abilityName: z.string().min(1).max(80).nullable().optional(),
+    assistsMemberId: z.string().uuid().nullable().optional(),
+    assistedBy: z.array(z.string().uuid()).max(10).optional(),
   })
   .strict();
 export type Check = z.infer<typeof checkSchema>;
@@ -369,6 +447,35 @@ export type Scene = {
   lethalWarning: string | null;
   safeRest: boolean;
   usedRest: boolean;
+  // Stable, location-qualified discovery sources prevent replenishing the same searched cache.
+  searchedLoot?: Record<string, string>;
+  environment?: EnvironmentalState;
+};
+export const environmentalActionSchema = z
+  .object({
+    sourceId: z.string().min(1).max(700),
+    name: z.string().trim().min(1).max(100),
+    evidence: z.string().trim().min(8).max(1500),
+    operation: z.enum(['attack', 'reload']),
+    roll: z.enum(['defense', 'check']),
+    damage: z
+      .string()
+      .regex(/^[1-4]d(?:4|6|8|10|12)$/)
+      .refine((dice) => {
+        const [count, sides] = dice.split('d').map(Number);
+        return count * sides <= 24;
+      }, 'Environmental damage dice must total at most 24 before criticals.'),
+    damageBonus: z.number().int().min(0).max(3),
+    consumption: z.enum(['none', 'reload', 'once']),
+    reloadSourceId: z.string().min(1).max(700).nullable(),
+    reloadEvidence: z.string().trim().min(8).max(1500).nullable(),
+    reloadResourceKey: z.string().max(800).optional(),
+  })
+  .strict();
+export type EnvironmentalAction = z.infer<typeof environmentalActionSchema>;
+export type EnvironmentalState = {
+  sources: Record<string, { profile: EnvironmentalAction; ready: boolean }>;
+  spentResources: string[];
 };
 export const combatSchema = z
   .object({
@@ -404,6 +511,8 @@ export const combatSchema = z
             effect: z.enum(['damage', 'stun', 'influence']).optional(),
             cureCondition: ailmentSchema.nullable().optional(),
             weaponSlot: z.enum(['left', 'right', 'natural']).nullable().optional(),
+            environment: environmentalActionSchema.nullable().optional(),
+            blockedReason: z.string().trim().min(1).max(500).nullable().optional(),
           })
           .strict(),
       )
@@ -443,6 +552,8 @@ export type Roll = Check & {
   id: string;
   dice: number[];
   modifier: number;
+  // Freeze passive check contributions with the dice; legacy rolls omit this evidence.
+  equipmentBonuses?: { itemId: string; name: string; bonus: number }[];
   total: number;
   success: boolean;
   source: string;
@@ -459,6 +570,9 @@ export type Turn = {
   rolls: Roll[];
   result: Outcome | null;
   error: string | null;
+  automaticRetry?: boolean;
+  diagnostics?: string[];
+  resolution?: TurnResolution;
   equipmentChanges?: { memberId: string; characterName: string; description: string }[];
 };
 export type Snapshot = {
@@ -469,6 +583,7 @@ export type Snapshot = {
   paused: boolean;
   version: number;
   isHost: boolean;
+  leaderName?: string;
   myMemberId: string | null;
   members: Member[];
   turn: Turn | null;
@@ -489,7 +604,6 @@ export function blankTrait(name = 'Custom trait'): Trait {
     hp: 0,
     defense: 0,
     immunities: [],
-    healing: 'normal',
     regeneration: 0,
     natural: false,
     heavyRestricted: false,
@@ -518,7 +632,6 @@ export function templateCharacter(name = 'New character', species = 'Custom spec
         effect: 'strike',
         level: 1,
         stat: 'STR',
-        healing: 'normal',
       },
       {
         name: 'Keen observation',
@@ -527,7 +640,6 @@ export function templateCharacter(name = 'New character', species = 'Custom spec
         effect: 'assist',
         level: 1,
         stat: 'INT',
-        healing: 'normal',
       },
     ],
     selectedEquipmentIds: [],

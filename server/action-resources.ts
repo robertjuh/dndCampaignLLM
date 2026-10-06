@@ -1,4 +1,5 @@
 import type { Ability, Action, Character, CharacterState, Member } from '../shared/schema';
+import { availableAbilities } from '../shared/rules';
 
 const resourceText = (text: string) =>
   text
@@ -24,20 +25,38 @@ export function requestsAbility(text: string): boolean {
 export function requestedAbility(
   character: Character,
   action: Action,
-  kind: Ability['kind'],
+  kind: Ability['kind'] | undefined,
   suggestedName?: string | null,
+  state?: CharacterState,
 ): Ability | undefined {
   if (action.passed || action.supportAction) return undefined;
-  const abilities = character.abilities.filter((ability) => ability.kind === kind);
+  const all = availableAbilities(character, state);
+  const abilities = all.filter((ability) => !kind || ability.kind === kind);
   if (action.abilityName) return abilities.find((ability) => ability.name === action.abilityName);
   const text = resourceText(action.text);
-  const named = character.abilities.find((ability) => mentionsName(text, ability.name));
-  if (named) return named.kind === kind ? named : undefined;
-  if (!requestsAbility(text)) return undefined;
-  return (
-    abilities.find((ability) => ability.name.toLowerCase() === suggestedName?.toLowerCase()) ??
-    (abilities.length === 1 && !/\b(?:or|of)\b/i.test(text) ? abilities[0] : undefined)
+  const named = all.find(
+    (ability) =>
+      mentionsName(text, ability.name) ||
+      (!!ability.equipmentId &&
+        mentionsName(
+          text,
+          Object.values(state!.equipment).find((item) => item?.id === ability.equipmentId)!.grantedAbility!
+            .name,
+        )),
   );
+  if (named) return !kind || named.kind === kind ? named : undefined;
+  if (!requestsAbility(text)) return undefined;
+  const category = text
+    .match(/\b(combat|utility)\s+(?:ability|abilities|skill|power)\b/i)?.[1]
+    ?.toLowerCase();
+  if (category && kind && category !== kind) return undefined;
+  const suggested = all.find((ability) => ability.name.toLowerCase() === suggestedName?.toLowerCase());
+  if (suggested)
+    return abilities.includes(suggested) && (!category || suggested.kind === category)
+      ? suggested
+      : undefined;
+  const eligible = category ? abilities.filter((ability) => ability.kind === category) : abilities;
+  return eligible.length === 1 && !/\b(?:or|of)\b/i.test(text) ? eligible[0] : undefined;
 }
 
 export function requestedConsumable(
@@ -66,8 +85,8 @@ export function requestedConsumable(
     (!healing ||
       action.abilityName ||
       requestsAbility(text) ||
-      requestedAbility(member.character, action, 'combat') ||
-      requestedAbility(member.character, action, 'utility'))
+      requestedAbility(member.character, action, 'combat', null, member.state) ||
+      requestedAbility(member.character, action, 'utility', null, member.state))
   )
     return undefined;
   return items.find((item) => item.id === suggestedId) ?? items.find((item) => item.healing > 0);

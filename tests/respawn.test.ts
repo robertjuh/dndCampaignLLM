@@ -438,7 +438,7 @@ describe('replacement characters after successful encounters', () => {
     const reopened = openDatabase(filename);
     cleanup.push(() => reopened.close());
     const restored = new Game(reopened, () => f.provider, f.draw);
-    expect(reopened.pragma('user_version', { simple: true })).toBe(8);
+    expect(reopened.pragma('user_version', { simple: true })).toBe(11);
     expect(restored.members(f.c.id).map((m) => ({ character: m.character, state: m.state }))).toEqual(
       before.map((m) => ({ character: m.character, state: m.state })),
     );

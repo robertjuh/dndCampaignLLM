@@ -62,6 +62,18 @@ it('rolls bounded dice variants for strikes and mends', () => {
   }
 });
 
+it('rolls utility Mend healing power and a cure while keeping utility assist scoped to checks', () => {
+  const draft = offers();
+  draft.abilities[1].effect = 'mend';
+  const created = rollCharacterCreation(draft, 'strike', 0, () => 1);
+  const utilities = created.abilityOptions!.filter((ability) => ability.kind === 'utility');
+  expect(utilities[0]).toMatchObject({ effect: 'mend', dice: '1d4', bonus: 2, cures: ['Bleeding'] });
+  expect(abilityPowerSummary(utilities[0], created.stats)).toBe('3–6 HP');
+  expect(utilities[1]).toMatchObject({ effect: 'assist' });
+  expect(utilities[1].cures).toBeUndefined();
+  expect(characterSchema.safeParse(created).success).toBe(true);
+});
+
 it('compensates each drawback with attributes or power that applies to either combat choice', () => {
   const sheet = offers();
   sheet.traits[0].blocked = ['head', 'boots'];
@@ -91,8 +103,7 @@ it('counts every mechanical restriction and rejects too many or a different roll
   sheet.traits[0].stats.INT = -2;
   sheet.traits[0].hp = -1;
   sheet.traits[0].heavyRestricted = true;
-  sheet.traits[0].healing = 'repair';
-  expect(characterHandicaps(sheet)).toHaveLength(5);
+  expect(characterHandicaps(sheet)).toHaveLength(4);
   expect(() => rollCharacterCreation(sheet, 'strike', 2, () => 1)).toThrow('exactly 2');
   expect(() => rollCharacterCreation(sheet, 'strike', 5, () => 1)).toThrow();
   expect(() => rollCharacterCreation(offers(), 'strike', 1, () => 1)).toThrow('exactly 1');
@@ -160,9 +171,9 @@ it('shows exact power ranges, including negative modifiers and the minimum one-p
   const ability = { ...sheet.abilities[0], dice: '1d12' as const };
   expect(abilityPowerSummary(ability, sheet.stats)).toBe('1–12 damage');
   expect(abilityPowerSummary({ ...ability, dice: '2d4', bonus: 2 }, sheet.stats)).toBe('4–10 damage');
-  expect(
-    abilityPowerSummary({ ...ability, effect: 'mend', dice: '1d4' }, { ...sheet.stats, STR: 0 }),
-  ).toBe('1–1 HP');
+  expect(abilityPowerSummary({ ...ability, effect: 'mend', dice: '1d4' }, { ...sheet.stats, STR: 0 })).toBe(
+    '1–1 HP',
+  );
   expect(abilityPowerSummary(sheet.abilities[1], sheet.stats)).toBeNull();
 });
 

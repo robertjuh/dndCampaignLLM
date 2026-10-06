@@ -34,7 +34,7 @@ export const ailmentRules: Record<
     remedy: 'Use an available antidote or a suitable cleansing treatment.',
   },
   Stunned: {
-    turns: 2,
+    turns: 1,
     damage: 0,
     mechanic: 'Lose your main action; your minor action remains available.',
     remedy: 'An ally can spend their action steadying and helping you regain focus.',
@@ -52,7 +52,7 @@ export const ailmentRules: Record<
     remedy: 'Warm up with an available heat source, dry covering, or warming treatment.',
   },
   Frozen: {
-    turns: 2,
+    turns: 1,
     damage: 0,
     mechanic: 'Cannot take main or minor actions.',
     remedy: 'An ally must thaw you with safe warmth or an appropriate ability.',
@@ -64,7 +64,7 @@ export const ailmentRules: Record<
     remedy: 'Spend your main action grounding yourself safely away from the electrical source.',
   },
   Electrocuted: {
-    turns: 2,
+    turns: 1,
     damage: 0,
     mechanic: 'Cannot take main or minor actions.',
     remedy: 'An ally must safely disconnect the electrical source and help you recover.',

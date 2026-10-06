@@ -2616,6 +2616,25 @@ p {
     serif;
   color: light-dark(#776145, #dfb68a);
 }
+.enemy-list article[role='button'] {
+  cursor: pointer;
+}
+.enemy-list article[role='button']:not([aria-disabled='true']):is(:hover, :focus-visible) {
+  border-color: var(--green);
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.enemy-list article[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.65;
+}
+.turn-mechanics {
+  margin-top: 12px;
+  font-size: 12px;
+}
+.turn-mechanics summary {
+  cursor: pointer;
+}
 .enemy-list p {
   font-size: 12px;
   color: light-dark(#8c806b, #dfb68a);
@@ -2856,6 +2875,12 @@ p {
 .member-detail li span {
   overflow-wrap: anywhere;
   text-align: right;
+}
+.item-icon {
+  display: inline-block;
+  vertical-align: -0.2em;
+  margin-inline-end: 6px;
+  flex-shrink: 0;
 }
 .item-inspection {
   flex: 1;

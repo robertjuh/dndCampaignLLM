@@ -21,6 +21,28 @@ const storyProse = z
 // Translate fixed engine phrasing; keep names, mechanics and submitted text exact.
 const dutchCombatPhrases: [string, string][] = [
   [
+    ' its loaded shot is spent and it needs reloading.',
+    ' de geladen schotvoorraad is verbruikt en opnieuw laden is nodig.',
+  ],
+  [' this environmental opportunity is now used up.', ' deze omgevingsmogelijkheid is nu verbruikt.'],
+  [' reloads ', ' laadt opnieuw: '],
+  [
+    '; the supplied ammunition is consumed and the source is ready again.',
+    '; de aangeleverde munitie is verbruikt en het middel is weer gereed.',
+  ],
+  [' is already ready; reloading has no effect.', ' is al gereed; opnieuw laden heeft geen effect.'],
+  [
+    ' cannot be reloaded: no unspent ammunition is available.',
+    ' kan niet opnieuw worden geladen: er is geen ongebruikte munitie beschikbaar.',
+  ],
+  [
+    ' needs reloading; no shot or damage occurs.',
+    ' moet opnieuw worden geladen; er volgt geen schot of damage.',
+  ],
+  [' is already used up; no damage occurs.', ' is al verbruikt; er volgt geen damage.'],
+  ["'s action has no effect: ", ' kan de actie niet uitvoeren: '],
+  ['; no damage is dealt.', '; er wordt geen damage toegebracht.'],
+  [
     ' dies permanently: Left behind with no conscious ally remaining in combat.',
     ' sterft permanent: achtergelaten zonder bewuste bondgenoot in combat.',
   ],
@@ -41,6 +63,8 @@ const dutchCombatPhrases: [string, string][] = [
   ],
   [' drops ', ' laat achter: '],
   ['. It is available as scene loot.', '. Het item is beschikbaar als loot op deze locatie.'],
+  [' regains consciousness after the encounter.', ' komt na de ontmoeting weer bij.'],
+  [' regains consciousness after the fight.', ' komt na het gevecht weer bij.'],
   [
     ' cannot carry out their submitted action because they were downed before their turn.',
     ' kan de ingediende actie niet uitvoeren omdat het personage vóór de beurt Downed raakte.',
@@ -211,7 +235,8 @@ const dutchCombatPhrases: [string, string][] = [
 ];
 
 export function combatFact(
-  context: Pick<GMContext, 'config' | 'members' | 'turn' | 'combatResult'>,
+  context: Pick<GMContext, 'config' | 'members' | 'turn' | 'combatResult'> &
+    Partial<Pick<GMContext, 'scene'>>,
   fact: string,
 ): string {
   fact = fact.replace(/ Each surviving character gains \d+ XP\./g, '');
@@ -227,6 +252,7 @@ export function combatFact(
       ...(context.combatResult?.encounter.enemies.map((enemy) => enemy.name) ?? []),
       ...(context.combatResult?.characters.map((character) => character.name) ?? []),
       ...(context.combatResult?.loot.map((item) => item.name) ?? []),
+      ...Object.values(context.scene?.environment?.sources ?? {}).map((source) => source.profile.name),
       ...context.turn.actions.flatMap((action) => (action.characterName ? [action.characterName] : [])),
       ...context.turn.actions.flatMap((action) => [action.text, action.text.slice(0, 500)]),
     ]),

@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { normalizeCombatInput } from '../server/combat';
+import { environmentalFacts } from '../server/environment';
 import { requestedAbility, requestedConsumable } from '../server/action-resources';
 import type { GMContext } from '../server/game';
 import { baseItem, equip, initialScene, initialState, runCombat } from '../shared/rules';
-import { enemySchema, templateCharacter, type Member } from '../shared/schema';
+import { enemySchema, templateCharacter, type Member, type EnvironmentalAction } from '../shared/schema';
 
 function fixture(text = 'Attack the enemy'): GMContext {
   const members = ['Mara Vex', 'Krail Venn'].map((name): Member => {
@@ -81,6 +82,99 @@ function fixture(text = 'Attack the enemy'): GMContext {
 }
 
 describe('server combat interpretation defaults', () => {
+  it.each(['stun', 'influence', 'damage', 'flee'] as const)(
+    'uses a scoped utility for %s during combat with advantage, level scaling and one charge',
+    (effect) => {
+      const context = fixture(
+        effect === 'flee'
+          ? 'I escape using my utility ability'
+          : 'Use my utility ability against Ork Breachmob',
+      );
+      const actor = context.members[0];
+      const ability = actor.character.abilities[1];
+      ability.stat = 'CHA';
+      ability.level = 2;
+      ability.bonus = 1;
+      context.turn.actions[0].abilityName = ability.name;
+      const plan = normalizeCombatInput(context, {
+        actions: [
+          {
+            memberId: actor.id,
+            main: effect === 'flee' ? 'flee' : 'creative',
+            abilityName: ability.name,
+            targetId: 'enemy-0',
+            stat: 'STR',
+            dc: effect === 'influence' ? 15 : 10,
+            ...(effect === 'flee' ? {} : { effect }),
+          },
+        ],
+        enemyTargets: context.scene.encounter!.enemies.map((enemy) => ({
+          enemyId: enemy.id,
+          memberId: actor.id,
+        })),
+      });
+      expect(plan.actions[0]).toMatchObject({
+        main: effect === 'flee' ? 'flee' : 'creative',
+        abilityName: ability.name,
+        stat: 'CHA',
+      });
+      const checks: { stat?: string; bonus?: number }[] = [];
+      const before = context.scene.encounter!.enemies[0].hp;
+      runCombat(context.members, context.scene.encounter!, plan, (sides, _label, id, stat, bonus) => {
+        if (id === actor.id && sides === 20) {
+          checks.push({ stat, bonus });
+          return checks.length === 1 ? 1 : effect === 'influence' ? 11 : 6;
+        }
+        return sides === 20 ? 12 : Math.min(2, sides);
+      });
+      expect(checks).toEqual([
+        { stat: 'CHA', bonus: 4 },
+        { stat: 'CHA', bonus: 4 },
+      ]);
+      expect(actor.state.abilityUses?.[ability.name]).toBe(1);
+      if (effect === 'flee') expect(actor.state.conditions).toContain('Escaped');
+      if (effect === 'influence') expect(context.scene.encounter!.enemies[0].withdrawn).toBe(true);
+      if (effect === 'stun') expect(actor.state.hp).toBe(actor.state.maxHp - 2); // Only the other enemy attacks.
+      if (effect === 'damage') expect(context.scene.encounter!.enemies[0].hp).toBe(before - 2);
+      const retryChecks: string[] = [];
+      runCombat(context.members, context.scene.encounter!, plan, (sides, label) => {
+        if (label.includes('advantage')) retryChecks.push(label);
+        return Math.min(2, sides);
+      });
+      expect(retryChecks).toEqual([]);
+    },
+  );
+
+  it.each(['combat', 'utility'] as const)('uses %s Mend to heal and cure an ally in combat', (kind) => {
+    const context = fixture('Use Field mend on Krail Venn');
+    const [actor, target] = context.members;
+    const ability = {
+      ...actor.character.abilities[0],
+      kind,
+      name: 'Field mend',
+      effect: 'mend' as const,
+      stat: 'INT' as const,
+      dice: '1d4' as const,
+      cures: ['Shocked' as const],
+    };
+    actor.character.abilities = [ability];
+    context.turn.actions[0].abilityName = ability.name;
+    target.state.hp = 10;
+    target.state.conditions.push('Shocked');
+    target.state.conditionTurns.Shocked = 3;
+    const plan = normalizeCombatInput(context);
+    expect(plan.actions[0]).toMatchObject({
+      main: 'ability',
+      abilityName: ability.name,
+      targetId: target.id,
+    });
+    context.scene.encounter!.initiative = [{ id: actor.id, total: 15 }];
+    runCombat(context.members, context.scene.encounter!, plan, () => 4);
+    expect(target.state.hp).toBe(14);
+    expect(target.state.conditions).not.toContain('Shocked');
+    expect(actor.state.abilityUses?.[ability.name]).toBe(1);
+  });
+
   it.each([1, 2])(
     'uses an equipped weapon and randomly selects living enemy %i for a vague attack',
     (choice) => {
@@ -967,7 +1061,7 @@ it.each([
     const ability = actor.character.abilities.find((ability) => ability.kind === 'utility')!;
     ability.stat = 'WIS';
     ability.bonus = 2;
-    actor.state.equipment.right = { ...baseItem('relic', 'Lens', 'relic'), scaling: ['WIS'], checkBonus: 3 };
+    actor.state.equipment.relic = { ...baseItem('relic', 'Lens', 'relic'), scaling: ['WIS'], checkBonus: 3 };
     if (selected) context.turn.actions[0].abilityName = ability.name;
     const plan = normalizeCombatInput(
       context,
@@ -981,7 +1075,7 @@ it.each([
         : undefined,
     );
     expect(plan.actions[0]).toMatchObject({
-      main: 'ability',
+      main: 'interact',
       stat: 'WIS',
       reengage: false,
       abilityName: ability.name,
@@ -1020,7 +1114,6 @@ it.each(['help-up', 'heal', 'treat', 'mend', 'interact'])(
       name: 'Restore',
       kind: 'combat' as const,
       effect: 'mend' as const,
-      healing: 'normal' as const,
     };
     actor.character.abilities.push(mend);
     context.turn.actions[0].text =
@@ -1062,7 +1155,6 @@ it('lets an escaped character mend themselves without rejoining', () => {
     name: 'Restore',
     kind: 'combat',
     effect: 'mend',
-    healing: 'normal',
   });
   const plan = normalizeCombatInput(context);
   expect(plan.actions[0]).toMatchObject({ main: 'ability', targetId: actor.id, reengage: false });
@@ -1071,4 +1163,295 @@ it('lets an escaped character mend themselves without rejoining', () => {
   expect(actor.state.hp).toBeGreaterThan(hp);
   expect(actor.state.conditions).toContain('Escaped');
   expect(actor.state.abilityUses?.Restore).toBe(1);
+});
+
+function cannonFixture(text = 'Knal de boegharpoenier voor zijnen donder volle bak met het kannon jonge') {
+  const context = fixture(text);
+  context.members.forEach((member) => (member.state.stats.INT = 5));
+  context.scene.encounter!.enemies[0].name = 'Asgrijze Boegharpoenier';
+  context.scene.environment = { sources: {}, spentResources: [] };
+  context.journal = [
+    {
+      kind: 'fact',
+      name: 'Prepared cannon',
+      detail: 'The mounted cannon is loaded with a dry charge and a chain shot, aimed at the enemy ship.',
+    },
+    {
+      kind: 'fact',
+      name: 'Spare shot',
+      detail: 'A sealed spare powder charge and one chain shot are available beside the cannon.',
+    },
+  ];
+  const profile: EnvironmentalAction = {
+    sourceId: 'journal:fact:Prepared cannon',
+    name: 'Mounted cannon',
+    evidence: context.journal[0].detail,
+    operation: 'attack',
+    roll: 'defense',
+    damage: '2d6',
+    damageBonus: 1,
+    consumption: 'reload',
+    reloadSourceId: null,
+    reloadEvidence: null,
+  };
+  const plan = (extra: Partial<EnvironmentalAction> = {}, main = 'creative') =>
+    normalizeCombatInput(context, {
+      actions: [
+        {
+          memberId: context.members[0].id,
+          main,
+          stat: 'INT',
+          targetId: 'enemy-0',
+          effect: 'damage',
+          environment: { ...profile, ...extra },
+        },
+      ],
+    });
+  const execute = (input = plan(), die = 12) => {
+    const rolls: { actor: string; sides: number; label: string; dc?: number }[] = [];
+    const events: { status: string | null; fact: string }[] = [];
+    const logs = runCombat(
+      context.members,
+      context.scene.encounter!,
+      input,
+      (sides, label, actor, _stat, _mod, dc) => {
+        rolls.push({ actor, sides, label, dc });
+        return sides === 20 ? (actor === context.members[0].id ? die : 2) : 3;
+      },
+      (event) => events.push(event),
+      context.scene.environment,
+    );
+    return { logs, events, rolls: rolls.filter((roll) => roll.actor === context.members[0].id) };
+  };
+  return { context, profile, plan, execute };
+}
+
+describe('grounded environmental combat', () => {
+  it.each([
+    'Knal de boegharpoenier voor zijnen donder volle bak met het kannon jonge',
+    'I fire the prepared cannon at the harpooner',
+  ])('resolves %s using its proposed source and enemy target instead of an equipped weapon', (text) => {
+    const f = cannonFixture(text);
+    const input = f.plan({}, 'attack');
+    expect(input.actions[0]).toMatchObject({
+      main: 'creative',
+      effect: 'damage',
+      weaponSlot: null,
+      targetId: 'enemy-0',
+      environment: f.profile,
+    });
+    const before = structuredClone(f.context.members[0].state.equipment);
+    const result = f.execute(input);
+    expect(result.rolls.map((roll) => roll.sides)).toEqual([20, 6, 6]);
+    expect(result.rolls[0].dc).toBe(10);
+    expect(result.rolls[0].label).toContain('Mounted cannon against Asgrijze Boegharpoenier');
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(23);
+    expect(f.context.scene.encounter!.enemies[1].hp).toBe(30);
+    expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(false);
+    expect(f.context.members[0].state.equipment).toEqual(before);
+    expect(result.events).toContainEqual(
+      expect.objectContaining({ status: 'success', fact: expect.stringContaining('takes 7 damage') }),
+    );
+  });
+
+  it('uses a difficulty check for an uncertain maneuver and spends the shot on a miss', () => {
+    const f = cannonFixture();
+    const input = f.plan({ roll: 'check' });
+    input.actions[0].dc = 15;
+    const result = f.execute(input, 12);
+    expect(result.rolls.map((roll) => roll.sides)).toEqual([20]);
+    expect(result.rolls[0].dc).toBe(15);
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(30);
+    expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(false);
+    expect(result.events).toContainEqual(
+      expect.objectContaining({ status: 'failure', fact: expect.stringContaining('no damage is dealt') }),
+    );
+  });
+
+  it.each([1, 20])('keeps critical rules and source consumption on a natural %i', (die) => {
+    const f = cannonFixture();
+    const hp = f.context.members[0].state.hp;
+    const result = f.execute(f.plan(), die);
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(die === 20 ? 17 : 30);
+    expect(result.rolls.filter((roll) => roll.sides === 6)).toHaveLength(die === 20 ? 4 : 0);
+    expect(f.context.members[0].state.hp).toBe(die === 1 ? hp - 4 : hp);
+    expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(false);
+  });
+
+  it('preserves the source when the target is unavailable before execution', () => {
+    const f = cannonFixture();
+    const input = f.plan();
+    f.context.scene.encounter!.enemies[0].hp = 0;
+    const result = f.execute(input);
+    expect(result.rolls).toHaveLength(0);
+    expect(f.context.scene.environment!.sources).toEqual({});
+    expect(result.events).toContainEqual(
+      expect.objectContaining({
+        status: 'blocked',
+        fact: expect.stringContaining('target is no longer available'),
+      }),
+    );
+  });
+
+  it.each(['unknown source', 'invented evidence', 'oversized dice', 'oversized bonus'])(
+    'explains a blocked %s without firing a different weapon',
+    (invalid) => {
+      const f = cannonFixture();
+      const change =
+        invalid === 'unknown source'
+          ? { sourceId: 'journal:fact:Invented artillery' }
+          : invalid === 'invented evidence'
+            ? { evidence: 'There is a magical infinite-ammunition cannon.' }
+            : invalid === 'oversized dice'
+              ? { damage: '4d12' }
+              : { damageBonus: 500 };
+      const input = f.plan(change);
+      expect(input.actions[0].blockedReason).toBeTruthy();
+      const result = f.execute(input);
+      expect(result.rolls).toHaveLength(0);
+      expect(f.context.scene.encounter!.enemies[0].hp).toBe(30);
+      expect(f.context.scene.environment!.sources).toEqual({});
+      expect(result.events).toContainEqual(
+        expect.objectContaining({ status: 'blocked', fact: expect.stringContaining('no effect') }),
+      );
+    },
+  );
+
+  it('retains the saved profile and blocks a second shot until a separate reload', () => {
+    const f = cannonFixture();
+    f.execute();
+    const changed = f.plan({
+      name: 'Unlimited super cannon',
+      damage: '4d6',
+      damageBonus: 3,
+      consumption: 'none',
+    });
+    expect(changed.actions[0].environment).toMatchObject(f.profile);
+    const second = f.execute(changed);
+    expect(second.rolls).toHaveLength(0);
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(23);
+    expect(second.events).toContainEqual(
+      expect.objectContaining({ status: 'blocked', fact: expect.stringContaining('needs reloading') }),
+    );
+  });
+
+  it.each(['once', 'none'] as const)('preserves the reuse rule for a %s opportunity', (consumption) => {
+    const f = cannonFixture();
+    f.execute(f.plan({ consumption }));
+    const second = f.execute(f.plan({ consumption }));
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(consumption === 'once' ? 23 : 16);
+    expect(second.rolls).toHaveLength(consumption === 'once' ? 0 : 3);
+    expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(consumption === 'none');
+  });
+
+  it('preserves the loaded opportunity when its actor cannot act', () => {
+    const f = cannonFixture();
+    f.context.members[0].state.conditions.push('Stunned');
+    const result = f.execute();
+    expect(result.rolls).toHaveLength(0);
+    expect(f.context.scene.environment!.sources).toEqual({});
+    expect(result.events).toContainEqual(
+      expect.objectContaining({
+        status: 'blocked',
+        fact: expect.stringContaining('loses their main action'),
+      }),
+    );
+  });
+
+  it('uses the target’s reduced defense when it is Chilled', () => {
+    const f = cannonFixture();
+    f.context.scene.encounter!.enemies[0].conditions = ['Chilled'];
+    const result = f.execute(f.plan(), 8);
+    expect(result.rolls[0].dc).toBe(8);
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(23);
+  });
+
+  it('preserves ally healing when the model proposes an unrelated environmental attack', () => {
+    const f = cannonFixture('Use Potion on Krail Venn.');
+    f.context.members[0].state.inventory.push({
+      ...baseItem('potion', 'Potion', 'consumable'),
+      quantity: 1,
+      healing: 4,
+    });
+    f.context.members[1].state.hp -= 5;
+    const input = f.plan();
+    expect(input.actions[0]).toMatchObject({ main: 'heal', targetId: f.context.members[1].id });
+    expect(input.actions[0].environment).toBeUndefined();
+    f.execute(input);
+    expect(f.context.scene.environment!.sources).toEqual({});
+  });
+
+  it('reloads with a grounded fresh supply once, and accepts a later authoritative replenishment', () => {
+    const f = cannonFixture();
+    f.execute();
+    f.context.turn.actions[0].text = 'Reload the cannon with the spare powder charge and chain shot.';
+    const reload = () =>
+      f.plan(
+        {
+          operation: 'reload',
+          reloadSourceId: 'journal:fact:Spare shot',
+          reloadEvidence: f.context.journal[1].detail,
+        },
+        'interact',
+      );
+    const first = f.execute(reload());
+    expect(first.rolls).toHaveLength(0);
+    expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(true);
+    expect(first.events).toContainEqual(
+      expect.objectContaining({ status: 'success', fact: expect.stringContaining('ammunition is consumed') }),
+    );
+    f.context.turn.actions[0].text = 'Fire the cannon at the harpooner.';
+    f.execute();
+    f.context.turn.actions[0].text = 'Reload the cannon.';
+    expect(f.execute(reload()).events).toContainEqual(
+      expect.objectContaining({ status: 'blocked', fact: expect.stringContaining('no unspent ammunition') }),
+    );
+    f.context.journal[1].detail =
+      'A newly delivered powder charge and fresh chain shot are available beside the cannon.';
+    expect(f.execute(reload()).events).toContainEqual(
+      expect.objectContaining({ status: 'success', fact: expect.stringContaining('reloads') }),
+    );
+    expect(f.context.scene.environment!.spentResources).toHaveLength(3);
+  });
+
+  it('allows only one use of a shared loaded source in initiative order', () => {
+    const f = cannonFixture();
+    f.context.turn.actions.push({
+      memberId: f.context.members[1].id,
+      text: 'Fire the cannon too.',
+      passed: false,
+    });
+    const input = normalizeCombatInput(f.context, {
+      actions: f.context.members.map((member) => ({
+        memberId: member.id,
+        main: 'creative',
+        effect: 'damage',
+        targetId: 'enemy-0',
+        stat: 'INT',
+        environment: f.profile,
+      })),
+    });
+    const result = f.execute(input);
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(23);
+    expect(result.events).toContainEqual(
+      expect.objectContaining({ status: 'blocked', fact: expect.stringContaining('needs reloading') }),
+    );
+  });
+
+  it('does not turn a peaceful interaction or selected ability into environmental damage', () => {
+    const f = cannonFixture('I inspect the mounted cannon.');
+    expect(f.plan().actions[0]).toMatchObject({ main: 'interact', targetId: null });
+    expect(f.plan().actions[0].environment).toBeUndefined();
+    f.context.turn.actions[0].text = 'Use Focused strike on the harpooner.';
+    f.context.turn.actions[0].abilityName = 'Focused strike';
+    expect(f.plan().actions[0]).toMatchObject({ main: 'ability', abilityName: 'Focused strike' });
+    expect(f.plan().actions[0].environment).toBeUndefined();
+  });
+
+  it('exposes stable public fact references without changing the context', () => {
+    const f = cannonFixture();
+    const before = structuredClone(f.context);
+    expect(environmentalFacts(f.context)['journal:fact:Prepared cannon']).toBe(f.context.journal[0].detail);
+    expect(f.context).toEqual(before);
+  });
 });

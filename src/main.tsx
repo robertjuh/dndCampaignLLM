@@ -1,4 +1,4 @@
-import React, { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import React, { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowLeft,
@@ -42,6 +42,7 @@ import {
   type Member,
   type Action,
   type Roll,
+  type Turn,
   type Snapshot,
   type CharacterState,
   levelUpChoices,
@@ -58,7 +59,14 @@ import {
   canInteract,
 } from '../shared/rules';
 import { ailments, conditionDescription, conditionDuration } from '../shared/ailments';
-import { Abilities, CharacterSheet, EquipmentChoices, ItemDetails, slotLabels } from './CharacterSheet';
+import {
+  Abilities,
+  CharacterSheet,
+  EquipmentChoices,
+  ItemDetails,
+  ItemIcon,
+  slotLabels,
+} from './CharacterSheet';
 import { CharacterEditor } from './CharacterEditor';
 import { ModelSelect } from './ModelSelect';
 import { useNarration } from './useNarration';
@@ -1156,6 +1164,7 @@ function ItemInspection({ item }: { item: Item }) {
   return (
     <details className="item-inspection">
       <summary>
+        <ItemIcon kind={item.kind} />
         {item.name} <small>({item.kind})</small>
       </summary>
       <ItemDetails item={item} />
@@ -1289,7 +1298,7 @@ function MemberCard({
             </p>
           ))}
           <h4>Abilities</h4>
-          <Abilities character={member.character} />
+          <Abilities character={member.character} state={member.state} />
           <h4>Equipment</h4>
           <ul>
             {slots.map((slot) => (
@@ -1330,7 +1339,7 @@ function MemberCard({
   );
 }
 
-function WorldStatus({ snapshot: s }: { snapshot: Snapshot }) {
+function WorldStatus({ snapshot: s, onTarget }: { snapshot: Snapshot; onTarget?: (name: string) => void }) {
   const encounter = s.scene.encounter;
   return (
     <div className="world-status">
@@ -1368,7 +1377,20 @@ function WorldStatus({ snapshot: s }: { snapshot: Snapshot }) {
           </div>
           <div className="enemy-list">
             {encounter.enemies.map((e) => (
-              <article key={e.id}>
+              <article
+                key={e.id}
+                role={onTarget ? 'button' : undefined}
+                tabIndex={onTarget && e.hp > 0 && !e.withdrawn ? 0 : undefined}
+                aria-label={onTarget ? `Add ${e.name} to your action` : undefined}
+                aria-disabled={onTarget && (e.hp === 0 || !!e.withdrawn)}
+                onClick={() => e.hp > 0 && !e.withdrawn && onTarget?.(e.name)}
+                onKeyDown={(event) => {
+                  if (onTarget && e.hp > 0 && !e.withdrawn && ['Enter', ' '].includes(event.key)) {
+                    event.preventDefault();
+                    onTarget(e.name);
+                  }
+                }}
+              >
                 <span className="eyebrow">{e.tier}</span>
                 <b>{e.name}</b>
                 <p>{e.description}</p>
@@ -1723,6 +1745,32 @@ function RollReceipt({ roll, members, action }: { roll: Roll; members: Member[];
   );
 }
 
+function TurnSummary({ turn }: { turn: Turn }) {
+  if (!turn.result) return null;
+  const [situation, ...appendices] = turn.result.summary.split(
+    /\n\n(?=(?:XP-beloningen|XP rewards|Uitrustingswijzigingen|Equipment changes):\n)/,
+  );
+  const bookkeeping =
+    turn.resolution?.events.filter((event) => 'presentation' in event && event.presentation === 'log') ?? [];
+  return (
+    <div className="recap">
+      <b>The situation</b>
+      <p>{situation}</p>
+      {(bookkeeping.length > 0 || appendices.length > 0) && (
+        <details className="turn-mechanics">
+          <summary>Mechanics & rewards</summary>
+          {bookkeeping.map((event) => (
+            <p key={event.id}>{event.fact}</p>
+          ))}
+          {appendices.map((text, index) => (
+            <p key={index}>{text}</p>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
 function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const [s, setS] = useState<Snapshot | null>(null);
   const [error, setError] = useState('');
@@ -1730,6 +1778,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const [tab, setTab] = useState('story');
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [action, setAction] = useState('');
+  const actionInput = useRef<HTMLTextAreaElement>(null);
   const [abilityName, setAbilityName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1805,6 +1854,35 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const viewedTurn = s.history[viewedIndex];
   const visibleHistory = viewedTurn ? [viewedTurn] : [];
   const viewingCurrent = viewedIndex === s.history.length - 1;
+  const canTarget =
+    viewingCurrent &&
+    !screen &&
+    canAct &&
+    !mine &&
+    !busy &&
+    !!s.scene.encounter &&
+    !s.scene.encounter.victory &&
+    !s.scene.encounter.escaped;
+  function insertTarget(name: string) {
+    if (!canTarget) return;
+    const cursor = actionInput.current?.selectionStart ?? action.length;
+    // Insert without deleting the player's selection or changing their submitted intent.
+    const before = action.slice(0, cursor);
+    const after = action.slice(cursor);
+    const inserted = action.trim()
+      ? `${before && !/\s$/.test(before) ? ' ' : ''}${name}${after && !/^\s/.test(after) ? ' ' : ''}`
+      : s!.config.language === 'Nederlands'
+        ? `Ik val ${name} aan.`
+        : `I attack ${name}.`;
+    const next = action.trim() ? before + inserted + after : inserted;
+    if (next.length > 2000) return;
+    setAction(next);
+    requestAnimationFrame(() => {
+      actionInput.current?.focus();
+      const position = action.trim() ? cursor + inserted.length : inserted.length;
+      actionInput.current?.setSelectionRange(position, position);
+    });
+  }
   const submitted = turn?.actions.length ?? 0;
   const expected = turn?.roster.length ?? 0;
   const host = s.isHost && !screen;
@@ -1871,6 +1949,12 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
         </div>
       </div>
       <ErrorBox error={error} />
+      {turn?.phase === 'failed' && !viewingCurrent && (
+        <div role="alert" className="button-row">
+          <span>The current turn is on hold. Your actions and dice are saved.</span>
+          <Button onClick={() => setSelectedTurnId(null)}>View recovery controls</Button>
+        </div>
+      )}
       {screen && (
         <section className="form-panel">
           <b>Shared screen · viewing only</b>
@@ -2117,7 +2201,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
             </div>
           ) : (
             <>
-              <WorldStatus snapshot={s} />
+              <WorldStatus snapshot={s} onTarget={canTarget ? insertTarget : undefined} />
               {s.status === 'lobby' && (
                 <div className="lobby-scene">
                   <div className="lobby-art">
@@ -2208,6 +2292,14 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       ))}
                     </div>
                   )}
+                  {!!t.diagnostics?.length && (
+                    <div className="gm-diagnostics">
+                      <p>The GM recovered this turn. Debugging details:</p>
+                      {t.diagnostics.map((message) => (
+                        <ErrorBox key={message} error={message} />
+                      ))}
+                    </div>
+                  )}
                   <div className="narrator">
                     <span className="gm-avatar">
                       <Sparkles size={17} />
@@ -2236,14 +2328,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       ))}
                   </div>
                   <TurnImagePrompt config={s.config} turn={t} />
-                  {t.result && (
-                    <>
-                      <div className="recap">
-                        <b>The situation</b>
-                        <p>{t.result?.summary}</p>
-                      </div>
-                    </>
-                  )}
+                  <TurnSummary turn={t} />
                 </article>
               ))}
               {viewingCurrent && turn && (
@@ -2297,20 +2382,17 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   {['queued', 'resolving'].includes(turn.phase) && (
                     <div className="thinking">
                       <LoaderCircle className="spin" size={22} />
-                      <span>The game master is weaving your actions into the story…</span>
+                      <span>
+                        {turn.automaticRetry
+                          ? 'The GM timed out. Resuming your saved turn from checkpoints…'
+                          : 'The game master is weaving your actions into the story…'}
+                      </span>
                     </div>
                   )}
                   {turn.phase === 'failed' && (
                     <div className="failed-turn">
                       <ErrorBox error={turn.error ?? 'The turn could not finish.'} />
-                      {turn.rolls.map((r) => (
-                        <RollReceipt
-                          key={r.id}
-                          roll={r}
-                          members={s.members}
-                          action={turn.actions.find((a) => a.memberId === r.memberId)}
-                        />
-                      ))}
+                      <p>Your actions, dice and completed steps are saved.</p>
                       {host && (
                         <div className="button-row">
                           <Button disabled={busy} onClick={() => command('retry', {})}>
@@ -2323,6 +2405,22 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                           </a>
                         </div>
                       )}
+                      {!host && (
+                        <p>
+                          {s.leaderName ?? 'The campaign leader'} can resume this turn from the leader view.{' '}
+                          <a className="text-link" href={`/campaign/${id}`}>
+                            Open player / leader controls
+                          </a>
+                        </p>
+                      )}
+                      {turn.rolls.map((r) => (
+                        <RollReceipt
+                          key={r.id}
+                          roll={r}
+                          members={s.members}
+                          action={turn.actions.find((a) => a.memberId === r.memberId)}
+                        />
+                      ))}
                     </div>
                   )}
                 </div>
@@ -2383,6 +2481,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       </p>
                     )}
                     <textarea
+                      ref={actionInput}
                       id="action-input"
                       aria-label="Your action"
                       rows={3}

@@ -17,7 +17,7 @@ import {
   isDead,
   canInteract,
 } from '../shared/rules';
-import { ItemDetails, slotLabels } from './CharacterSheet';
+import { ItemDetails, ItemIcon, slotLabels } from './CharacterSheet';
 
 type Manage = (body: unknown) => Promise<Snapshot | undefined>;
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value}`;
@@ -53,12 +53,14 @@ function EquipmentItem({
         ? 'head'
         : item.kind === 'boots'
           ? 'boots'
-          : 'right';
+          : item.kind === 'relic'
+            ? 'relic'
+            : 'right';
   const slot =
     hand && destinations.includes(hand)
       ? hand
       : (destinations.find((slot) => !state.equipment[slot]) ?? destinations[0] ?? fallback);
-  const equippable = item.kind !== 'consumable';
+  const equippable = item.kind !== 'consumable' && item.kind !== 'tool';
   const healingTargets = snapshot.members.filter(
     (ally) => ally.active && !isDead(ally.state) && canInteract(snapshot.scene, state, ally.state),
   );
@@ -124,7 +126,9 @@ function EquipmentItem({
           (item) => item?.kind === 'weapon',
         ) ?? naturalWeapon(character);
       const damage = (weapon: Item, current: Member['state']) =>
-        `${weapon.damage} ${signed(scaling(current, weapon))}`;
+        weapon.id === 'natural'
+          ? `${weapon.damage} ${signed(scaling(current, weapon))}`
+          : `${naturalWeapon(character).damage} + ${weapon.damage} ${signed(2 * scaling(current, weapon))}`;
       const attack = (weapon: Item, current: Member['state']) =>
         signed(
           scaling(current, weapon) +
@@ -148,6 +152,7 @@ function EquipmentItem({
     <article className="gear-item" aria-label={item.name}>
       <div className="gear-item-info">
         <b>
+          <ItemIcon kind={item.kind} />
           {item.name} {item.quantity > 1 && <span>×{item.quantity}</span>}
         </b>
         <ItemDetails item={item} compact />
@@ -196,6 +201,7 @@ function EquipmentItem({
                       )
                     }
                   />
+                  <ItemIcon kind={owned.kind} />
                   {owned.name} ×{owned.quantity}
                 </label>
               ))}
@@ -312,6 +318,8 @@ export function EquipmentPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const combatActive =
+    !!snapshot.scene.encounter && !snapshot.scene.encounter.victory && !snapshot.scene.encounter.escaped;
   const panelId = useId();
   const { character, state } = member;
   const manage: Manage = async (body) => {
@@ -349,7 +357,7 @@ export function EquipmentPanel({
           {feedback}
         </p>
       )}
-      {lockReason && (open || snapshot.scene.loot.length > 0) && (
+      {lockReason && (open || (!combatActive && snapshot.scene.loot.length > 0)) && (
         <p className="gear-lock" role="status">
           {lockReason}
         </p>
@@ -362,6 +370,7 @@ export function EquipmentPanel({
               .filter((slot) => !(slot === 'left' && state.equipment.left?.hands === 2))
               .map((slot) => {
                 const item = state.equipment[slot];
+                const bothHands = (slot === 'left' || slot === 'right') && item?.hands === 2;
                 let stowReason = '';
                 if (item) {
                   try {
@@ -375,13 +384,16 @@ export function EquipmentPanel({
                 return (
                   <article
                     key={slot}
-                    className={`equipment-slot ${item?.hands === 2 ? 'both-hands' : ''}`}
-                    aria-label={item?.hands === 2 ? 'Both hands' : slotLabels[slot]}
+                    className={`equipment-slot ${bothHands ? 'both-hands' : ''}`}
+                    aria-label={bothHands ? 'Both hands' : slotLabels[slot]}
                   >
-                    <span className="eyebrow">{item?.hands === 2 ? 'Both hands' : slotLabels[slot]}</span>
+                    <span className="eyebrow">{bothHands ? 'Both hands' : slotLabels[slot]}</span>
                     {item ? (
                       <>
-                        <b>{item.name}</b>
+                        <b>
+                          <ItemIcon kind={item.kind} />
+                          {item.name}
+                        </b>
                         <ItemDetails item={item} compact />
                         {stowReason && <p className="gear-reason">{stowReason}</p>}
                         <button
@@ -431,7 +443,7 @@ export function EquipmentPanel({
           )}
         </section>
       )}
-      {snapshot.scene.loot.length > 0 && (
+      {!combatActive && snapshot.scene.loot.length > 0 && (
         <section className="ground-loot" aria-label="Nearby loot">
           <div className="backpack-heading">
             <h3>Loot at the scene</h3>
@@ -449,13 +461,7 @@ export function EquipmentPanel({
               item={item}
               member={member}
               snapshot={snapshot}
-              lockReason={
-                snapshot.scene.encounter &&
-                !snapshot.scene.encounter.victory &&
-                !snapshot.scene.encounter.escaped
-                  ? 'Scene loot is unavailable until combat ends.'
-                  : lockReason
-              }
+              lockReason={lockReason}
               healingLockReason={healingLockReason}
               manage={manage}
             />

@@ -48,7 +48,47 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
       );
     const generating =
       body.instructions.startsWith('Generate') || body.instructions.startsWith('Name and describe');
-    const context = JSON.parse(body.input[0].content);
+    const first = JSON.parse(body.input[0].content);
+    if (first.candidate)
+      return completed([
+        {
+          type: 'message',
+          content: [{ type: 'output_text', text: JSON.stringify({ approved: true, feedback: '' }) }],
+        },
+      ]);
+    if (first.resolution)
+      return completed([
+        {
+          type: 'message',
+          content: [
+            {
+              type: 'output_text',
+              text: JSON.stringify({
+                version: 1,
+                turnId: first.resolution.turnId,
+                eventNarrations: Object.fromEntries(
+                  first.resolution.events.map((event: { id: string; fact: string }) => [
+                    event.id,
+                    event.fact,
+                  ]),
+                ),
+                closing: '',
+                summary: 'A new journey.',
+              }),
+            },
+          ],
+        },
+      ]);
+    const context = generating
+      ? first
+      : [...body.input]
+          .reverse()
+          .filter(
+            (item: { role?: string; content?: string }) =>
+              item.role === 'user' && item.content?.startsWith('{'),
+          )
+          .map((item: { content: string }) => JSON.parse(item.content))
+          .find((data: { task?: string }) => data.task?.startsWith('Adjudicate'));
     if (!generating && context.turn.number > 0) {
       if (!body.input.some((item: { type?: string }) => item.type === 'function_call_output')) {
         return completed(
@@ -97,12 +137,12 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
             })),
           }
       : {
-          narration: 'The party proceeds.',
-          summary: 'A new journey.',
-          choices: [],
-          changes: [],
-          journal: [],
-          xp: context.turn.number > 0 ? 20 : 0,
+          ...context.schemaExample,
+          rewards: {
+            xp: context.turn.number > 0 ? 20 : 0,
+            gold: 0,
+            reason: 'The gate inscriptions reveal a new route.',
+          },
         };
     return completed([{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(result) }] }]);
   });
@@ -171,7 +211,7 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     game.start(campaign.id, owner);
     await game.idle();
     const turn = game.snapshot(campaign.id, owner).turn!;
-    expect(turn.phase).toBe('collecting');
+    expect(turn.phase, turn.error ?? undefined).toBe('collecting');
     const beforeActions = fetcher.mock.calls.length;
     game.submit(campaign.id, owner, turn.id, 'Examine the gate mechanism.', false);
     await game.idle();

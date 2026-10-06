@@ -21,6 +21,7 @@ import {
   damage,
   defense,
   equip,
+  unequip,
   grantXp,
   healWithItem,
   heal,
@@ -51,6 +52,7 @@ import {
   matchingCures,
 } from '../shared/rules';
 import { localDice } from '../server/random';
+import { conditionDuration } from '../shared/ailments';
 
 describe('atomic loot pickup and equipment swaps', () => {
   it('equips scene loot directly into an empty slot with a full backpack', () => {
@@ -376,10 +378,9 @@ describe('customized roguelike mechanics', () => {
     ['stacked regeneration', { regeneration: 1 }, { regeneration: 1 }, 'cannot stack'],
     ['stacked positive HP', { hp: 4 }, { hp: 1 }, 'cannot stack'],
     ['stacked negative HP', { hp: -4 }, { hp: -1 }, 'cannot stack'],
-    ['incompatible healing', { healing: 'repair' }, { healing: 'necrotic' }, 'compatible healing mode'],
     [
       'fully blocked anatomy',
-      { blocked: ['left', 'right', 'body', 'head', 'boots'] },
+      { blocked: ['left', 'right', 'body', 'head', 'boots', 'relic'] },
       {},
       'at least one equipment slot',
     ],
@@ -421,6 +422,37 @@ describe('customized roguelike mechanics', () => {
     expect(m.state.inventory.filter((i) => i.id === 'great')).toHaveLength(1);
     expect(defense(m.character, m.state)).toBe(11);
   });
+  it('equips and swaps relics only in their own slot, independently of occupied or blocked hands', () => {
+    const m = member();
+    const great = { ...baseItem('great', 'Great blade', 'weapon'), hands: 2 as const };
+    addItem(m.character, m.state, great);
+    equip(m.character, m.state, great.id, 'right');
+    const hands = structuredClone({ left: m.state.equipment.left, right: m.state.equipment.right });
+    const relic = { ...baseItem('oath', 'Oath', 'relic'), scaling: ['INT' as const], checkBonus: 1 };
+    addItem(m.character, m.state, relic);
+    for (const slot of ['left', 'right', 'body', 'head', 'boots'] as const) {
+      const before = structuredClone(m.state);
+      expect(() => equip(m.character, m.state, relic.id, slot)).toThrow('does not fit');
+      expect(m.state).toEqual(before);
+    }
+    m.character.traits = [{ ...blankTrait(), blocked: ['left', 'right'] }];
+    expect(usableSlots(m.character, m.state.stats, { ...relic, hands: 2 })).toEqual(['relic']);
+    equip(m.character, m.state, relic.id, 'relic');
+    expect(equipmentBonus(m.state, 'INT', 'checkBonus')).toBe(1);
+    expect(equipmentBonus(m.state, 'STR', 'checkBonus')).toBe(0);
+    const scene = initialScene('Test');
+    scene.loot.push({ ...relic, id: 'new-oath', checkBonus: 2, hands: 2, quantity: 1 });
+    takeItem(m.character, m.state, scene, 'new-oath', 'relic');
+    expect(m.state.inventory.find((item) => item.id === relic.id)?.quantity).toBe(1);
+    expect(m.state.equipment.relic?.id).toBe('new-oath');
+    expect(equipmentBonus(m.state, 'INT', 'checkBonus')).toBe(2);
+    expect({ left: m.state.equipment.left, right: m.state.equipment.right }).toEqual(hands);
+    unequip(m.character, m.state, 'relic');
+    expect(equipmentBonus(m.state, 'INT', 'checkBonus')).toBe(0);
+    m.character.traits[0].blocked.push('relic');
+    expect(usableSlots(m.character, m.state.stats, relic)).toEqual([]);
+    expect(() => equip(m.character, m.state, relic.id, 'relic')).toThrow('anatomy');
+  });
   it('averages hybrid modifiers and grants a reward choice and HP on every level', () => {
     const m = member();
     m.state.stats = { ...m.state.stats, STR: 9, DEX: 4, INT: 5 };
@@ -447,13 +479,129 @@ describe('customized roguelike mechanics', () => {
     m.state.equipment.left = m.state.equipment.right;
     m.state.equipment.right = baseItem('shield', 'Shield', 'shield');
     const e = encounter([m], { defense: 30, hp: 5, tier: 'boss' });
-    const dice = [20, 3, 3];
+    const dice = [20, 3, 3, 2, 2];
     runCombat([m], e, input(m), () => dice.shift()!);
     expect(e.victory).toBe(true);
     expect(m.state.level).toBe(2);
     expect(m.state.pendingLevelUps).toBe(1);
     expect(dice).toEqual([]);
   });
+  it.each([
+    {
+      name: 'INT pistol ignores stronger STR',
+      natural: false,
+      score: 6,
+      critical: false,
+      hybrid: false,
+      face: 3,
+      damage: 6,
+      bonus: 0,
+    },
+    {
+      name: 'INT modifier applies twice',
+      natural: false,
+      score: 9,
+      critical: false,
+      hybrid: false,
+      face: 3,
+      damage: 10,
+      bonus: 2,
+    },
+    {
+      name: 'negative modifier applies twice',
+      natural: false,
+      score: 1,
+      critical: false,
+      hybrid: false,
+      face: 3,
+      damage: 2,
+      bonus: -2,
+    },
+    {
+      name: 'minimum applies after the combined sum',
+      natural: false,
+      score: 1,
+      critical: false,
+      hybrid: false,
+      face: 1,
+      damage: 1,
+      bonus: -2,
+    },
+    {
+      name: 'natural trait adds d6',
+      natural: true,
+      score: 9,
+      critical: false,
+      hybrid: false,
+      face: 3,
+      damage: 10,
+      bonus: 2,
+    },
+    {
+      name: 'critical doubles both dice without doubling modifiers',
+      natural: false,
+      score: 9,
+      critical: true,
+      hybrid: false,
+      face: 3,
+      damage: 16,
+      bonus: 2,
+    },
+    {
+      name: 'critical doubles natural trait dice too',
+      natural: true,
+      score: 9,
+      critical: true,
+      hybrid: false,
+      face: 3,
+      damage: 16,
+      bonus: 2,
+    },
+    {
+      name: 'hybrid modifier is rounded before doubling',
+      natural: false,
+      score: 6,
+      critical: false,
+      hybrid: true,
+      face: 3,
+      damage: 8,
+      bonus: 1,
+    },
+  ])(
+    'adds innate and weapon dice: $name',
+    ({ natural, score, critical, hybrid, face, damage: amount, bonus }) => {
+      const m = member();
+      m.character.traits = [{ ...blankTrait('Natural weapons'), natural }];
+      m.character.stats.STR = m.state.stats.STR = 11;
+      m.state.stats.INT = score;
+      m.state.equipment.right = {
+        ...baseItem('pistol', 'Pistol', 'weapon'),
+        scaling: hybrid ? ['STR', 'INT'] : ['INT'],
+        damage: '1d6',
+      };
+      m.state.equipment.left = {
+        ...baseItem('focus', 'Focus', 'focus'),
+        scaling: ['INT'],
+        attackBonus: 1,
+      };
+      const e = encounter([m], { hp: 100 });
+      e.initiative = e.initiative.filter((entry) => entry.id === m.id);
+      const dice = vi.fn((sides: number, _label: string, _actor: string, _stat: string, _mod?: number) =>
+        sides === 20 ? (critical ? 20 : 15) : face,
+      );
+      runCombat([m], e, input(m), dice);
+      expect(e.enemies[0].hp).toBe(100 - amount);
+      expect(dice.mock.calls[0][4]).toBe(bonus + 1); // Accuracy adds scaling once and the focus.
+      expect(dice.mock.calls.map(([sides]) => sides)).toEqual([
+        20,
+        6,
+        ...(critical ? [6] : []),
+        natural ? 6 : 4,
+        ...(critical ? [natural ? 6 : 4] : []),
+      ]);
+      expect(dice.mock.calls.every(([, , , stat]) => stat === (hybrid ? 'STR' : 'INT'))).toBe(true);
+    },
+  );
   it('uses either explicitly chosen weapon and does not spend combat ability uses for ordinary attacks', () => {
     for (const hand of ['left', 'right'] as const) {
       const m = member();
@@ -465,9 +613,9 @@ describe('customized roguelike mechanics', () => {
       e.initiative = e.initiative.filter((entry) => entry.id === m.id);
       const dice = vi.fn((sides: number) => (sides === 20 ? 15 : 3));
       const logs = runCombat([m], e, input(m, { weaponSlot: hand }), dice);
-      expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, hand === 'left' ? 8 : 6]);
+      expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, hand === 'left' ? 8 : 6, 4]);
       expect(logs.some((log) => log.includes(m.state.equipment[hand]!.name))).toBe(true);
-      expect(e.enemies[0].hp).toBe(27);
+      expect(e.enemies[0].hp).toBe(24);
       expect(m.state.abilityUses?.[ability.name]).toBe(1);
     }
   });
@@ -480,8 +628,8 @@ describe('customized roguelike mechanics', () => {
       e.initiative = e.initiative.filter((entry) => entry.id === m.id);
       const dice = vi.fn((sides: number) => (sides === 20 ? 15 : 3));
       runCombat([m], e, input(m, { weaponSlot: 'right' }), dice);
-      expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, 6]);
-      expect(e.enemies[0].hp).toBe(27);
+      expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, 6, 4]);
+      expect(e.enemies[0].hp).toBe(24);
     }
   });
   it('uses unarmed or innate strikes when no equipped weapon is available and preserves explicit natural attacks', () => {
@@ -522,7 +670,7 @@ describe('customized roguelike mechanics', () => {
     );
     expect(m.state.equipment.left).toBeNull();
     expect(m.state.inventory.some((item) => item.id === weapon.id)).toBe(true);
-    expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, 6]);
+    expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, 6, 4]);
     expect(m.state.abilityUses).toEqual({});
   });
   it('resolves a natural 1 as failure despite a high attack bonus', () => {
@@ -554,9 +702,9 @@ describe('customized roguelike mechanics', () => {
     const left = { ...right, id: 'l', name: 'Left blade' };
     m.state.equipment = { ...m.state.equipment, right, left };
     const e = encounter([m]);
-    const dice = [12, 2, 12, 2, 2];
+    const dice = [12, 2, 2, 12, 2, 2, 2];
     runCombat([m], e, input(m, { minor: 'offhand' }), () => dice.shift()!);
-    expect(e.enemies[0].hp).toBe(24); // 2+2 main; 2 off-hand
+    expect(e.enemies[0].hp).toBe(18); // (2+2 dice + 2*2 DEX) main; (2+2 dice) off-hand; 2 enemy damage.
   });
   it('uses the other light hand for an off-hand attack and skips heavy or shared two-handed weapons', () => {
     const m = member();
@@ -567,7 +715,7 @@ describe('customized roguelike mechanics', () => {
     e.initiative = e.initiative.filter((entry) => entry.id === m.id);
     const dice = vi.fn((sides: number) => (sides === 20 ? 15 : 3));
     runCombat([m], e, input(m, { weaponSlot: 'left', minor: 'offhand' }), dice);
-    expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, 6, 20, 8]);
+    expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, 6, 4, 20, 8, 4]);
     dice.mockClear();
     m.state.equipment.left!.light = false;
     expect(runCombat([m], e, input(m, { main: 'defend', minor: 'offhand' }), dice)).toContain(
@@ -604,7 +752,7 @@ describe('customized roguelike mechanics', () => {
       ).toBe(true);
       expect(logs.some((log) => log.includes(`${m.character.name} hits`))).toBe(true);
       expect(logs.some((log) => log.includes(`hits ${m.character.name}`))).toBe(true);
-      expect(e.enemies[0].hp).toBe(27);
+      expect(e.enemies[0].hp).toBe(24);
       expect(m.state.equipment).toEqual(originalEquipment);
       expect(m.state.inventory).toEqual(originalInventory);
     }
@@ -622,7 +770,7 @@ describe('customized roguelike mechanics', () => {
     ).toThrow(error);
   });
   it('rolls loot rarity but preserves instance-owned item names and kinds', () => {
-    const item = randomLoot('new-id', 2, () => 100, { ...loot, scaling: ['STR'] });
+    const item = randomLoot('new-id', 2, (sides) => sides, { ...loot, scaling: ['STR'] });
     expect(item).toMatchObject({ name: 'Custom item', rarity: 'Legendary', damage: '2d8' });
   });
   it('applies enemy loot counts, rarity boundaries and an independent healing-item roll', () => {
@@ -644,7 +792,7 @@ describe('customized roguelike mechanics', () => {
     ];
     for (const [tier, draws, expected, healing] of cases) {
       const remaining = [...draws];
-      const roll = vi.fn(() => remaining.shift()!);
+      const roll = vi.fn((sides: number) => (sides === 100 ? remaining.shift()! : 1));
       const items = rollEnemyLoot(
         'enemy',
         2,
@@ -666,7 +814,12 @@ describe('customized roguelike mechanics', () => {
       expect(new Set(items.map((item) => item.id)).size).toBe(items.length);
       expect(items[0].name).toBe(loot.name);
       expect(remaining).toEqual([]);
-      expect(roll.mock.calls).toHaveLength(draws.length);
+      expect(roll.mock.calls.filter(([sides]) => sides === 100)).toHaveLength(draws.length);
+      expect(
+        items
+          .filter((item) => ['Rare', 'Legendary', 'Cursed'].includes(item.rarity))
+          .every((item) => item.onHit || item.immunities?.length),
+      ).toBe(true);
     }
     const fallback = rollEnemyLoot(
       'fallback',
@@ -797,12 +950,24 @@ it('rolls five independent equipment types, allows repeated types, and selects e
   expect(state.inventory.find((item) => item.id === ids[1])).toBeDefined();
   expect(() => chooseStartingEquipment(corporeal, state, ids)).toThrow('already chosen');
   const bootsOnly = templateCharacter();
-  bootsOnly.traits = [{ ...blankTrait(), blocked: ['left', 'right', 'body', 'head'] }];
+  bootsOnly.traits = [{ ...blankTrait(), blocked: ['left', 'right', 'body', 'head', 'relic'] }];
   expect(
     rollStartingEquipment(bootsOnly, () => {
       throw new Error('Only one choice; no die needed');
     }).every((item) => item.kind === 'boots'),
   ).toBe(true);
+});
+
+it('equips one starting relic and stows another when both selected pieces share the relic slot', () => {
+  const character = templateCharacter();
+  character.equipmentOptions = rollStartingEquipment(character, (sides) => sides);
+  expect(character.equipmentOptions.every((item) => item.kind === 'relic')).toBe(true);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  const state = initialState(character, 'test');
+  expect(state.equipment.relic?.id).toBe('test-starter-0');
+  expect(state.equipment.left).toBeNull();
+  expect(state.equipment.right).toBeNull();
+  expect(state.inventory.find((item) => item.id === 'test-starter-1')?.quantity).toBe(1);
 });
 
 it('preserves generated abilities and equips saved picks when a new campaign begins', () => {
@@ -827,10 +992,10 @@ it('applies focus bonuses only to matching equipped attacks and deduplicates sha
   expect(e.enemies[0].hp).toBe(30); // A backpack bonus does not apply.
   equip(m.character, m.state, focus.id, 'left');
   runCombat([m], e, input(m), (sides) => (sides === 20 ? 11 : 3));
-  expect(e.enemies[0].hp).toBe(27);
+  expect(e.enemies[0].hp).toBe(24);
   m.state.equipment.left = { ...focus, scaling: ['INT'] };
   runCombat([m], e, input(m), (sides) => (sides === 20 ? 11 : 3));
-  expect(e.enemies[0].hp).toBe(27);
+  expect(e.enemies[0].hp).toBe(24);
   m.state.equipment.left = m.state.equipment.right = focus;
   expect(equipmentBonus(m.state, 'STR', 'attackBonus')).toBe(1);
 });
@@ -884,18 +1049,17 @@ it('spends a strike use on a miss, preserves it while stunned, and doubles abili
   }
 });
 
-it('heals a compatible living ally and preserves mend uses for incompatible, unavailable, or full-health targets', () => {
+it('heals any living ally and preserves mend uses for unavailable or full-health targets', () => {
   const caster = member('Healer');
   const ally = member('Construct');
   caster.character.abilities[0] = {
     ...caster.character.abilities[0],
     effect: 'mend',
     stat: 'INT',
-    healing: 'repair',
     level: 2,
   };
   caster.state.stats.INT = 7;
-  ally.character.traits = [{ ...blankTrait('Mechanical'), healing: 'repair' }];
+  ally.character.traits = [blankTrait('Mechanical')];
   ally.state.hp = 10;
   const e = encounter([caster, ally]);
   e.initiative = e.initiative.filter((entry) => entry.id === caster.id);
@@ -907,15 +1071,9 @@ it('heals a compatible living ally and preserves mend uses for incompatible, una
   runCombat([caster, ally], e, action, () => 4);
   expect(ally.state.hp).toBe(17); // d6=4, modifier=1, upgrade=2.
   resetAbilities(caster.character, caster.state, 'combat');
-  caster.character.abilities[0].healing = 'normal';
-  expect(runCombat([caster, ally], e, action, () => 4).some((log) => log.includes('incompatible'))).toBe(
-    true,
-  );
-  expect(caster.state.abilityUses?.[caster.character.abilities[0].name]).toBeUndefined();
   ally.state.hp = 0;
   expect(runCombat([caster, ally], e, action, () => 4).some((log) => log.includes('living ally'))).toBe(true);
   ally.state.hp = ally.state.maxHp;
-  caster.character.abilities[0].healing = 'repair';
   expect(runCombat([caster, ally], e, action, () => 4).some((log) => log.includes('full health'))).toBe(true);
   expect(caster.state.abilityUses?.[caster.character.abilities[0].name]).toBeUndefined();
 });
@@ -940,9 +1098,9 @@ it('guards an ally against exactly one enemy attack and assists their next attac
   caster.character.abilities[0].effect = 'assist';
   e.initiative = e.initiative.filter((entry) => entry.id !== 'adversary');
   action.actions.push(input(ally).actions[0]);
-  const dice = [1, 15, 3];
+  const dice = [1, 15, 3, 3];
   runCombat([caster, ally], e, action, () => dice.shift()!);
-  expect(e.enemies[0].hp).toBe(27);
+  expect(e.enemies[0].hp).toBe(24);
   expect(ally.state.hp).toBe(17); // Advantage avoids the natural-one backlash.
   expect(ally.state.abilityAssist).toBeUndefined();
   expect(dice).toEqual([]);
@@ -977,7 +1135,7 @@ it('gives every rolled focus and relic a usable bonus and scales loot power with
     ).toBe(true);
   }
   for (const kind of ['focus', 'relic'] as const) {
-    const item = randomLoot('rare', 1, () => 100, { ...loot, kind, scaling: [] });
+    const item = randomLoot('rare', 1, (sides) => sides, { ...loot, kind, scaling: [] });
     expect(item.scaling).toEqual(['INT']);
     expect(kind === 'focus' ? item.attackBonus : item.checkBonus).toBe(3);
   }
@@ -987,7 +1145,6 @@ it('wastes unusable minors and continues enemy damage and conditions without cha
   for (const scenario of [
     'missing-selection',
     'missing-equip-selection',
-    'incompatible-healing',
     'full-health',
     'wrong-slot',
     'full-backpack',
@@ -1000,7 +1157,6 @@ it('wastes unusable minors and continues enemy damage and conditions without cha
     if (scenario === 'missing-selection') request.actions[0].minorItemId = null;
     if (scenario === 'missing-equip-selection')
       request = input(hero, { minor: 'equip', minorItemId: 'unselected-item', minorSlot: null });
-    if (scenario === 'incompatible-healing') hero.character.traits[0].healing = 'repair';
     if (scenario === 'wrong-slot' || scenario === 'full-backpack') {
       const gear = { ...baseItem('great', 'Great blade', 'weapon'), hands: 2 as const };
       addItem(hero.character, hero.state, gear);
@@ -1025,23 +1181,22 @@ it('wastes unusable minors and continues enemy damage and conditions without cha
     );
     expect(hero.state.inventory).toEqual(inventory);
     expect(hero.state.equipment).toEqual(equipment);
-    expect(hero.state.hp).toBe(hp - 4);
+    expect(hero.state.hp).toBe(hp - (scenario === 'full-backpack' ? 2 : 4));
     expect(hero.state.conditionTurns.Burning).toBe(1);
     expect(hero.state.abilityUses).toEqual({});
-    expect(e.enemies[0].hp).toBe(28);
+    expect(e.enemies[0].hp).toBe(26);
     expect(e.round).toBe(2);
-    expect(dice).toHaveBeenCalledTimes(4);
+    expect(dice).toHaveBeenCalledTimes(scenario === 'full-backpack' ? 6 : 5);
   }
 });
 
 it('wastes unavailable support main actions and still resolves allies and enemies', () => {
-  for (const scenario of ['dead', 'missing', 'full-health', 'incompatible', 'guard', 'assist']) {
+  for (const scenario of ['dead', 'missing', 'full-health', 'guard', 'assist']) {
     const caster = member('Caster');
     const ally = member('Ally');
     const ability = caster.character.abilities[0];
     ability.effect = scenario === 'guard' || scenario === 'assist' ? scenario : 'mend';
     ally.state.hp = scenario === 'dead' ? 0 : scenario === 'full-health' ? ally.state.maxHp : 10;
-    if (scenario === 'incompatible') ally.character.traits[0].healing = 'repair';
     const e = encounter([caster, ally]);
     const request = input(caster, {
       main: 'ability',
@@ -1057,7 +1212,7 @@ it('wastes unavailable support main actions and still resolves allies and enemie
     expect(ally.state.abilityGuard).toBeUndefined();
     expect(ally.state.abilityAssist).toBeUndefined();
     expect(caster.state.hp).toBe(18);
-    expect(e.enemies[0].hp).toBe(scenario === 'dead' ? 30 : 28);
+    expect(e.enemies[0].hp).toBe(scenario === 'dead' ? 30 : 26);
     expect(e.round).toBe(2);
   }
 });
@@ -1110,10 +1265,10 @@ it('redirects normal attacks, saved strikes, and off-hand attacks after an earli
       'Second redirects their off-hand attack from Custom adversary to Surviving adversary because Custom adversary fell earlier this round.',
     );
     expect(logs.join(' ')).toContain(
-      `hits Surviving adversary with ${main === 'ability' ? ability.name : 'Left blade'} for ${main === 'ability' ? 7 : 2}`,
+      `hits Surviving adversary with ${main === 'ability' ? ability.name : 'Left blade'} for ${main === 'ability' ? 7 : 4}`,
     );
-    expect(logs.join(' ')).toContain('hits Surviving adversary with Right blade for 2');
-    expect(e.enemies.map((enemy) => enemy.hp)).toEqual([0, main === 'ability' ? 21 : 26]);
+    expect(logs.join(' ')).toContain('hits Surviving adversary with Right blade for 4');
+    expect(e.enemies.map((enemy) => enemy.hp)).toEqual([0, main === 'ability' ? 19 : 22]);
     expect(second.state.abilityUses).toEqual(main === 'ability' ? { [ability.name]: 1 } : {});
     expect(dice.mock.calls.map(([sides]) => sides).filter((sides) => sides === 8)).toHaveLength(
       main === 'ability' ? 2 : 1,
@@ -1142,7 +1297,7 @@ it('redirects an off-hand attack after its own main attack kills the target', ()
       }),
       (sides) => (sides === 20 ? 12 : 2),
     );
-    expect(e.enemies.map((enemy) => enemy.hp)).toEqual([0, 28]);
+    expect(e.enemies.map((enemy) => enemy.hp)).toEqual([0, 26]);
     expect(logs.join(' ')).toContain('redirects their off-hand attack');
     expect(hero.state.abilityUses).toEqual(main === 'ability' ? { [ability.name]: 1 } : {});
   }
@@ -1171,9 +1326,9 @@ it('prefers a valid backup, otherwise the first living fighting enemy, after a k
       const request = input(first, reason === 'withdraw' ? { main: 'creative', effect: 'influence' } : {});
       request.actions.push(input(second, { backupTargetId: 'backup' }).actions[0]);
       const logs = runCombat([first, second], e, request, (sides) => (sides === 20 ? 18 : 2));
-      expect(e.enemies.find((enemy) => enemy.id === 'default')!.hp).toBe(backup === 'living' ? 30 : 28);
+      expect(e.enemies.find((enemy) => enemy.id === 'default')!.hp).toBe(backup === 'living' ? 30 : 26);
       expect(e.enemies.find((enemy) => enemy.id === 'backup')!.hp).toBe(
-        backup === 'living' ? 28 : backup === 'dead' ? 0 : 30,
+        backup === 'living' ? 26 : backup === 'dead' ? 0 : 30,
       );
       expect(logs.join(' ')).toContain(
         `to ${backup === 'living' ? 'Backup survivor' : 'First survivor'} because Custom adversary ${reason === 'kill' ? 'fell' : 'withdrew'} earlier this round`,
@@ -1275,7 +1430,7 @@ it.each(['adversary', null])(
           `Second skips their ${main === 'ability' ? ability.name : 'attack'}: no enemies remain${main === 'ability' ? '; the use is preserved' : ''}.`,
         );
         expect(logs.join(' ')).not.toContain(`Second uses ${ability.name}; its encounter use is spent`);
-        expect(dice).toHaveBeenCalledTimes(2);
+        expect(dice).toHaveBeenCalledTimes(3);
         if (minor === 'heal') {
           expect(logs).toContain('Second uses a healing consumable.');
           expect(second.state.inventory.some((item) => item.id === itemId)).toBe(false);
@@ -1451,7 +1606,7 @@ it('logs enemies killed by ordinary attacks, creative actions, or their own back
     expect(logs.join(' ')).toContain(source === 'backlash' ? 'and dies' : 'killing Custom adversary');
     expect(e.enemies[0].hp).toBe(0);
     expect(e.victory).toBe(true);
-    expect(dice).toHaveBeenCalledTimes(source === 'backlash' ? 1 : 2);
+    expect(dice).toHaveBeenCalledTimes(source === 'backlash' ? 1 : source === 'attack' ? 3 : 2);
   }
 });
 
@@ -1612,19 +1767,16 @@ it('lets a healthy ally spend their entire turn using their own consumable on a 
   expect(healer.state.guarding).toBe(false);
 });
 
-it('preserves an ally healing consumable when the target is dead or incompatible', () => {
-  for (const incompatible of [false, true]) {
-    const healer = member('Healer');
-    const ally = member('Ally');
-    ally.state.downedThisEncounter = !incompatible;
-    damage(ally.state, ally.state.hp, 'An injury', !incompatible);
-    if (incompatible) ally.character.traits[0].healing = 'repair';
-    const before = structuredClone([healer.state, ally.state]);
-    expect(() => healWithItem(healer.character, healer.state, healer.state.inventory[0].id, ally)).toThrow(
-      incompatible ? 'incompatible' : 'dead',
-    );
-    expect([healer.state, ally.state]).toEqual(before);
-  }
+it('preserves an ally healing consumable when the target is dead', () => {
+  const healer = member('Healer');
+  const ally = member('Ally');
+  ally.state.downedThisEncounter = true;
+  damage(ally.state, ally.state.hp, 'An injury', true);
+  const before = structuredClone([healer.state, ally.state]);
+  expect(() => healWithItem(healer.character, healer.state, healer.state.inventory[0].id, ally)).toThrow(
+    'dead',
+  );
+  expect([healer.state, ally.state]).toEqual(before);
 });
 
 it('lets a saved mend ability help up a downed ally and spends the healer’s combat use', () => {
@@ -1650,8 +1802,8 @@ it('lets a saved mend ability help up a downed ally and spends the healer’s co
   );
 });
 
-it('preserves mend uses and rolls when the healer is downed or the target is dead or incompatible', () => {
-  for (const scenario of ['downed-healer', 'dead-target', 'incompatible']) {
+it('preserves mend uses and rolls when the healer is downed or the target is dead', () => {
+  for (const scenario of ['downed-healer', 'dead-target']) {
     const healer = member('Healer');
     const ally = member('Ally');
     const ability = healer.character.abilities[0];
@@ -1659,7 +1811,6 @@ it('preserves mend uses and rolls when the healer is downed or the target is dea
     ally.state.downedThisEncounter = scenario === 'dead-target';
     damage(ally.state, ally.state.hp, 'An injury', scenario === 'dead-target');
     if (scenario === 'downed-healer') damage(healer.state, healer.state.hp, 'An injury');
-    if (scenario === 'incompatible') ally.character.traits[0].healing = 'repair';
     const before = structuredClone([healer.state, ally.state]);
     const dice = vi.fn(() => 4);
     expect(() => mendWithAbility(healer.character, healer.state, ability.name, ally, dice)).toThrow();
@@ -1690,6 +1841,121 @@ it('keeps guard and assist unavailable on downed allies', () => {
     expect(ally.state.abilityAssist).toBeUndefined();
     expect(dice).not.toHaveBeenCalled();
   }
+});
+
+describe('shield blocking', () => {
+  function fixture() {
+    const hero = member();
+    const shield = { ...baseItem('block-shield', 'Block shield', 'shield'), defense: 1 };
+    hero.state.equipment.left = shield;
+    const e = encounter([hero], { damage: '1d12' });
+    e.initiative = e.initiative.filter((actor) => actor.id !== hero.id);
+    const request = input(hero);
+    request.actions = [];
+    return { hero, shield, e, request };
+  }
+
+  it.each([
+    ['Common', 4],
+    ['Uncommon', 6],
+    ['Rare', 8],
+    ['Legendary', 10],
+    ['Cursed', 10],
+  ] as const)('blocks a hit with the %s shield die without attribute scaling', (rarity, sides) => {
+    const { hero, shield, e, request } = fixture();
+    shield.rarity = rarity;
+    hero.state.stats.CON = 13;
+    const hp = hero.state.hp;
+    const uses = structuredClone(hero.state.abilityUses);
+    const dice = vi.fn((size: number) => (size === 20 ? 15 : size === 12 ? 12 : sides));
+    const events: string[] = [];
+    const logs = runCombat([hero], e, request, dice, (event) => events.push(event.fact));
+    expect(hero.state.hp).toBe(hp - (12 - sides));
+    expect(dice.mock.calls.map(([size]) => size)).toEqual([20, 12, sides]);
+    expect(dice).toHaveBeenLastCalledWith(sides, 'Block shield: shield block', hero.id, 'CON');
+    expect(hero.state.abilityUses).toEqual(uses);
+    expect(defense(hero.character, hero.state)).toBe(11);
+    expect(logs.join(' ')).toContain(`12 incoming damage; Block shield: 1d${sides} block = ${sides}`);
+    expect(events).toEqual(logs);
+  });
+
+  it.each(['miss', 'fumble', 'backpack', 'no-shield', 'Stunned', 'Frozen', 'Electrocuted'])(
+    'does not roll a block for %s',
+    (scenario) => {
+      const { hero, shield, e, request } = fixture();
+      if (scenario === 'backpack') hero.state.inventory.push({ ...shield, quantity: 1 });
+      if (scenario === 'backpack' || scenario === 'no-shield') hero.state.equipment.left = null;
+      if (['Stunned', 'Frozen', 'Electrocuted'].includes(scenario)) applyCondition(hero.state, scenario);
+      const hp = hero.state.hp;
+      const attack = scenario === 'miss' ? 2 : scenario === 'fumble' ? 1 : 15;
+      const dice = vi.fn((size: number) => (size === 20 ? attack : 8));
+      runCombat([hero], e, request, dice);
+      expect(dice.mock.calls.map(([size]) => size)).toEqual(attack < 3 ? [20] : [20, 12]);
+      expect(hero.state.hp).toBe(hp - (attack < 3 ? 0 : 8));
+    },
+  );
+
+  it.each([false, true])(
+    'doubles critical attack dice but rolls the block once (critical: %s)',
+    (critical) => {
+      const { hero, e, request } = fixture();
+      const hp = hero.state.hp;
+      const dice = vi.fn((size: number) => (size === 20 ? (critical ? 20 : 15) : size === 12 ? 5 : 3));
+      runCombat([hero], e, request, dice);
+      expect(dice.mock.calls.map(([size]) => size)).toEqual(critical ? [20, 12, 12, 4] : [20, 12, 4]);
+      expect(hero.state.hp).toBe(hp - ((critical ? 10 : 5) - 3));
+    },
+  );
+
+  it.each([false, true])('rolls once per distinct shield (two-handed: %s)', (twoHanded) => {
+    const { hero, shield, e, request } = fixture();
+    shield.hands = twoHanded ? 2 : 1;
+    hero.state.equipment.right = twoHanded
+      ? { ...shield }
+      : { ...baseItem('second-shield', 'Second shield', 'shield'), rarity: 'Uncommon' };
+    const hp = hero.state.hp;
+    const dice = vi.fn((size: number) => (size === 20 ? 15 : size === 12 ? 8 : 3));
+    runCombat([hero], e, request, dice);
+    expect(dice.mock.calls.map(([size]) => size)).toEqual(twoHanded ? [20, 12, 4] : [20, 12, 4, 6]);
+    expect(hero.state.hp).toBe(hp - (twoHanded ? 5 : 2));
+  });
+
+  it('rolls both shields even when the first fully blocks, and still applies on-hit ailments', () => {
+    const { hero, e, request } = fixture();
+    hero.state.equipment.right = baseItem('second-shield', 'Second shield', 'shield');
+    applyCondition(hero.state, 'Shocked');
+    e.enemies[0].onHit = 'Weakened';
+    e.enemies[0].equipment = [
+      {
+        ...baseItem('enemy-weapon', 'Enemy blade', 'weapon'),
+        rarity: 'Rare',
+        onHit: { ailment: 'Chilled', chance: 25 },
+      },
+    ];
+    const hp = hero.state.hp;
+    const dice = vi.fn((size: number) => (size === 20 ? 15 : size === 12 || size === 100 ? 1 : 4));
+    const logs = runCombat([hero], e, request, dice);
+    expect(hero.state.hp).toBe(hp);
+    expect(dice.mock.calls.map(([size]) => size)).toEqual([20, 12, 4, 4, 100]);
+    expect(hero.state.conditions).toEqual(expect.arrayContaining(['Shocked', 'Weakened', 'Chilled']));
+    expect(logs.join(' ')).toContain('hits Test hero for 0');
+  });
+
+  it('blocks every enemy hit, adds Shocked only to remaining damage, and leaves ongoing damage intact', () => {
+    const { hero, e, request } = fixture();
+    applyCondition(hero.state, 'Shocked');
+    applyCondition(hero.state, 'Burning');
+    e.enemies.push({ ...e.enemies[0], id: 'second-enemy' });
+    e.initiative.push({ id: 'second-enemy', total: 0 });
+    const hp = hero.state.hp;
+    const dice = vi.fn((size: number) => (size === 20 ? 15 : size === 12 ? 5 : 3));
+    runCombat([hero], e, request, dice);
+    expect(dice.mock.calls.map(([size]) => size)).toEqual([20, 12, 4, 20, 12, 4]);
+    expect(hero.state.hp).toBe(hp - 3 - 3 - 3); // Two (5 - 3 + Shocked) hits, then Burning + Shocked.
+    damage(hero.state, 2, 'A fall');
+    expect(hero.state.hp).toBe(hp - 12);
+    expect(dice).toHaveBeenCalledTimes(6);
+  });
 });
 
 describe('turn-based ailments and cures', () => {
@@ -1751,10 +2017,14 @@ describe('turn-based ailments and cures', () => {
         sides === 20 ? 12 : 2,
       );
       const logs = runCombat([hero], e, input(hero, { main: 'ability', abilityName: ability.name }), rolls);
-      expect(e.enemies[0].conditions).toContain(condition);
-      expect(e.enemies[0].conditionTurns![condition]).toBe(
-        condition === 'Burning' || condition === 'Shocked' ? 2 : 1,
-      );
+      const remaining = conditionDuration(condition) - 1;
+      if (remaining) {
+        expect(e.enemies[0].conditions).toContain(condition);
+        expect(e.enemies[0].conditionTurns![condition]).toBe(remaining);
+      } else {
+        expect(e.enemies[0].conditions).not.toContain(condition);
+        expect(e.enemies[0].conditionTurns![condition]).toBeUndefined();
+      }
       expect(logs.join(' ')).toContain(`becomes ${condition}`);
       if (condition === 'Burning') expect(e.enemies[0].hp).toBe(26);
       if (condition === 'Frozen') expect(hero.state.hp).toBe(hero.state.maxHp);
@@ -1858,3 +2128,31 @@ describe('turn-based ailments and cures', () => {
     },
   );
 });
+
+it.each(['normal', 'repair', 'necrotic'])(
+  'discards legacy %s healing types and lets items and Mend heal any living character',
+  (mode) => {
+    const healer = member('Healer');
+    const ally = member('Ally');
+    ally.character = characterSchema.parse({
+      ...ally.character,
+      traits: ally.character.traits.map((trait) => ({ ...trait, healing: mode })),
+    });
+    healer.character = characterSchema.parse({
+      ...healer.character,
+      abilities: healer.character.abilities.map((ability) => ({ ...ability, healing: 'necrotic' })),
+    });
+    expect(ally.character.traits.every((trait) => !('healing' in trait))).toBe(true);
+    expect(healer.character.abilities.every((ability) => !('healing' in ability))).toBe(true);
+    healer.character.abilities[0].effect = 'mend';
+    ally.state.hp = 1;
+    expect(healWithItem(healer.character, healer.state, healer.state.inventory[0].id, ally)).toBe(6);
+    expect(healer.state.inventory).toHaveLength(0);
+    expect(
+      mendWithAbility(healer.character, healer.state, healer.character.abilities[0].name, ally, () => 4),
+    ).toBe(4);
+    expect(ally.state.hp).toBe(11);
+    expect(healer.state.abilityUses?.[healer.character.abilities[0].name]).toBe(1);
+    expect(abilityMechanics(healer.character.abilities[0])).not.toMatch(/normal|repair|necrotic/);
+  },
+);

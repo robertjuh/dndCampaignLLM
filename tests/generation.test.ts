@@ -65,41 +65,54 @@ it('never accepts finished items when inference subsequently fails', async () =>
   );
   await expect(readResponseStream(response)).rejects.toThrow('could not complete');
 });
-it('generates the character, then names five server-rolled equippable items', async () => {
-  const sheet = generationSheet(templateCharacter('Sea warrior', 'Custom sea creature'));
-  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
-    const context = JSON.parse(JSON.parse(init!.body as string).input[0].content);
-    const value = context.rolledEquipment
-      ? {
-          abilities: context.schemaExample.abilities,
-          items: context.rolledEquipment.map((item: Item) => ({
-            id: item.id,
-            name: item.name,
-            description: 'Custom equipment',
-          })),
-        }
-      : sheet;
-    return streamedItems([
-      { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] },
-    ]).response;
-  });
-  const result = await new ChatGPTGM(auth, 'owner', '', fetcher as typeof fetch).generate('sea warrior');
-  const { abilities: _abilities, combatAffinity: _affinity, ...expectedSheet } = sheet;
-  expect(result).toMatchObject(expectedSheet);
-  expect(result.equipmentOptions).toHaveLength(5);
-  expect(result.abilities).toEqual([]);
-  expect(result.abilityOptions!.map((a) => a.kind)).toEqual(['combat', 'utility', 'combat', 'utility']);
-  expect(result.abilityOptions!.filter((a) => a.kind === 'combat').map((a) => a.effect)).toEqual([
-    'strike',
-    'mend',
-  ]);
-  expect(result.traits).toHaveLength(2);
-  expect(result.stats).toEqual({ STR: 5, DEX: 5, INT: 5, CHA: 5, CON: 5, WIS: 5 });
-  const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
-  expect(request.instructions).toContain('STR/DEX/INT/CHA/CON/WIS');
-  expect(request.instructions).toContain('Each successful encounter restores one spent charge');
-  expect(fetcher).toHaveBeenCalledTimes(2);
-});
+it.each(['assist', 'mend'] as const)(
+  'generates a character with utility %s, then names five server-rolled equippable items',
+  async (utilityEffect) => {
+    const sheet = generationSheet(templateCharacter('Sea warrior', 'Custom sea creature'));
+    sheet.abilities[1].effect = utilityEffect;
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const context = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+      const value = context.rolledEquipment
+        ? {
+            abilities: context.schemaExample.abilities,
+            items: context.rolledEquipment.map((item: Item) => ({
+              id: item.id,
+              name: item.name,
+              description: 'Custom equipment',
+            })),
+          }
+        : sheet;
+      return streamedItems([
+        { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] },
+      ]).response;
+    });
+    const result = await new ChatGPTGM(auth, 'owner', '', fetcher as typeof fetch).generate('sea warrior');
+    const { abilities: _abilities, combatAffinity: _affinity, ...expectedSheet } = sheet;
+    expect(result).toMatchObject(expectedSheet);
+    expect(result.equipmentOptions).toHaveLength(5);
+    expect(result.abilities).toEqual([]);
+    expect(result.abilityOptions!.map((a) => a.kind)).toEqual(['combat', 'utility', 'combat', 'utility']);
+    expect(result.abilityOptions!.filter((a) => a.kind === 'combat').map((a) => a.effect)).toEqual([
+      'strike',
+      'mend',
+    ]);
+    if (utilityEffect === 'mend') {
+      expect(result.abilityOptions![1]).toMatchObject({
+        kind: 'utility',
+        effect: 'mend',
+        dice: '1d4',
+        bonus: 2,
+        cures: ['Bleeding'],
+      });
+    }
+    expect(result.traits).toHaveLength(2);
+    expect(result.stats).toEqual({ STR: 5, DEX: 5, INT: 5, CHA: 5, CON: 5, WIS: 5 });
+    const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
+    expect(request.instructions).toContain('STR/DEX/INT/CHA/CON/WIS');
+    expect(request.instructions).toContain('Each successful encounter restores one spent charge');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  },
+);
 it('preserves trait-derived asymmetry in the sheet and equipment generation context', async () => {
   const character = templateCharacter('Bram', 'Frail ogre');
   character.traits[0].stats = { ...character.traits[0].stats, STR: 6, INT: -4 };
