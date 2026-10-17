@@ -1,11 +1,13 @@
 # Factions and individual reputation
 
-Status: proposed; gameplay implementation has not started.
+Status: implemented; generation, gradual discovery, optional ties, individual
+reputation, recovery, public views and automated checks are in place. Live model
+playtesting remains a follow-up.
 
 ## Intended behavior
 
 Every new campaign has at least three distinct factions before its opening scene
-is resolved. Each faction has an agenda, a source of influence, and a concrete
+is resolved. Not every faction has an agenda, a source of influence, and/or a concrete
 connection to the campaign's central conflict. They can affect events before the
 party learns their identities. Discovery follows the story rather than a turn
 schedule; the opening does not need to introduce all three.
@@ -36,9 +38,11 @@ individual character**, never a single score for the whole party.
 
 ### World generation and story involvement
 
-Generate three factions initially; enforce a minimum of three in the validated
-world schema. Permit a small bounded list, such as three to six, so established
-factions in an existing campaign can be retained. Generate original factions
+Seed three factions initially; allow the generator to append factions requested
+by the campaign up to six total. Preserve every supplied seed ID and its order,
+existing public lore and discovery state. Additional initial factions start
+undiscovered at the supplied activity turn; accepted IDs remain stable on retry.
+Generate coherent factions
 from the setting, premise, tone, instructions, language, and party backgrounds.
 Honor explicit existing setting lore and avoid a fixed faction catalog.
 
@@ -132,6 +136,16 @@ might welcome its trusted courier while refusing their wanted companion entry.
 Attitude is context for adjudication, not guaranteed success or forced combat.
 Any checks, enemies, rewards, or items still use the existing implemented rules.
 This version adds no universal reputation bonus to dice or automatic price table.
+
+For noncombat checks, a relevant NPC motive, allegiance or recognized individual
+relationship can justify situational advantage or disadvantage. Ground the
+connection and awareness in established facts; a faction's agenda does not prove
+every local NPC belongs to it. Combine these circumstances with weather, hazards
+and nearby participants under [SITUATIONAL_CHECKS_PLAN.md](SITUATIONAL_CHECKS_PLAN.md),
+without counting a cause through both DC and mode. Private motives may influence
+the decision, while public roll reasons and resolved reactions describe only
+observable behavior or revealed knowledge. Record the reaction during adjudication
+so narration can preserve it without adding a new cause.
 
 ## Data and persistence
 

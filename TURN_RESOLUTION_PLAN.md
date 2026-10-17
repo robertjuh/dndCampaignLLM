@@ -49,13 +49,13 @@ A second problem is timing. `Game.commit()` currently still draws environmental 
 | Fidelity reviewer | Whether all presentation agrees with finalized facts | Approval/rejection with specific corrections needed |
 | Publisher | Durable state/history/journal writes and the next-turn transition | Completed turn and next roster |
 
-Only adjudication may establish a new clue, NPC decision, revealed secret, loot discovery, location, public journal fact, or safe-rest permission. Narration can enrich its description but cannot establish another fact. The situation summary is presentation too.
+Only adjudication may establish a new clue, NPC decision, revealed secret, loot discovery, location, public journal fact. Narration can enrich its description but cannot establish another fact. The situation summary is presentation too.
 
 Use three strict, versioned contracts:
 
 1. **`TurnAdjudication`**: turn identity, one interpretation/disposition proposal per submitted action, references to existing receipts, any pending combat plan, routine outcome facts and reasons, causal ordering, supported state-change proposals, world/journal changes, and reward proposals with reasons. Checked and engine-driven results must agree with receipts; the model cannot set their dice or numerical outcomes.
 2. **`TurnResolution`**: server-validated action outcomes, ordered resolved events, receipt references, canonical resulting world facts, a factual recap, and actual per-recipient reward receipts. It includes the finalized character mechanics; its accompanying draft contains full finalized member and scene state. This is the narrator's sole source of truth.
-3. **`TurnNarration`**: paragraphs keyed by exact resolved-event IDs, closing prose, and a situation summary. Reject mechanics, reward, journal, location, inventory, and rest-state fields in this response.
+3. **`TurnNarration`**: paragraphs keyed by exact resolved-event IDs, closing prose, and a situation summary. Reject mechanics, reward, journal, location, inventory fields in this response.
 
 Retain the current `Outcome` as the public completed-turn format initially. The server builds it from resolution plus narration; no LLM returns the entire authoritative object anymore.
 
@@ -123,7 +123,7 @@ Publishing writes the already-finalized mechanical state, canonical world/journa
 
 Freeze the roster, starting member/scene snapshots, and relevant campaign configuration synchronously when the worker claims the turn, before the first await. A late join must not enter the current draft merely because the model took time to respond.
 
-Keep current collecting-only locks for action edits, equipment, self-healing, rest, loot, and level-ups through narration and failed turns. Preserve the controls already allowed during processing:
+Keep current collecting-only locks for action edits, equipment, self-healing, loot, and level-ups through narration and failed turns. Preserve the controls already allowed during processing:
 
 - Sit-out changes affect next-turn participation, not frozen current actions.
 - Late joins retain their new rows and enter the next roster without current-turn actions or rewards.
@@ -157,7 +157,7 @@ Acceptance: missing/duplicate actors, invalid receipt references, contradictory 
 
 ### 2. Extract finalization from publication
 
-Refactor `Game.commit()` into draft finalization and atomic publication, initially using the existing provider result as an adapter. Move environmental impact dice, damage, condition changes/ticks, XP/gold, location/rest state, and canonical journal handling upstream. Save accepted adjudication before these operations and finalized resolution afterward. Preserve replacement activation as next-turn lifecycle handling during publication.
+Refactor `Game.commit()` into draft finalization and atomic publication, initially using the existing provider result as an adapter. Move environmental impact dice, damage, condition changes/ticks, XP/gold, location state, and canonical journal handling upstream. Save accepted adjudication before these operations and finalized resolution afterward. Preserve replacement activation as next-turn lifecycle handling during publication.
 
 Acceptance: interruption at every boundary resumes correctly; publication contains no gameplay randomness or gameplay resolution. Generating next-turn and inventory identifiers remains allowed. Compare final mechanical state to existing fixtures without executing old and new engines twice on live turns.
 

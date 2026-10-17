@@ -4,12 +4,22 @@ import { createHash } from 'node:crypto';
 
 /** Stable public references ground proposals without a catalog of environmental weapons. */
 export function environmentalFacts(context: Pick<GMContext, 'journal' | 'scene'>) {
+  const here = context.scene.location.name.toLowerCase();
+  const elsewhere = Object.values(context.scene.places ?? {}).map((place) =>
+    place.location.name.toLowerCase(),
+  );
+  const localJournal = context.journal.filter((entry) =>
+    entry.kind === 'location'
+      ? entry.name.toLowerCase() === here
+      : entry.detail.toLowerCase().includes(here) ||
+        !elsewhere.some((name) => entry.detail.toLowerCase().includes(name)),
+  );
   // ponytail: one source per fact; split facts if distinct objects need separate readiness.
   return Object.fromEntries(
     [
       [`scene:${context.scene.location.name}:atmosphere`, context.scene.location.atmosphere],
       [`scene:${context.scene.location.name}:hazard`, context.scene.location.hazard],
-      ...context.journal.map((entry) => [`journal:${entry.kind}:${entry.name}`, entry.detail]),
+      ...localJournal.map((entry) => [`journal:${entry.kind}:${entry.name}`, entry.detail]),
     ].filter(([, fact]) => fact.trim()),
   );
 }
@@ -21,6 +31,11 @@ export function validateEnvironmentalAction(
 ): EnvironmentalAction {
   const proposed = environmentalActionSchema.parse(input);
   const saved = context.scene.environment?.sources[proposed.sourceId];
+  if (
+    !saved &&
+    Object.values(context.scene.places ?? {}).some((place) => place.environment?.sources[proposed.sourceId])
+  )
+    throw new Error('That environmental source is at another location.');
   const profile = saved
     ? {
         ...saved.profile,

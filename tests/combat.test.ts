@@ -82,6 +82,27 @@ function fixture(text = 'Attack the enemy'): GMContext {
 }
 
 describe('server combat interpretation defaults', () => {
+  it.each([false, true])(
+    'ignores a model death claim and executes the engine-valid strike (ability=%s)',
+    (ability) => {
+      const context = fixture(ability ? 'Use Focused strike on Ork Breachmob' : 'Attack Ork Breachmob');
+      const member = context.members[0];
+      if (ability) context.turn.actions[0].abilityName = 'Focused strike';
+      const input = normalizeCombatInput(context, {
+        actions: [
+          {
+            memberId: member.id,
+            main: 'attack',
+            targetId: 'enemy-0',
+            blockedReason: 'Ork Breachmob is already defeated.',
+          },
+        ],
+      });
+      expect(input.actions[0].blockedReason).toBeUndefined();
+      runCombat(context.members, context.scene.encounter!, input, (sides) => (sides === 20 ? 12 : 2));
+      expect(context.scene.encounter!.enemies[0].hp).toBeLessThan(30);
+    },
+  );
   it.each(['stun', 'influence', 'damage', 'flee'] as const)(
     'uses a scoped utility for %s during combat with advantage, level scaling and one charge',
     (effect) => {

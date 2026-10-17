@@ -121,6 +121,25 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
           weaponSlot: null,
         };
       }
+      if (chosen.intent === 'orientation')
+        return {
+          memberId: member.id,
+          intent: 'orientation',
+          main: 'interact',
+          stat: 'INT',
+          description:
+            typeof chosen.description === 'string'
+              ? chosen.description
+              : 'Requests local orientation from the GM.',
+          abilityName: null,
+          targetId: null,
+          mainItemId: null,
+          weaponSlot: null,
+          minor: 'none',
+          minorItemId: null,
+          minorTargetId: null,
+          minorSlot: null,
+        };
       const intent = submittedIntent(text, chosen.main) ?? (returningToCombat(text) ? 'move' : undefined);
       const combatAbility = requestedAbility(
         member.character,
@@ -362,6 +381,8 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         action.effect = undefined;
       }
       if (action.main === 'attack') action.stat = chooseWeapon(member, text, action).scaling[0] ?? 'STR';
+      // Target availability and strike eligibility come from the engine, including retargeting.
+      if (action.main === 'attack' || ability?.effect === 'strike') delete action.blockedReason;
       return action;
     });
   const targets = Array.isArray(proposal.enemyTargets) ? proposal.enemyTargets.map(object) : [];

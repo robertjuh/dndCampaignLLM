@@ -1,0 +1,1167 @@
+[
+  {
+    "number": 4,
+    "turnId": "170214d5-550e-4d91-95f9-3da4d9abef08",
+    "members": [
+      {
+        "id": "f4df286b-e669-4961-81ee-9c40de351b0d",
+        "name": "Matthes Kranz"
+      },
+      {
+        "id": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+        "name": "Gartunk"
+      },
+      {
+        "id": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+        "name": "Marta Kessel"
+      },
+      {
+        "id": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+        "name": "Sir rexmen"
+      }
+    ],
+    "scene": {
+      "location": {
+        "name": "Border Approach",
+        "atmosphere": "Rain washes a roadside boundary marker and wagon ruts while a Bretonnian patrolman watches the road.",
+        "hazard": "The verge is exposed to rain; the muddy roads remain passable.",
+        "id": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102"
+      },
+      "encounters": 0,
+      "encounter": null,
+      "loot": [],
+      "lethalWarning": null,
+      "places": {
+        "e460a86f-3f22-4924-a7ec-1984c23f2d5e": {
+          "encounter": null,
+          "loot": [],
+          "location": {
+            "name": "Roadside Watchpost",
+            "atmosphere": "Rain ticks on the roof above a toll desk, ledger and tethered messenger horse.",
+            "hazard": "The yard is sheltered; the southbound lane is muddy but passable.",
+            "id": "e460a86f-3f22-4924-a7ec-1984c23f2d5e"
+          }
+        },
+        "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7": {
+          "location": {
+            "name": "Mountain Road",
+            "atmosphere": "Rainwater runs through the first stone culvert, washing around splintered wood and spilled oats.",
+            "hazard": "The uphill road and narrow side track are muddy but passable.",
+            "id": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7"
+          },
+          "encounter": null,
+          "loot": [],
+          "searches": {
+            "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:culvert-fittings-and-track-junction": {
+              "information": "Beneath the culvert's southeast lip, a fresh scrape survives where the stone sheltered it from rain. It gives Gartunk a distinguishable mark at the side-track junction, but neither identifies the vehicle nor traces the cargo beyond the culvert.",
+              "rewardRolled": false
+            }
+          }
+        },
+        "31b0b9ae-3185-4a6f-8527-3fa247f8656e": {
+          "location": {
+            "name": "Grey Pass Coaching Inn",
+            "atmosphere": "Rain on the stable roof, damp wool in the common room and a provision-laden wagon in the yard at dusk.",
+            "hazard": "The roads are muddy but passable.",
+            "id": "31b0b9ae-3185-4a6f-8527-3fa247f8656e"
+          },
+          "encounter": null,
+          "loot": [],
+          "searches": {
+            "31b0b9ae-3185-4a6f-8527-3fa247f8656e:guard-crossbow-bolt": {
+              "information": "The bolt still has binding thread beneath its damaged head. Comparing it with an intact bolt issued to the caravan could reveal a distinction the damaged marks alone do not show; no such comparison has been made.",
+              "rewardRolled": false
+            }
+          }
+        }
+      },
+      "worldMap": {
+        "nodes": {
+          "31b0b9ae-3185-4a6f-8527-3fa247f8656e": {
+            "id": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "name": "Grey Pass Coaching Inn",
+            "visited": true
+          },
+          "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7": {
+            "id": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "name": "Mountain Road",
+            "visited": true
+          },
+          "e7dc91ab-bbde-475b-a5f4-99f4a87b7102": {
+            "id": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102",
+            "name": "Border Approach",
+            "visited": true
+          },
+          "e460a86f-3f22-4924-a7ec-1984c23f2d5e": {
+            "id": "e460a86f-3f22-4924-a7ec-1984c23f2d5e",
+            "name": "Roadside Watchpost",
+            "visited": true
+          },
+          "9872fc28-8321-401b-9f67-e9b0d50827e0": {
+            "id": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "name": "Upper Mountain Road",
+            "visited": false
+          },
+          "b5680058-1248-429b-a5b7-0a1adf39f2ec": {
+            "id": "b5680058-1248-429b-a5b7-0a1adf39f2ec",
+            "name": "Culvert Side Track",
+            "visited": false
+          },
+          "6f69c759-4786-4ef2-8386-41445aaa0823": {
+            "id": "6f69c759-4786-4ef2-8386-41445aaa0823",
+            "name": "Border Toll Road",
+            "visited": false
+          }
+        },
+        "connections": [
+          {
+            "from": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "to": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "label": "East, uphill along the open mountain road",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "to": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102",
+            "label": "West, along the open border road",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "to": "e460a86f-3f22-4924-a7ec-1984c23f2d5e",
+            "label": "North, by the short watchpost lane",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "to": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "label": "East, uphill along the open mountain road",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "to": "b5680058-1248-429b-a5b7-0a1adf39f2ec",
+            "label": "Southeast, along a muddy wagon-width side track",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102",
+            "to": "6f69c759-4786-4ef2-8386-41445aaa0823",
+            "label": "West, along the open border toll road",
+            "blocked": false,
+            "bidirectional": true
+          }
+        ]
+      },
+      "memberLocations": {
+        "f4df286b-e669-4961-81ee-9c40de351b0d": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102",
+        "b408fd11-4f54-483b-8da6-bd0a9393d8d2": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+        "148d4e3e-a420-442d-a8ef-8f33abc2ba8b": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+        "9a75ad20-9e51-4e45-891f-b4eab3dbfe86": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102"
+      },
+      "searches": {
+        "e7dc91ab-bbde-475b-a5f4-99f4a87b7102:roadside-marker-niche": {
+          "information": "In the niche lies an Oiled Road Lantern with oil remaining. Its shutter can direct light across nearby road surfaces and wagon marks after dusk. The lantern remains at the Border Approach until picked up.",
+          "rewardRolled": true
+        }
+      },
+      "searchedLoot": {
+        "e7dc91ab-bbde-475b-a5f4-99f4a87b7102:roadside-marker-niche": "Oiled Road Lantern"
+      }
+    },
+    "actions": [
+      {
+        "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+        "text": "Go to the mountain road",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:04:55.605Z",
+        "acceptsLethalRisk": false
+      },
+      {
+        "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+        "text": "Go to the grey pass to look for supplies",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:04:58.017Z",
+        "acceptsLethalRisk": false
+      },
+      {
+        "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+        "text": "Go to the Grey pass",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:06:03.613Z",
+        "acceptsLethalRisk": false
+      },
+      {
+        "memberId": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+        "text": "Try again",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:06:33.663Z",
+        "acceptsLethalRisk": false
+      }
+    ],
+    "rolls": [],
+    "adjudication": {
+      "version": 2,
+      "turnId": "170214d5-550e-4d91-95f9-3da4d9abef08",
+      "actions": [
+        {
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "status": "success",
+          "basis": "routine",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Marta reaches the first stone culvert on the mountain road.",
+              "reason": "The eastbound road from the inn is open and passable.",
+              "receiptRefs": [],
+              "eventIds": ["marta-road"]
+            },
+            "minor": null,
+            "movement": null
+          },
+          "fact": "Marta reaches the culvert, where the uphill road continues east and a wagon-width track branches southeast.",
+          "reason": "This is one ordinary stretch along the open mountain road.",
+          "receiptRefs": [],
+          "eventIds": ["marta-road"],
+          "intent": "action",
+          "search": null,
+          "travel": null
+        },
+        {
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:f4df286b-e669-4961-81ee-9c40de351b0d",
+          "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+          "status": "success",
+          "basis": "routine",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Matthes locates the relief wagon's replacement provisions in the inn yard; they remain aboard the wagon.",
+              "reason": "The factor is openly counting supplies there. Looking does not transfer ownership or reach the pass beyond the inn.",
+              "receiptRefs": [],
+              "eventIds": ["matthes-supplies"]
+            },
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Matthes returns from the Border Approach to the coaching inn, one stretch toward the Grey pass.",
+              "reason": "The eastbound border road is open and muddy but passable.",
+              "receiptRefs": [],
+              "eventIds": ["matthes-inn"]
+            }
+          },
+          "fact": "Matthes returns to the inn and finds the relief wagon's provisions there, without taking any.",
+          "reason": "The pass lies farther along the known road; the inn is this turn's next reachable stretch.",
+          "receiptRefs": [],
+          "eventIds": ["matthes-inn", "matthes-supplies"],
+          "intent": "search",
+          "search": {
+            "sourceId": "31b0b9ae-3185-4a6f-8527-3fa247f8656e:relief-wagon-provisions",
+            "locationId": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "informationEventId": "wagon-provisions",
+            "reward": null
+          },
+          "travel": {
+            "goalId": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "via": [],
+            "avoid": []
+          }
+        },
+        {
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "status": "success",
+          "basis": "routine",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Sir rexmen reaches the coaching inn on his way toward the Grey pass.",
+              "reason": "The open road from the Border Approach reaches the inn before continuing uphill.",
+              "receiptRefs": [],
+              "eventIds": ["rexmen-inn"]
+            },
+            "minor": null,
+            "movement": null
+          },
+          "fact": "Sir rexmen reaches the inn; the mountain road continues east from its yard.",
+          "reason": "Ordinary travel covers one connection, not the entire journey to the pass.",
+          "receiptRefs": [],
+          "eventIds": ["rexmen-inn"],
+          "intent": "action",
+          "search": null,
+          "travel": {
+            "goalId": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "via": [],
+            "avoid": []
+          }
+        },
+        {
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "memberId": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "status": "failure",
+          "basis": "routine",
+          "components": {
+            "main": {
+              "status": "failure",
+              "basis": "routine",
+              "fact": "Gartunk revisits the culvert fittings and sheltered scrape but still cannot trace the missing cargo beyond the junction.",
+              "reason": "Nothing about the rain-blurred marks or his approach has changed since the failed examination; repeating it yields no new check or discovery.",
+              "receiptRefs": [],
+              "eventIds": ["gartunk-revisit"]
+            },
+            "minor": null,
+            "movement": null
+          },
+          "fact": "The scrape remains distinguishable beneath the southeast lip, but it does not identify a wagon or establish where the cargo went.",
+          "reason": "This repeats an unresolved examination, not a fresh source of evidence.",
+          "receiptRefs": [],
+          "eventIds": ["gartunk-revisit"],
+          "intent": "search",
+          "search": {
+            "sourceId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:culvert-fittings-and-track-junction",
+            "locationId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "informationEventId": "culvert-reminder",
+            "reward": null
+          },
+          "travel": null
+        }
+      ],
+      "events": [
+        {
+          "id": "marta-road",
+          "sequence": 0,
+          "kind": "action",
+          "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "phase": "main",
+          "result": "success",
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "Marta walks east from the inn to the first stone culvert. Rainwater runs past splintered wood and spilled oats; the uphill road continues east and the muddy wagon-width track branches southeast.",
+          "receiptRefs": [],
+          "dependsOn": []
+        },
+        {
+          "id": "matthes-inn",
+          "sequence": 1,
+          "kind": "action",
+          "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:f4df286b-e669-4961-81ee-9c40de351b0d",
+          "phase": "movement",
+          "result": "success",
+          "locationRef": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+          "fact": "Matthes follows the open road east from the Border Approach to the coaching inn, progressing toward the Grey pass.",
+          "receiptRefs": [],
+          "dependsOn": []
+        },
+        {
+          "id": "rexmen-inn",
+          "sequence": 2,
+          "kind": "action",
+          "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "phase": "main",
+          "result": "success",
+          "locationRef": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+          "fact": "Sir rexmen follows the open road east from the Border Approach and reaches the coaching inn, short of the Grey pass.",
+          "receiptRefs": [],
+          "dependsOn": []
+        },
+        {
+          "id": "matthes-supplies",
+          "sequence": 3,
+          "kind": "action",
+          "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:f4df286b-e669-4961-81ee-9c40de351b0d",
+          "phase": "main",
+          "result": "success",
+          "locationRef": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+          "fact": "In the inn yard, Matthes finds the provision-laden relief wagon where the Dwarf factor has been counting replacement supplies. The supplies remain aboard.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "matthes-inn",
+              "requires": "success"
+            }
+          ]
+        },
+        {
+          "id": "wagon-provisions",
+          "sequence": 4,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "phase": null,
+          "result": null,
+          "locationRef": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+          "fact": "The relief wagon holds replacement provisions for its planned dawn departure. Finding them does not establish that any are spare or transfer them to Matthes.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "matthes-supplies",
+              "requires": "success"
+            }
+          ]
+        },
+        {
+          "id": "gartunk-revisit",
+          "sequence": 5,
+          "kind": "action",
+          "memberId": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "actionId": "170214d5-550e-4d91-95f9-3da4d9abef08:action:b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "phase": "main",
+          "result": "failure",
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "Gartunk examines the same rain-blurred culvert marks again. The sheltered scrape is still visible, but this examination does not trace the missing cargo.",
+          "receiptRefs": [],
+          "dependsOn": []
+        },
+        {
+          "id": "culvert-reminder",
+          "sequence": 6,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "phase": null,
+          "result": null,
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "The fresh scrape beneath the culvert's southeast lip marks the side-track junction, not the identity or later route of the vehicle that made it. Both the uphill road and side track remain passable.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "gartunk-revisit",
+              "requires": "occurrence"
+            }
+          ]
+        },
+        {
+          "id": "party-split",
+          "sequence": 7,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "phase": "aftermath",
+          "result": null,
+          "fact": "Marta and Gartunk are at the culvert; Matthes and Sir rexmen are at the inn. The open mountain road connects the two places.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "marta-road",
+              "requires": "success"
+            },
+            {
+              "eventId": "matthes-inn",
+              "requires": "success"
+            },
+            {
+              "eventId": "rexmen-inn",
+              "requires": "success"
+            }
+          ]
+        }
+      ],
+      "changes": [],
+      "journal": [],
+      "location": null,
+      "memberLocations": [
+        {
+          "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "locationId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "movementEventId": "marta-road"
+        },
+        {
+          "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+          "locationId": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+          "movementEventId": "matthes-inn"
+        },
+        {
+          "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "locationId": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+          "movementEventId": "rexmen-inn"
+        }
+      ],
+      "rewards": {
+        "xp": 0,
+        "gold": 0,
+        "reason": "Travel, locating already visible provisions and repeating an unchanged examination yield no new reward."
+      },
+      "placeUpdates": [],
+      "mapUpdates": {
+        "locations": [],
+        "connections": []
+      },
+      "sceneFocus": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+      "separations": [
+        {
+          "memberIds": ["148d4e3e-a420-442d-a8ef-8f33abc2ba8b", "f4df286b-e669-4961-81ee-9c40de351b0d"],
+          "eventId": "party-split"
+        },
+        {
+          "memberIds": ["148d4e3e-a420-442d-a8ef-8f33abc2ba8b", "9a75ad20-9e51-4e45-891f-b4eab3dbfe86"],
+          "eventId": "party-split"
+        }
+      ],
+      "factionEffects": [],
+      "arrivals": []
+    }
+  },
+  {
+    "number": 6,
+    "turnId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1",
+    "members": [
+      {
+        "id": "f4df286b-e669-4961-81ee-9c40de351b0d",
+        "name": "Matthes Kranz"
+      },
+      {
+        "id": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+        "name": "Gartunk"
+      },
+      {
+        "id": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+        "name": "Marta Kessel"
+      },
+      {
+        "id": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+        "name": "Sir rexmen"
+      }
+    ],
+    "scene": {
+      "location": {
+        "name": "Mountain Road",
+        "atmosphere": "Rainwater runs through the first stone culvert, washing around splintered wood and spilled oats.",
+        "hazard": "The uphill road and narrow side track are muddy but passable.",
+        "id": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7"
+      },
+      "encounters": 0,
+      "encounter": null,
+      "loot": [],
+      "lethalWarning": null,
+      "places": {
+        "e460a86f-3f22-4924-a7ec-1984c23f2d5e": {
+          "encounter": null,
+          "loot": [],
+          "location": {
+            "name": "Roadside Watchpost",
+            "atmosphere": "Rain ticks on the roof above a toll desk, ledger and tethered messenger horse.",
+            "hazard": "The yard is sheltered; the southbound lane is muddy but passable.",
+            "id": "e460a86f-3f22-4924-a7ec-1984c23f2d5e"
+          }
+        },
+        "31b0b9ae-3185-4a6f-8527-3fa247f8656e": {
+          "location": {
+            "name": "Grey Pass Coaching Inn",
+            "atmosphere": "Rain on the stable roof, damp wool in the common room and a provision-laden wagon in the yard at dusk.",
+            "hazard": "The roads are muddy but passable.",
+            "id": "31b0b9ae-3185-4a6f-8527-3fa247f8656e"
+          },
+          "encounter": null,
+          "loot": [],
+          "searches": {
+            "31b0b9ae-3185-4a6f-8527-3fa247f8656e:guard-crossbow-bolt": {
+              "information": "The bolt still has binding thread beneath its damaged head. Comparing it with an intact bolt issued to the caravan could reveal a distinction the damaged marks alone do not show; no such comparison has been made.",
+              "rewardRolled": false
+            },
+            "31b0b9ae-3185-4a6f-8527-3fa247f8656e:relief-wagon-provisions": {
+              "information": "The relief wagon holds replacement provisions for its planned dawn departure. Finding them does not establish that any are spare or transfer them to Matthes.",
+              "rewardRolled": false
+            }
+          }
+        },
+        "e7dc91ab-bbde-475b-a5f4-99f4a87b7102": {
+          "location": {
+            "name": "Border Approach",
+            "atmosphere": "Rain washes a roadside boundary marker and wagon ruts while a Bretonnian patrolman watches the road.",
+            "hazard": "The verge is exposed to rain; the muddy roads remain passable.",
+            "id": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102"
+          },
+          "encounter": null,
+          "loot": [],
+          "searchedLoot": {
+            "e7dc91ab-bbde-475b-a5f4-99f4a87b7102:roadside-marker-niche": "Oiled Road Lantern"
+          },
+          "searches": {
+            "e7dc91ab-bbde-475b-a5f4-99f4a87b7102:roadside-marker-niche": {
+              "information": "In the niche lies an Oiled Road Lantern with oil remaining. Its shutter can direct light across nearby road surfaces and wagon marks after dusk. The lantern remains at the Border Approach until picked up.",
+              "rewardRolled": true
+            }
+          }
+        }
+      },
+      "worldMap": {
+        "nodes": {
+          "31b0b9ae-3185-4a6f-8527-3fa247f8656e": {
+            "id": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "name": "Grey Pass Coaching Inn",
+            "visited": true
+          },
+          "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7": {
+            "id": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "name": "Mountain Road",
+            "visited": true
+          },
+          "e7dc91ab-bbde-475b-a5f4-99f4a87b7102": {
+            "id": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102",
+            "name": "Border Approach",
+            "visited": true
+          },
+          "e460a86f-3f22-4924-a7ec-1984c23f2d5e": {
+            "id": "e460a86f-3f22-4924-a7ec-1984c23f2d5e",
+            "name": "Roadside Watchpost",
+            "visited": true
+          },
+          "9872fc28-8321-401b-9f67-e9b0d50827e0": {
+            "id": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "name": "Upper Mountain Road",
+            "visited": false
+          },
+          "b5680058-1248-429b-a5b7-0a1adf39f2ec": {
+            "id": "b5680058-1248-429b-a5b7-0a1adf39f2ec",
+            "name": "Culvert Side Track",
+            "visited": false
+          },
+          "6f69c759-4786-4ef2-8386-41445aaa0823": {
+            "id": "6f69c759-4786-4ef2-8386-41445aaa0823",
+            "name": "Border Toll Road",
+            "visited": false
+          }
+        },
+        "connections": [
+          {
+            "from": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "to": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "label": "East, uphill along the open mountain road",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "to": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102",
+            "label": "West, along the open border road",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "31b0b9ae-3185-4a6f-8527-3fa247f8656e",
+            "to": "e460a86f-3f22-4924-a7ec-1984c23f2d5e",
+            "label": "North, by the short watchpost lane",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "to": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "label": "East, uphill along the open mountain road",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "to": "b5680058-1248-429b-a5b7-0a1adf39f2ec",
+            "label": "Southeast, along a muddy wagon-width side track",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "e7dc91ab-bbde-475b-a5f4-99f4a87b7102",
+            "to": "6f69c759-4786-4ef2-8386-41445aaa0823",
+            "label": "West, along the open border toll road",
+            "blocked": false,
+            "bidirectional": true
+          }
+        ]
+      },
+      "memberLocations": {
+        "f4df286b-e669-4961-81ee-9c40de351b0d": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+        "b408fd11-4f54-483b-8da6-bd0a9393d8d2": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+        "148d4e3e-a420-442d-a8ef-8f33abc2ba8b": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+        "9a75ad20-9e51-4e45-891f-b4eab3dbfe86": "31b0b9ae-3185-4a6f-8527-3fa247f8656e"
+      },
+      "searches": {
+        "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:culvert-fittings-and-track-junction": {
+          "information": "The loosened mud exposes two overlapping cuts beneath the culvert lip. They show that more than one wheel passed close to the junction, not which wagon took the side track or where the cargo went.",
+          "rewardRolled": false
+        },
+        "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:culvert-roadside-ditch": {
+          "information": "A Ditch-Buried Boarding Axe lies exposed at the culvert. Wagon rope has marked its haft, and its edge is sound despite the mud. It remains in the ditch, uncollected.",
+          "rewardRolled": true
+        },
+        "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:scattered-wagon-debris": {
+          "information": "The bent fitting and timber establish that a loaded wagon suffered damage at the culvert. The debris does not establish whether that wagon took the uphill road or the southeast track.",
+          "rewardRolled": true
+        }
+      },
+      "searchedLoot": {
+        "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:culvert-roadside-ditch": "Ditch-Buried Boarding Axe"
+      }
+    },
+    "actions": [
+      {
+        "memberId": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+        "text": "TRY HARDER THAN BEFORE",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:16:42.918Z",
+        "acceptsLethalRisk": false
+      },
+      {
+        "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+        "text": "Head to the upper mountain road and search",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:17:13.699Z",
+        "acceptsLethalRisk": false
+      },
+      {
+        "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+        "text": "Head towards where the caravan went missing and look for items",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:17:38.781Z",
+        "acceptsLethalRisk": false
+      },
+      {
+        "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+        "text": "Go to the Mountain road",
+        "passed": false,
+        "submittedAt": "2026-10-16T22:18:29.023Z",
+        "acceptsLethalRisk": false
+      }
+    ],
+    "rolls": [
+      {
+        "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+        "stat": "WIS",
+        "dc": 10,
+        "reason": "Marta Kessel searches the rain-swept Upper Mountain Road for signs of the missing caravan; fading light and washed-out mud make faint traces uncertain.",
+        "mode": "disadvantage",
+        "circumstances": {
+          "favorable": false,
+          "adverse": true
+        },
+        "lethal": false,
+        "abilityName": null,
+        "assistsMemberId": null,
+        "assistedBy": [],
+        "id": "e6534851-59b1-4b9e-952e-043003590bc0",
+        "dice": [9, 5],
+        "modifier": 1,
+        "equipmentBonuses": [],
+        "total": 6,
+        "success": false,
+        "source": "Local OS cryptographic randomness"
+      },
+      {
+        "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+        "stat": "WIS",
+        "dc": 10,
+        "reason": "Matthes Kranz searches a fresh patch of spilled oats at the culvert ambush site for dropped belongings; rain has muddied the debris, though the culvert itself shelters part of it.",
+        "mode": "normal",
+        "circumstances": {
+          "favorable": true,
+          "adverse": true
+        },
+        "lethal": false,
+        "abilityName": null,
+        "assistsMemberId": null,
+        "assistedBy": [],
+        "id": "d21f62da-033b-45c1-98b7-2e12abc798f3",
+        "dice": [7],
+        "modifier": 1,
+        "equipmentBonuses": [],
+        "total": 8,
+        "success": false,
+        "source": "Local OS cryptographic randomness"
+      }
+    ],
+    "adjudication": {
+      "version": 2,
+      "turnId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1",
+      "actions": [
+        {
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "memberId": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "status": "failure",
+          "basis": "routine",
+          "components": {
+            "main": {
+              "status": "failure",
+              "basis": "routine",
+              "fact": "Gartunk digs farther beneath the culvert lip, but the two overlapping wheel cuts still cannot be followed into the rain-washed road.",
+              "reason": "He revisits the same marks without a new means of distinguishing the wagons; greater effort does not restore washed-out tracks.",
+              "receiptRefs": [],
+              "eventIds": ["g-dig"]
+            },
+            "minor": null,
+            "movement": null
+          },
+          "fact": "Gartunk clears more mud, but cannot trace the missing wagon beyond the culvert.",
+          "reason": "The previously examined wheel cuts remain indistinguishable.",
+          "receiptRefs": [],
+          "eventIds": ["g-dig"],
+          "intent": "search",
+          "search": {
+            "sourceId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:culvert-fittings-and-track-junction",
+            "locationId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "informationEventId": "g-info",
+            "reward": null
+          },
+          "travel": null
+        },
+        {
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "status": "partial",
+          "basis": "check",
+          "components": {
+            "main": {
+              "status": "failure",
+              "basis": "check",
+              "fact": "Marta searches the Upper Mountain Road but cannot distinguish a caravan trail in the rain-blurred surface.",
+              "reason": "Fading light and rain obscure the faint marks she seeks.",
+              "receiptRefs": ["roll:e6534851-59b1-4b9e-952e-043003590bc0"],
+              "eventIds": ["check:e6534851-59b1-4b9e-952e-043003590bc0", "m-search"]
+            },
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Marta reaches the Upper Mountain Road by the open uphill road.",
+              "reason": "The road from the culvert is muddy but passable.",
+              "receiptRefs": [],
+              "eventIds": ["m-move"]
+            }
+          },
+          "fact": "Marta reaches the upper road; her search does not establish whether the missing wagon passed along it.",
+          "reason": "Ordinary travel succeeds, while the saved search check fails.",
+          "receiptRefs": ["roll:e6534851-59b1-4b9e-952e-043003590bc0"],
+          "eventIds": ["m-move", "check:e6534851-59b1-4b9e-952e-043003590bc0", "m-search"],
+          "intent": "search",
+          "search": {
+            "sourceId": "9872fc28-8321-401b-9f67-e9b0d50827e0:rainwashed-road-surface",
+            "locationId": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "informationEventId": "m-info",
+            "reward": null
+          },
+          "travel": {
+            "goalId": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "via": [],
+            "avoid": []
+          }
+        },
+        {
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:f4df286b-e669-4961-81ee-9c40de351b0d",
+          "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+          "status": "failure",
+          "basis": "check",
+          "components": {
+            "main": {
+              "status": "failure",
+              "basis": "check",
+              "fact": "Matthes searches fresh spilled oats at the culvert but finds no identifiable dropped belongings.",
+              "reason": "Rain has mixed the spill with road mud, despite the partial shelter of the stonework.",
+              "receiptRefs": ["roll:d21f62da-033b-45c1-98b7-2e12abc798f3"],
+              "eventIds": ["check:d21f62da-033b-45c1-98b7-2e12abc798f3", "k-search"]
+            },
+            "minor": null,
+            "movement": null
+          },
+          "fact": "Matthes remains at the reported ambush site; his search yields no identifiable item.",
+          "reason": "He is already where the guard placed the attack, and the saved search check fails.",
+          "receiptRefs": ["roll:d21f62da-033b-45c1-98b7-2e12abc798f3"],
+          "eventIds": ["check:d21f62da-033b-45c1-98b7-2e12abc798f3", "k-search"],
+          "intent": "search",
+          "search": {
+            "sourceId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7:spilled-oats-sheltered-patch",
+            "locationId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "informationEventId": "k-info",
+            "reward": null
+          },
+          "travel": null
+        },
+        {
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "status": "success",
+          "basis": "routine",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Sir rexmen follows the open mountain road from the inn to the stone culvert.",
+              "reason": "The culvert is the next road stretch toward the upper mountain road.",
+              "receiptRefs": [],
+              "eventIds": ["r-move"]
+            },
+            "minor": null,
+            "movement": null
+          },
+          "fact": "Sir rexmen reaches the culvert, short of the Upper Mountain Road.",
+          "reason": "Travel covers one open connection.",
+          "receiptRefs": [],
+          "eventIds": ["r-move"],
+          "intent": "action",
+          "search": null,
+          "travel": {
+            "goalId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+            "via": [],
+            "avoid": []
+          }
+        }
+      ],
+      "events": [
+        {
+          "id": "g-dig",
+          "sequence": 2,
+          "kind": "action",
+          "memberId": "b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:b408fd11-4f54-483b-8da6-bd0a9393d8d2",
+          "phase": "main",
+          "result": "failure",
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "Gartunk scoops another handful of mud from beneath the southeast lip. The two known wheel cuts end where rain has scoured the open roadbed; his renewed effort cannot distinguish either wagon farther on.",
+          "receiptRefs": [],
+          "dependsOn": []
+        },
+        {
+          "id": "g-info",
+          "sequence": 3,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "phase": null,
+          "result": null,
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "The sheltered cuts remain visible at the junction, but the exposed ground beyond them retains no readable continuation. The uphill road and southeast side track are both still open.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "g-dig",
+              "requires": "occurrence"
+            }
+          ]
+        },
+        {
+          "id": "m-move",
+          "sequence": 4,
+          "kind": "action",
+          "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "phase": "movement",
+          "result": "success",
+          "locationRef": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+          "beforeEventId": "check:e6534851-59b1-4b9e-952e-043003590bc0",
+          "fact": "Marta climbs east from the culvert to the Upper Mountain Road through rain and fading light.",
+          "receiptRefs": [],
+          "dependsOn": []
+        },
+        {
+          "id": "m-arrival",
+          "sequence": 5,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "phase": null,
+          "result": null,
+          "locationRef": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+          "fact": "The upper road bends around a rocky shoulder. Rain crosses its exposed wheelway toward a shallow drainage channel; a recessed patch under the uphill rock stays comparatively sheltered. The open road returns west to the culvert and continues east around the visible bend. No wagon or traveller is in sight.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "m-move",
+              "requires": "success"
+            }
+          ]
+        },
+        {
+          "id": "m-search",
+          "sequence": 6,
+          "kind": "action",
+          "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "phase": "main",
+          "result": "failure",
+          "locationRef": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+          "fact": "Marta studies the exposed upper road, but rain has blurred its marks too thoroughly to identify a caravan's passage.",
+          "receiptRefs": ["roll:e6534851-59b1-4b9e-952e-043003590bc0"],
+          "dependsOn": [
+            {
+              "eventId": "m-move",
+              "requires": "success"
+            },
+            {
+              "eventId": "check:e6534851-59b1-4b9e-952e-043003590bc0",
+              "requires": "occurrence"
+            }
+          ]
+        },
+        {
+          "id": "m-info",
+          "sequence": 7,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "phase": null,
+          "result": null,
+          "locationRef": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+          "fact": "The drainage channel has carried loose grit off the wheelway, but its recessed patch beneath the uphill rock has escaped the direct wash. It remains a distinguishable place to examine; Marta's failed search of the exposed road establishes nothing about what that patch holds.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "m-search",
+              "requires": "occurrence"
+            },
+            {
+              "eventId": "check:e6534851-59b1-4b9e-952e-043003590bc0",
+              "requires": "occurrence"
+            }
+          ]
+        },
+        {
+          "id": "k-search",
+          "sequence": 8,
+          "kind": "action",
+          "memberId": "f4df286b-e669-4961-81ee-9c40de351b0d",
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:f4df286b-e669-4961-81ee-9c40de351b0d",
+          "phase": "main",
+          "result": "failure",
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "Matthes parts the oats and sodden road litter at the culvert but cannot pick out a dropped belonging.",
+          "receiptRefs": ["roll:d21f62da-033b-45c1-98b7-2e12abc798f3"],
+          "dependsOn": [
+            {
+              "eventId": "check:d21f62da-033b-45c1-98b7-2e12abc798f3",
+              "requires": "occurrence"
+            }
+          ]
+        },
+        {
+          "id": "k-info",
+          "sequence": 9,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "phase": null,
+          "result": null,
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "A pocket of oats is caught against the culvert stone while the exposed spill has spread across the road. This marks where some grain collected, not which wagon lost it or whether another belonging lies beneath the mud. The previously exposed Ditch-Buried Boarding Axe remains in the roadside ditch.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "k-search",
+              "requires": "occurrence"
+            },
+            {
+              "eventId": "check:d21f62da-033b-45c1-98b7-2e12abc798f3",
+              "requires": "occurrence"
+            }
+          ]
+        },
+        {
+          "id": "r-move",
+          "sequence": 10,
+          "kind": "action",
+          "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "actionId": "fc0f3df4-acc3-43dd-90a5-b4862caa10e1:action:9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "phase": "main",
+          "result": "success",
+          "locationRef": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "fact": "Sir rexmen leaves the inn by the eastbound road and reaches the first stone culvert. The uphill road continues east and the muddy side track branches southeast.",
+          "receiptRefs": [],
+          "dependsOn": []
+        }
+      ],
+      "changes": [],
+      "journal": [
+        {
+          "kind": "location",
+          "name": "Upper Mountain Road",
+          "detail": "The exposed road bends around a rocky shoulder, returning west to the culvert and continuing east around a visible bend. Rain washes its wheelway toward a shallow drainage channel. A recessed patch beneath the uphill rock is more sheltered; the initial search of the exposed surface could not establish whether the missing caravan passed."
+        },
+        {
+          "kind": "fact",
+          "name": "Upper road drainage patch",
+          "detail": "Marta could not distinguish caravan tracks on the rain-washed Upper Mountain Road. A separate recessed patch under the uphill rock has escaped the direct wash and has not been examined."
+        },
+        {
+          "kind": "fact",
+          "name": "Culvert spilled oats",
+          "detail": "Matthes found no identifiable belonging in the muddy spill. Some oats are caught against the culvert stone, but their position does not identify the wagon that lost them."
+        }
+      ],
+      "location": null,
+      "memberLocations": [
+        {
+          "memberId": "148d4e3e-a420-442d-a8ef-8f33abc2ba8b",
+          "locationId": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+          "movementEventId": "m-move"
+        },
+        {
+          "memberId": "9a75ad20-9e51-4e45-891f-b4eab3dbfe86",
+          "locationId": "c8e4ceb6-7dc2-4727-bb8e-2ddb8ea478b7",
+          "movementEventId": "r-move"
+        }
+      ],
+      "rewards": {
+        "xp": 10,
+        "gold": 0,
+        "reason": "The party discovers a sheltered drainage patch on the upper road, a distinct place to examine despite the failed searches."
+      },
+      "placeUpdates": [
+        {
+          "ref": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+          "location": {
+            "name": "Upper Mountain Road",
+            "atmosphere": "Rain sheets across an exposed bend around a rocky shoulder; a recessed patch lies beneath the uphill rock.",
+            "hazard": "The muddy road remains passable, but rain obscures marks on its exposed surface."
+          }
+        }
+      ],
+      "mapUpdates": {
+        "locations": [
+          {
+            "ref": "new:high-pass-bend",
+            "name": "High Pass Bend"
+          }
+        ],
+        "connections": [
+          {
+            "from": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+            "to": "new:high-pass-bend",
+            "label": "East, along the open road around the rocky bend",
+            "blocked": false,
+            "bidirectional": true,
+            "eventId": "m-arrival"
+          }
+        ]
+      },
+      "sceneFocus": "current",
+      "separations": [
+        {
+          "memberIds": ["148d4e3e-a420-442d-a8ef-8f33abc2ba8b", "b408fd11-4f54-483b-8da6-bd0a9393d8d2"],
+          "eventId": "m-move"
+        },
+        {
+          "memberIds": ["148d4e3e-a420-442d-a8ef-8f33abc2ba8b", "f4df286b-e669-4961-81ee-9c40de351b0d"],
+          "eventId": "m-move"
+        },
+        {
+          "memberIds": ["148d4e3e-a420-442d-a8ef-8f33abc2ba8b", "9a75ad20-9e51-4e45-891f-b4eab3dbfe86"],
+          "eventId": "m-move"
+        }
+      ],
+      "factionEffects": [],
+      "arrivals": [
+        {
+          "locationId": "9872fc28-8321-401b-9f67-e9b0d50827e0",
+          "eventId": "m-arrival"
+        }
+      ]
+    }
+  }
+]

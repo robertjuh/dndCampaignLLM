@@ -57,11 +57,11 @@ Campaign fields, character data, enemy definitions, loot blueprints, location de
 
 ### Roguelike mechanics
 
-Implemented core rules include STR/DEX/INT/CHA/CON/WIS modifiers, level-one starts, derived HP, XP thresholds, player-chosen generated level-up rewards, five equipment slots, eight-slot backpacks, consumable stacking, equipment requirements, hybrid scaling, initiative, main/minor actions, attacks and damage dice, defending, fleeing, light dual wielding, healing, combat conditions, critical results, loot rarity, constitution/trait encounter recovery, safe rest, first downing, permanent death on a second downing in one encounter, ally main-action support, and queued replacements joining on the next turn after successful encounters.
+Implemented core rules include STR/DEX/INT/CHA/CON/WIS modifiers, level-one starts, derived HP, XP thresholds, player-chosen generated level-up rewards, five equipment slots, eight-slot backpacks, consumable stacking, equipment requirements, hybrid scaling, initiative, main/minor actions, attacks and damage dice, defending, fleeing, light dual wielding, healing, combat conditions, critical results, loot rarity, constitution/trait encounter recovery, first downing, permanent death on a second downing in one encounter, ally main-action support, and queued replacements joining on the next turn after successful encounters.
 
 Creative combat supports environmental damage, stun, and influence without killing. Significant successful noncombat challenges count as encounters, and substantial DC 15+ achievements can earn boss-equivalent XP. Locations follow the story without numbered floors or required boss gates. Physical loot is offered for player selection rather than automatically equipped or taken.
 
-Software interpretations that make the reference deterministic: critical attacks double damage dice; natural-one attack backlash rolls d4; improvisation/flee catastrophes inflict four damage; enemy XP is 15/30/50/100 by tier; noncombat XP is bounded at 40 per round; successful encounters heal living characters, including Downed characters, by max(1, CON) plus validated trait regeneration, replenish one spent charge per ability and reset living characters' downing counts; safe rest is limited to once per character between successful encounters. The reference remains the narrative/pacing authority where no explicit implementation rule supersedes it.
+Software interpretations that make the reference deterministic: critical attacks double damage dice; natural-one attack backlash rolls d4; improvisation/flee catastrophes inflict four damage; enemy XP is 15/30/50/100 by tier; noncombat XP is bounded at 40 per round; successful encounters heal living characters, including Downed characters, by max(1, CON) plus validated trait regeneration, replenish one spent charge per ability and reset living characters' downing counts. The reference remains the narrative/pacing authority where no explicit implementation rule supersedes it.
 
 ### Subscription provider
 
@@ -74,6 +74,26 @@ Implemented the documented open-source local-app ChatGPT OAuth flow and streamed
 Automated tests cover the rules engine, group readiness, solo play, pauses, late arrivals, retries, persistence, independent character instances, death, replacement ownership and encounter timing, saved replacement snapshots and archived lives, party wipes, loot ownership, access control, and provider errors. Browser coverage uses separate leader/player/display contexts and checks the mobile layout. An integration check also exercises generated templates, two-player readiness, streamed tool calls with empty terminal output, quota failure after both rolls, and an explicit retry that preserves dice and applies XP once. Those provider responses are mocked; this does not establish live subscription availability. Browser tests cover preserving and saving a generated result after quota rejection and shared-host sign-in status. Offline practice deliberately remains a labelled scripted rehearsal using the user's supplied setting and templates.
 
 ## Next milestones
+
+The [playthrough clarity and location continuity changes](PLAYTHROUGH_CLARITY_PLAN.md)
+are implemented: local enemies/loot and individual presence, tracked local
+hazards, observable scene information, optional player-authored goals and
+recognizable achievements. The requested combat-heavy opening remains appropriate;
+the changes preserve that campaign preference and free-form player decisions.
+
+The [Lava planet follow-up plan](PLAYTEST_IMPROVEMENT_PLAN_2026-10-07.md) is
+implemented: spoiler-free answers and vague hints for GM orientation questions, meaningful routine travel,
+multiple new destinations in split turns, ordered movement before failed stunts,
+opening placement validation, current item facts, less repetitive summaries,
+relevant faction developments and fewer avoidable model corrections. The audit
+distinguishes location-based loot projection from per-player pickup locks; an
+unavailable button does not by itself establish a locality check. World pressure
+follows the actual campaign and character concerns, without assigning every
+campaign a pursuit. [Verification](PLAYTEST_IMPLEMENTATION_2026-10-07.md) includes
+607 passing regression tests, 10 affected browser checks and eight isolated live
+model scenarios completing in 28 requests without corrections or fallbacks.
+The audited wrench journal correction was applied at a fresh turn after a backup;
+current positions and completed turns were preserved.
 
 The separation of action resolution and storytelling is implemented in [TURN_RESOLUTION_PLAN.md](TURN_RESOLUTION_PLAN.md): strict action outcomes, finalization before narration, persisted adjudication/resolution/narration checkpoints, tools-disabled narration and review, and atomic publication. The [review repairs](TURN_RESOLUTION_REPAIR_PLAN.md) add explicit main/minor outcomes, effect-specific dependencies, frozen recipient identities, correct encounter retries and deterministic checkpoint recovery. All 455 tests, the production build and the roll-accordion browser regression pass. All four user-approved isolated live-provider scenarios passed using 21 model requests: routine door actions, main/minor outcomes, Cleanse followed by a check, and encounter introduction retry.
 

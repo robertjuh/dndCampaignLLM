@@ -143,7 +143,7 @@ export function Abilities({
                 (!inCombat &&
                   ability.kind === 'combat' &&
                   !state?.conditions.includes('Escaped') &&
-                  !['mend', 'cleanse'].includes(ability.effect)) ||
+                  !['strike', 'mend', 'cleanse'].includes(ability.effect)) ||
                 (state?.abilityUses?.[abilityUseKey(ability)] ?? 0) >= 1
               }
               onClick={() => onSelect(selected === ability.name ? null : ability.name)}

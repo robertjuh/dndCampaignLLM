@@ -193,7 +193,6 @@ function resolution(): Extract<TurnResolution, { version: 2 }> {
     changes: [],
     journal: [],
     location: null,
-    safeRest: false,
     factualRecap: 'The loading failed.',
     events: [
       {
@@ -385,7 +384,7 @@ it.each(['failed', 'unrelated', 'late', 'self', 'duplicate'])(
   },
 );
 
-it.each(['normal', 'disadvantage'] as const)(
+it.each(['normal', 'advantage', 'disadvantage'] as const)(
   'applies assistance to %s once when combined with a utility ability',
   async (mode) => {
     const f = await fixture();
@@ -431,6 +430,74 @@ it.each(['normal', 'disadvantage'] as const)(
   },
 );
 
+it.each(
+  [
+    { favorable: false, adverse: false, modes: ['normal', 'advantage', 'advantage', 'advantage'] },
+    { favorable: true, adverse: false, modes: ['advantage', 'advantage', 'advantage', 'advantage'] },
+    { favorable: false, adverse: true, modes: ['disadvantage', 'normal', 'normal', 'normal'] },
+    { favorable: true, adverse: true, modes: ['normal', 'normal', 'normal', 'normal'] },
+  ].flatMap(({ favorable, adverse, modes }) =>
+    ['none', 'ability', 'helper', 'both'].map((source, index) => ({
+      favorable,
+      adverse,
+      source,
+      expected: modes[index],
+    })),
+  ),
+)(
+  'combines favorable=$favorable adverse=$adverse with $source in the engine, preserving $expected on retry',
+  async ({ favorable, adverse, source, expected }) => {
+    const f = await fixture();
+    const withAbility = source === 'ability' || source === 'both';
+    const withHelper = source === 'helper' || source === 'both';
+    const ability = f.loader.character.abilities.find((ability) => ability.kind === 'utility')!;
+    f.provider.adjudicate = async (context, tools) => {
+      if (withHelper) tools(check(f.helper.id, { assistsMemberId: f.loader.id }));
+      const input = check(f.loader.id, {
+        circumstances: { favorable, adverse },
+        ...(withAbility ? { abilityName: ability.name, stat: ability.stat } : {}),
+        ...(withHelper ? { assistedBy: [f.helper.id] } : {}),
+      });
+      const receipt = tools(input);
+      expect(receipt).toMatchObject({ mode: expected, circumstances: { favorable, adverse } });
+      expect(receipt.dice).toHaveLength(expected === 'normal' ? 1 : 2);
+      const draws = f.draw.mock.calls.length;
+      expect(tools(input)).toEqual(receipt);
+      for (const circumstances of [
+        null,
+        { favorable: !favorable, adverse },
+        { favorable, adverse: !adverse },
+      ])
+        expect(() => tools({ ...input, circumstances })).toThrow('already locked');
+      expect(f.draw).toHaveBeenCalledTimes(draws);
+      return f.adjudicateSaved(context, tools);
+    };
+    const turn = f.game.snapshot(f.campaign.id, f.host.id).turn!;
+    f.game.submit(
+      f.campaign.id,
+      f.players[0].id,
+      turn.id,
+      withHelper ? 'Support Loader in inspecting the mechanism.' : '',
+      !withHelper,
+    );
+    f.game.submit(
+      f.campaign.id,
+      f.players[1].id,
+      turn.id,
+      withAbility ? `Use ${ability.name} to inspect the mechanism.` : 'Inspect the mechanism.',
+      false,
+      false,
+      withAbility ? ability.name : null,
+    );
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    expect(snapshot.history.at(-1)!.number, snapshot.turn!.error ?? '').toBe(1);
+    const saved = snapshot.history.at(-1)!.rolls.find((roll) => roll.memberId === f.loader.id)!;
+    expect(saved).toMatchObject({ mode: expected, circumstances: { favorable, adverse } });
+    expect(f.draw).toHaveBeenCalledTimes((withHelper ? 1 : 0) + (expected === 'normal' ? 1 : 2));
+  },
+);
+
 function completed(value: unknown) {
   return new Response(
     `data: ${JSON.stringify({
@@ -464,10 +531,10 @@ it('keeps recovery in the saved log while both narrator and reviewer receive the
   ];
   r.events[0].fact += ' The equipped Archive relic passively contributes +1 to this INT check.';
   r.location = { name: 'Deck', atmosphere: 'A quiet deck.', hazard: '' };
-  r.factualRecap = 'Location: {raw JSON}. Safe rest: false. Helper restores one ability charge.';
+  r.factualRecap = 'Location: {raw JSON}. Helper restores one ability charge.';
   const fallback = factualNarration(r, 'English');
   expect(narrationParagraphs(r, fallback).join(' ')).not.toContain('ability charge');
-  expect(fallback.summary).not.toMatch(/raw JSON|Location:|Safe rest: false/);
+  expect(fallback.summary).not.toMatch(/raw JSON|Location:/);
   const fetcher = vi.fn(async (_url, init) => {
     const body = JSON.parse(init!.body as string);
     const input = JSON.parse(body.input[0].content);
@@ -661,7 +728,6 @@ it('does not create the requested search item after a failed check or allow a di
       changes: [],
       journal: [],
       location: null,
-      safeRest: false,
       rewards: { xp: 0, gold: 0, reason: 'Routine discovery.' },
     };
   };
@@ -678,7 +744,8 @@ it('reviews grouped narration for repetition as well as fidelity within the exis
     requests.push(body);
     const input = JSON.parse(body.input[0].content);
     if (input.candidate) {
-      expect(body.instructions).toContain('Reject a check announcement followed by a second telling');
+      expect(body.instructions).toContain('Report repeated attempts, check announcements');
+      expect(body.instructions).toContain('as styleFeedback, rather than factual rejection');
       return completed({ approved: true, feedback: '' });
     }
     expect(input.schemaExample.version).toBe(2);
@@ -689,6 +756,113 @@ it('reviews grouped narration for repetition as well as fidelity within the exis
   expect(narrationParagraphs(r, result)).toHaveLength(1);
   expect(requests).toHaveLength(2);
   expect(requests.every((body) => !body.tools)).toBe(true);
+});
+
+it.each([
+  {
+    scene: 'shared travel',
+    names: ['Roberto inspecto', 'Kras', 'Dr. Moodswinger', 'Thanquol'],
+    facts: [
+      'Roberto inspecto follows the rib path from the tar lake to Bunker 67.',
+      'Kras follows the same path from the tar lake and reaches Bunker 67.',
+      'Dr. Moodswinger sings loudly and off-key while returning along the rib path to Bunker 67.',
+      'Thanquol follows the rib path from the tar lake and reaches Bunker 67.',
+    ],
+    statuses: ['success', 'success', 'success', 'success'],
+    origin: 'Tar lake',
+    destination: 'Bunker 67',
+    text: 'Roberto inspecto, Kras, Dr. Moodswinger and Thanquol leave the tar lake along the rib path. The doctor’s loud, off-key singing accompanies their return, until the four reach Bunker 67.',
+  },
+  {
+    scene: 'one NPC conversation with different outcomes',
+    names: ['Helper', 'Loader'],
+    facts: [
+      'Helper asks dockkeeper Mara where the cargo went; she identifies the west quay.',
+      'Loader asks Mara for the gate key, but she refuses and keeps it.',
+    ],
+    statuses: ['success', 'failure'],
+    origin: 'Dock',
+    destination: 'Dock',
+    text: 'At the dock, Helper asks Mara where the cargo went, and the dockkeeper names the west quay. Loader follows with a request for her gate key, but Mara refuses and keeps it.',
+  },
+] as const)('narrates $scene without requiring a paragraph per player', async (scene) => {
+  const r = resolution();
+  r.actions = scene.names.map((characterName, index) => {
+    const main = {
+      status: scene.statuses[index],
+      basis: 'routine' as const,
+      fact: scene.facts[index],
+      reason: 'The recorded interaction is resolved.',
+      receiptRefs: [],
+      eventIds: [`act:${index}`],
+    };
+    return {
+      ...main,
+      actionId: `action:${index}`,
+      memberId: `actor:${index}`,
+      characterId: `character:${index}`,
+      characterName,
+      components: { main, minor: null },
+    };
+  });
+  r.events = r.actions.map((action, sequence) => ({
+    id: action.eventIds[0],
+    sequence,
+    kind: 'action',
+    phase: 'main',
+    memberId: action.memberId,
+    actionId: action.actionId,
+    result: scene.statuses[sequence],
+    fact: action.fact,
+    receiptRefs: [],
+    dependsOn: [],
+  }));
+  r.memberLocations = Object.fromEntries(r.actions.map((a) => [a.memberId, 'destination']));
+  r.knownLocations = { origin: scene.origin, destination: scene.destination };
+  r.previousSituation = {
+    memberLocations: Object.fromEntries(r.actions.map((a) => [a.memberId, 'origin'])),
+    places: { origin: { name: scene.origin, hazard: '' } },
+  };
+  const before = structuredClone(r);
+  const candidate = {
+    version: 2,
+    turnId: r.turnId,
+    passages: [{ eventIds: r.events.map((e) => e.id), text: scene.text }],
+    closing: '',
+    summary: scene.text,
+  };
+  const fetcher = vi.fn(async (_url, init) => {
+    const body = JSON.parse(init!.body as string);
+    const input = JSON.parse(body.input[0].content);
+    expect(body.tools).toBeUndefined();
+    expect(input.resolution.actions).toEqual(r.actions);
+    expect(input.resolution.previousSituation).toEqual(r.previousSituation);
+    expect(input.resolution.memberLocations).toEqual(r.memberLocations);
+    expect(body.instructions).toContain('one connected passage');
+    expect(body.instructions).toContain("one player's success never becomes everyone's success");
+    expect(body.instructions).toContain('Same final location alone does not establish travel together');
+    if (input.candidate) {
+      expect(input.candidate).toEqual(candidate);
+      expect(body.instructions).toContain('not one paragraph per ID or player');
+      return completed({
+        storyApproved: true,
+        closingApproved: true,
+        summaryApproved: true,
+        feedback: '',
+        styleFeedback: '',
+      });
+    }
+    expect(input.schemaExample.passages[0].text).toContain('one shared scene');
+    expect(body.instructions).toContain('These lengths apply per scene, not per participant');
+    return completed(candidate);
+  }) as unknown as typeof fetch;
+  const budget = { used: 0, limit: 4 };
+  const narrated = await new ChatGPTGM(auth, 'owner', 'model', fetcher).narrate(r, config, budget);
+  expect(narrationParagraphs(r, narrated)).toEqual([scene.text]);
+  expect(assembleResolvedNarration(r, narrated)).toEqual(narrated);
+  expect(budget.used).toBe(2);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(r).toEqual(before);
 });
 
 it('persists a new consequence of failure without changing the failed check or duplicating its reward on retry', async () => {
@@ -755,6 +929,12 @@ it('prompts causal cooperation and consequences for repeated failure using the e
     const rollTool = body.tools[0].tools.find((tool: any) => tool.name === 'roll_check');
     expect(rollTool.parameters.required).toContain('assistsMemberId');
     expect(rollTool.parameters.required).toContain('assistedBy');
+    expect(rollTool.parameters.required).toContain('circumstances');
+    expect(rollTool.parameters.properties.abilityName.description).toContain(
+      'ability description alone is not a request',
+    );
+    expect(body.instructions).toContain("Only relevant successful helpers' member IDs enter assistedBy");
+    expect(body.instructions).toContain('that alone is not adverse context');
     return completed(await f.practice.adjudicate(context, tools));
   }) as unknown as typeof fetch;
   const context: GMContext = {
@@ -777,4 +957,80 @@ it('prompts causal cooperation and consequences for repeated failure using the e
   const tools = Object.assign(vi.fn(), {}) as unknown as GameTools;
   await new ChatGPTGM(auth, 'owner', 'model', fetcher).adjudicate(context, tools);
   expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it('gives writer and reviewer the same arrival and lesser-information facts while withholding hypothetical rewards', async () => {
+  const r = resolution();
+  r.location = {
+    id: 'ravine',
+    name: 'Rainy ravine',
+    atmosphere: 'Wet stone and a sheltered alcove.',
+    hazard: 'Slippery mud.',
+  };
+  r.events[0].fact = 'Explorer fails to identify the precise trail through the washed-out tracks.';
+  r.events[1].fact = 'The precise trail remains unreadable.';
+  r.events[2].fact =
+    'A shallow mud channel leads downhill beside a sheltered rock alcove. The open return path leads uphill.';
+  r.events[2].locationRef = 'ravine';
+  r.arrivals = [{ locationId: 'ravine', eventId: 'world' }];
+  const main = {
+    status: 'failure' as const,
+    basis: 'check' as const,
+    fact: r.events[1].fact,
+    reason: 'Rain washed out the tracks.',
+    receiptRefs: [],
+    eventIds: ['check', 'outcome'],
+  };
+  r.actions = [
+    {
+      ...main,
+      actionId: 'search-action',
+      memberId: 'explorer',
+      characterId: 'explorer-character',
+      characterName: 'Explorer',
+      intent: 'search',
+      components: { main, minor: null },
+      search: {
+        sourceId: 'tracks',
+        locationId: 'ravine',
+        informationEventId: 'world',
+        reward: {
+          name: 'Hypothetical crystal blade',
+          kind: 'weapon',
+          scaling: ['DEX'],
+          hands: 1,
+          light: true,
+          description: 'This item has not been awarded.',
+        },
+      },
+    },
+  ];
+  const text =
+    'Explorer slows beside the rain-darkened stone, looking for the precise trail among the washed-out tracks. The mud has lost the detail needed to identify it, and that question remains unanswered. Farther down, however, a shallow channel gives the slope a readable shape as it runs past a sheltered rock alcove. Above the slippery ground, the open return path climbs uphill. The ravine now has visible bearings, even though the sought trail remains uncertain.';
+  const fetcher = vi.fn(async (_url, init) => {
+    const body = JSON.parse(init!.body as string);
+    const input = JSON.parse(body.input[0].content);
+    expect(JSON.stringify(input.resolution)).not.toContain('Hypothetical crystal blade');
+    expect(input.resolution.actions[0].search.reward).toBeNull();
+    expect(input.resolution.actions[0].components.main.status).toBe('failure');
+    expect(input.resolution.arrivals).toEqual(r.arrivals);
+    expect(input.resolution.events[2].fact).toContain('mud channel');
+    expect(body.instructions).toContain('shared scene');
+    return completed(
+      input.candidate
+        ? { approved: true, feedback: '' }
+        : {
+            version: 2,
+            turnId: r.turnId,
+            passages: [{ eventIds: ['check', 'outcome', 'world'], text }],
+            closing: '',
+            summary:
+              'The precise trail is unreadable; a mud channel descends beside shelter, and an open path returns uphill.',
+          },
+    );
+  }) as unknown as typeof fetch;
+  const result = await new ChatGPTGM(auth, 'owner', 'model', fetcher).narrate(r, config);
+  expect(fetcher).toHaveBeenCalledTimes(2); // Existing writer/review stages, no new assessment call.
+  expect(narrationParagraphs(r, result)).toEqual([text]);
+  expect(r.actions[0].search!.reward!.name).toBe('Hypothetical crystal blade');
 });

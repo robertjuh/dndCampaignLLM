@@ -1,3 +1,7 @@
+import { FactionCard, CharacterFactions } from './Factions';
+import { Gathering } from './Gathering';
+import type { PublicFaction } from '../shared/factions';
+import { memberScene, placeScene, knownLocations, combatActive } from '../shared/locations';
 import React, { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -15,7 +19,6 @@ import {
   Heart,
   LoaderCircle,
   Monitor,
-  Moon,
   Pause,
   Play,
   Plus,
@@ -57,6 +60,7 @@ import {
   isDead,
   isInCombat,
   canInteract,
+  incapacitatingCondition,
 } from '../shared/rules';
 import { ailments, conditionDescription, conditionDuration } from '../shared/ailments';
 import {
@@ -73,6 +77,7 @@ import { useNarration } from './useNarration';
 import { TurnImagePrompt } from './TurnImagePrompt';
 import { EquipmentPanel } from './EquipmentPanel';
 import { ThemeSelect } from './ThemeSelect';
+import { WorldMap } from './WorldMap';
 import { api } from './api';
 import './style.css';
 
@@ -474,7 +479,7 @@ function CreateCampaign() {
           <Field label="Setting">
             <textarea
               value={config.setting}
-              maxLength={500}
+              maxLength={1700}
               onChange={(e) => change('setting', e.target.value)}
               placeholder="A world, a city, a time, or a feeling…"
               required
@@ -484,15 +489,29 @@ function CreateCampaign() {
           <Field label="The premise">
             <textarea
               value={config.premise}
-              maxLength={2500}
+              maxLength={2000}
               onChange={(e) => change('premise', e.target.value)}
               placeholder="What brings the party together? Leave room for a surprise."
               rows={3}
             />
           </Field>
-          <div className="two-columns">
+          <Field label="Party goal (optional)">
+            <textarea
+              value={config.partyGoal ?? ''}
+              maxLength={1000}
+              rows={4}
+              onChange={(e) => change('partyGoal', e.target.value)}
+              placeholder="What does your group want to achieve? You can change this later."
+            />
+          </Field>
+          <div className="">
             <Field label="Tone & themes">
-              <input value={config.tone} maxLength={300} onChange={(e) => change('tone', e.target.value)} />
+              <textarea
+                value={config.tone}
+                rows={4}
+                maxLength={1000}
+                onChange={(e) => change('tone', e.target.value)}
+              />
             </Field>
             <Field label="GM output language">
               <select
@@ -762,6 +781,7 @@ function Join({ code, me }: { code: string; me: Me }) {
         <Users size={45} strokeWidth={1} />
       </div>
       <ErrorBox error={error} />
+
       <ProfileAccess name={me.name} />
       {invite && (
         <>
@@ -1180,7 +1200,11 @@ function MemberCard({
   onActive,
   onHelpUp,
   helpDisabled = false,
+  factions = [],
+  dutch = false,
 }: {
+  factions?: PublicFaction[];
+  dutch?: boolean;
   member: Member;
   ready: boolean;
   current: boolean;
@@ -1193,6 +1217,7 @@ function MemberCard({
   const state = member.state;
   const dead = isDead(state);
   const downed = isDowned(state);
+  const incapacitated = incapacitatingCondition(state);
   return (
     <article
       className={`member-card ${!member.active || dead ? 'sitting-out' : ''} ${downed ? 'downed' : ''}`}
@@ -1226,9 +1251,11 @@ function MemberCard({
                     ? 'Sitting out'
                     : !current
                       ? 'Next turn'
-                      : ready
-                        ? 'Action submitted'
-                        : 'Considering…'}
+                      : incapacitated
+                        ? `${incapacitated} · turn skipped automatically`
+                        : ready
+                          ? 'Action submitted'
+                          : 'Considering…'}
         </span>
       </div>
       <div className="hp-track">
@@ -1290,6 +1317,7 @@ function MemberCard({
         <div className="member-detail">
           <p>{member.character.appearance}</p>
           <p>{member.character.background}</p>
+          <CharacterFactions member={member} factions={factions} dutch={dutch} />
           <h4>Traits</h4>
           {member.character.traits.map((t) => (
             <p className="ability-detail" key={t.id}>
@@ -1339,81 +1367,118 @@ function MemberCard({
   );
 }
 
-function WorldStatus({ snapshot: s, onTarget }: { snapshot: Snapshot; onTarget?: (name: string) => void }) {
-  const encounter = s.scene.encounter;
+function WorldStatus({
+  snapshot: s,
+  onTarget,
+  memberId,
+}: {
+  snapshot: Snapshot;
+  onTarget?: (name: string) => void;
+  memberId?: string;
+}) {
+  const scene = memberId ? memberScene(s.scene, memberId) : s.scene;
+  const places = memberId
+    ? [scene]
+    : [
+        ...new Set(
+          s.members
+            .filter((member) => member.active)
+            .map((member) => s.scene.memberLocations?.[member.id] ?? s.scene.location.id),
+        ),
+      ].map((locationId) => placeScene(s.scene, locationId));
+  const names = knownLocations(s.scene);
+  const split =
+    new Set(
+      s.members
+        .filter((member) => member.active)
+        .map((member) => s.scene.memberLocations?.[member.id] ?? s.scene.location.id),
+    ).size > 1;
   return (
     <div className="world-status">
       <div className="location-banner">
-        <span className="eyebrow">CURRENT LOCATION</span>
-        <h3>{s.scene.location.name}</h3>
-        <p>{s.scene.location.atmosphere || s.config.premise}</p>
+        <span className="eyebrow">
+          {split ? 'CURRENT SCENE · PARTY SPLIT' : 'CURRENT LOCATION'} · {scene.location.name}
+        </span>
+        {/* <h3>{s.scene.location.name}</h3>
+        <p>{s.scene.location.atmosphere || s.config.premise}</p> */}
         <small>
           {s.scene.encounters} encounters completed
-          {s.scene.location.hazard && ` · ${s.scene.location.hazard}`}
+          {scene.location.hazard && ` · ${scene.location.hazard}`}
         </small>
+        {split &&
+          s.members
+            .filter((member) => member.active)
+            .map((member) => (
+              <p className="small" key={member.id}>
+                {member.character.name}:{' '}
+                {names[s.scene.memberLocations?.[member.id] ?? ''] ?? s.scene.location.name}
+              </p>
+            ))}
       </div>
-      {encounter && (
-        <section className="combat-panel">
-          <div className="section-heading">
-            <h3>
-              <Swords size={16} />{' '}
-              {encounter.victory
-                ? 'Encounter won'
-                : encounter.escaped
-                  ? 'The party escaped'
-                  : `Combat · Round ${encounter.round}`}
-            </h3>
-            <Badge>{encounter.victory ? 'Loot available' : 'Initiative order'}</Badge>
-          </div>
-          <div className="initiative-order">
-            {encounter.initiative.map((actor, i) => (
-              <span key={actor.id}>
-                {i + 1}.{' '}
-                {s.members.find((m) => m.id === actor.id)?.character.name ??
-                  encounter.enemies.find((e) => e.id === actor.id)?.name}{' '}
-                ({actor.total})
-              </span>
-            ))}
-          </div>
-          <div className="enemy-list">
-            {encounter.enemies.map((e) => (
-              <article
-                key={e.id}
-                role={onTarget ? 'button' : undefined}
-                tabIndex={onTarget && e.hp > 0 && !e.withdrawn ? 0 : undefined}
-                aria-label={onTarget ? `Add ${e.name} to your action` : undefined}
-                aria-disabled={onTarget && (e.hp === 0 || !!e.withdrawn)}
-                onClick={() => e.hp > 0 && !e.withdrawn && onTarget?.(e.name)}
-                onKeyDown={(event) => {
-                  if (onTarget && e.hp > 0 && !e.withdrawn && ['Enter', ' '].includes(event.key)) {
-                    event.preventDefault();
-                    onTarget(e.name);
-                  }
-                }}
-              >
-                <span className="eyebrow">{e.tier}</span>
-                <b>{e.name}</b>
-                <p>{e.description}</p>
-                <span>
-                  {e.withdrawn ? 'Withdrawn · ' : ''}HP {e.hp}/{e.maxHp} · Defense{' '}
-                  {e.defense - (e.conditions?.includes('Chilled') ? 2 : 0)} · Attack{' '}
-                  {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0) >= 0 ? '+' : ''}
-                  {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0)} · Damage {e.damage}
+      {places.filter(combatActive).map((place) => {
+        const encounter = place.encounter!;
+        return (
+          <section
+            className="combat-panel"
+            key={place.location.id}
+            aria-label={`Combat at ${place.location.name}`}
+          >
+            <div className="section-heading">
+              <h3>
+                <Swords size={16} /> {`Combat · Round ${encounter.round}`}
+              </h3>
+              <Badge>{place.location.name} · Initiative order</Badge>
+            </div>
+            <div className="initiative-order">
+              {encounter.initiative.map((actor, i) => (
+                <span key={actor.id}>
+                  {i + 1}.{' '}
+                  {s.members.find((m) => m.id === actor.id)?.character.name ??
+                    encounter.enemies.find((e) => e.id === actor.id)?.name}{' '}
+                  ({actor.total})
                 </span>
-                {!!e.conditions?.length && (
-                  <div className="conditions">
-                    {e.conditions.map((condition) => (
-                      <span key={condition} title={conditionDescription(condition)}>
-                        {condition} · {e.conditionTurns?.[condition] ?? conditionDuration(condition)} turns
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
+              ))}
+            </div>
+            <div className="enemy-list">
+              {encounter.enemies.map((e) => (
+                <article
+                  key={e.id}
+                  role={onTarget ? 'button' : undefined}
+                  tabIndex={onTarget && e.hp > 0 && !e.withdrawn ? 0 : undefined}
+                  aria-label={onTarget ? `Add ${e.name} to your action` : undefined}
+                  aria-disabled={onTarget && (e.hp === 0 || !!e.withdrawn)}
+                  onClick={() => e.hp > 0 && !e.withdrawn && onTarget?.(e.name)}
+                  onKeyDown={(event) => {
+                    if (onTarget && e.hp > 0 && !e.withdrawn && ['Enter', ' '].includes(event.key)) {
+                      event.preventDefault();
+                      onTarget(e.name);
+                    }
+                  }}
+                >
+                  <span className="eyebrow">{e.tier}</span>
+                  <b>{e.name}</b>
+                  <p>{e.description}</p>
+                  <span>
+                    {e.withdrawn ? 'Withdrawn · ' : ''}HP {e.hp}/{e.maxHp} · Defense{' '}
+                    {e.defense - (e.conditions?.includes('Chilled') ? 2 : 0)} · Attack{' '}
+                    {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0) >= 0 ? '+' : ''}
+                    {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0)} · Damage {e.damage}
+                  </span>
+                  {!!e.conditions?.length && (
+                    <div className="conditions">
+                      {e.conditions.map((condition) => (
+                        <span key={condition} title={conditionDescription(condition)}>
+                          {condition} · {e.conditionTurns?.[condition] ?? conditionDuration(condition)} turns
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -1526,9 +1591,15 @@ function CharacterControls({
   const [rewardBusy, setRewardBusy] = useState(false);
   const manage = (body: unknown) => command('character', body);
   const state = member.state;
-  const inCombat = isInCombat(s.scene, state);
+  const localScene = memberScene(s.scene, member.id);
+  const inCombat = isInCombat(localScene, state);
+  const incapacitated = incapacitatingCondition(state);
   const downedAllies = s.members.filter(
-    (ally) => ally.id !== member.id && isDowned(ally.state) && canInteract(s.scene, state, ally.state),
+    (ally) =>
+      ally.id !== member.id &&
+      isDowned(ally.state) &&
+      memberScene(s.scene, ally.id).location.id === localScene.location.id &&
+      canInteract(localScene, state, ally.state),
   );
   const locked =
     busy ||
@@ -1564,6 +1635,11 @@ function CharacterControls({
     );
   return (
     <div className="character-controls">
+      <CharacterFactions
+        member={member}
+        factions={s.factions ?? []}
+        dutch={s.config.language === 'Nederlands'}
+      />
       {!state.equipmentChosen && (
         <section>
           <CharacterSheet character={member.character} />
@@ -1635,7 +1711,7 @@ function CharacterControls({
         inCombat={!!inCombat}
         selected={selectedAbility}
         onSelect={onAbilitySelect}
-        disabled={locked || state.pendingLevelUps > 0 || !state.equipmentChosen}
+        disabled={locked || !!incapacitated || state.pendingLevelUps > 0 || !state.equipmentChosen}
       />
       {downedAllies.length > 0 && s.status === 'active' && (
         <section>
@@ -1656,11 +1732,13 @@ function CharacterControls({
               ? 'Saving your changes…'
               : s.status === 'archived' || s.status === 'ended'
                 ? 'Healing is unavailable after this run.'
-                : s.turn && s.turn.phase !== 'collecting'
-                  ? 'Healing is locked while this round finishes.'
-                  : s.turn?.actions.some((action) => action.memberId === member.id)
-                    ? 'Your action is already submitted.'
-                    : ''
+                : incapacitated
+                  ? `You cannot act while ${incapacitated}. Your turn is skipped automatically.`
+                  : s.turn && s.turn.phase !== 'collecting'
+                    ? 'Healing is locked while this round finishes.'
+                    : s.turn?.actions.some((action) => action.memberId === member.id)
+                      ? 'Your action is already submitted.'
+                      : ''
           }
           lockReason={
             busy || rewardBusy
@@ -1676,16 +1754,6 @@ function CharacterControls({
                       : ''
           }
         />
-      )}
-      {s.scene.safeRest && !inCombat && (
-        <Button
-          secondary
-          disabled={locked || state.restedEncounter === s.scene.encounters}
-          onClick={() => manage({ type: 'rest' })}
-        >
-          <Moon size={15} />
-          Safe rest · restore 25% HP
-        </Button>
       )}
     </div>
   );
@@ -1783,6 +1851,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [goalDraft, setGoalDraft] = useState('');
+  const [editingGoal, setEditingGoal] = useState(false);
   const narration = useNarration(s?.config.language ?? 'English', !!s?.isHost || screen);
   useEffect(() => {
     let events: EventSource | undefined;
@@ -1837,15 +1907,19 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
       </div>
     );
   const myCharacter = s.members.find((m) => m.id === s.myMemberId);
+  const localScene = myCharacter ? memberScene(s.scene, myCharacter.id) : s.scene;
   const turn = s.turn;
   const mine = turn?.actions.find((a) => a.memberId === s.myMemberId);
+  const incapacitated = myCharacter && incapacitatingCondition(myCharacter.state);
   const canAct =
     !!s.myMemberId &&
     turn?.roster.includes(s.myMemberId) &&
     turn.phase === 'collecting' &&
     !mine?.supportAction &&
+    !mine?.gathering &&
     !!myCharacter &&
     myCharacter.state.hp > 0 &&
+    !incapacitated &&
     myCharacter.state.pendingLevelUps === 0 &&
     myCharacter.state.equipmentChosen;
   const latest = s.history.at(-1);
@@ -1860,9 +1934,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     canAct &&
     !mine &&
     !busy &&
-    !!s.scene.encounter &&
-    !s.scene.encounter.victory &&
-    !s.scene.encounter.escaped;
+    !!myCharacter &&
+    isInCombat(localScene, myCharacter.state);
   function insertTarget(name: string) {
     if (!canTarget) return;
     const cursor = actionInput.current?.selectionStart ?? action.length;
@@ -1883,8 +1956,13 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
       actionInput.current?.setSelectionRange(position, position);
     });
   }
-  const submitted = turn?.actions.length ?? 0;
-  const expected = turn?.roster.length ?? 0;
+  const required =
+    turn?.roster.filter(
+      (memberId) =>
+        !s.members.some((member) => member.id === memberId && incapacitatingCondition(member.state)),
+    ) ?? [];
+  const submitted = turn?.actions.filter((action) => required.includes(action.memberId)).length ?? 0;
+  const expected = required.length;
   const host = s.isHost && !screen;
   const partyOrigin = s.partyOrigins?.[0] ?? location.origin;
   const joinLink = `${partyOrigin}/join/${s.inviteCode}`;
@@ -1919,8 +1997,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           <span className="eyebrow">
             {s.config.provider === 'practice' ? 'PRACTICE TABLE · SCRIPTED, NO AI' : 'YOUR SHARED ADVENTURE'}
           </span>
-          <h1>{s.config.name}</h1>
-          <p>{s.config.setting}</p>
+          {/* <h1>{s.config.name}</h1>
+          <p>{s.config.setting}</p> */}
         </div>
         <div className="campaign-tools">
           {host && (
@@ -1949,6 +2027,51 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
         </div>
       </div>
       <ErrorBox error={error} />
+      {(s.config.partyGoal || host) && (
+        <section className="form-panel" aria-label="Party goal">
+          <b>Party goal</b>
+          {editingGoal ? (
+            <form
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (await command('goal', { partyGoal: goalDraft })) setEditingGoal(false);
+              }}
+            >
+              <label className="field">
+                <span>Your group's goal (optional)</span>
+                <textarea
+                  value={goalDraft}
+                  maxLength={1000}
+                  rows={2}
+                  onChange={(event) => setGoalDraft(event.target.value)}
+                />
+              </label>
+              <div className="button-row">
+                <Button disabled={busy || (!!turn && turn.phase !== 'collecting')}>Save goal</Button>
+                <Button type="button" secondary onClick={() => setEditingGoal(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <p>{s.config.partyGoal || 'Your group can choose a shared purpose whenever it wants.'}</p>
+              {host && (
+                <Button
+                  secondary
+                  disabled={busy || (!!turn && turn.phase !== 'collecting')}
+                  onClick={() => {
+                    setGoalDraft(s.config.partyGoal ?? '');
+                    setEditingGoal(true);
+                  }}
+                >
+                  {s.config.partyGoal ? 'Edit party goal' : 'Set party goal'}
+                </Button>
+              )}
+            </>
+          )}
+        </section>
+      )}
       {turn?.phase === 'failed' && !viewingCurrent && (
         <div role="alert" className="button-row">
           <span>The current turn is on hold. Your actions and dice are saved.</span>
@@ -2003,6 +2126,26 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
               <p>
                 You control <b>{myCharacter.character.name}</b>. Regenerating replaces your starting equipment
                 and also saves your library template.
+              </p>
+              <label className="faction-preference">
+                <input
+                  type="checkbox"
+                  checked={myCharacter.state.factionConnectionPreference !== 'unaffiliated'}
+                  disabled={busy}
+                  onChange={(event) =>
+                    command('faction-preference', {
+                      preference: event.target.checked ? 'allow' : 'unaffiliated',
+                    })
+                  }
+                />
+                {s.config.language === 'Nederlands'
+                  ? 'Een mogelijke factieconnectie toestaan'
+                  : 'Allow a possible starting faction connection'}
+              </label>
+              <p className="small">
+                {s.config.language === 'Nederlands'
+                  ? 'Ongeveer 25% kans op een passende connectie. Expliciete connecties uit je achtergrond blijven gelden.'
+                  : 'A 25% chance of a fitting past connection. Explicit connections in your background still apply.'}
               </p>
               <Button secondary disabled={busy} onClick={() => setEditing(!editing)}>
                 Review my character
@@ -2183,14 +2326,28 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           </div>
           {tab === 'journal' ? (
             <div className="journal">
-              {s.journal.length ? (
-                s.journal.map((j, i) => (
-                  <article key={i}>
-                    <span className="eyebrow">{j.kind}</span>
-                    <h3>{j.name}</h3>
-                    <p>{j.detail}</p>
-                  </article>
-                ))
+              {(s.factions ?? []).map((faction) => (
+                <FactionCard
+                  key={faction.id}
+                  faction={faction}
+                  members={s.members}
+                  dutch={s.config.language === 'Nederlands'}
+                />
+              ))}
+              {s.journal.length || s.factions?.length ? (
+                s.journal
+                  .filter(
+                    (entry) =>
+                      entry.kind !== 'faction' || !s.factions?.some((faction) => faction.name === entry.name),
+                  )
+                  .map((j, i) => (
+                    <article key={i}>
+                      <span className="eyebrow">{j.kind}</span>
+                      <h3>{j.name}</h3>
+                      <p>{j.detail}</p>
+                      {j.itemStatus && <p className="small">{j.itemStatus}</p>}
+                    </article>
+                  ))
               ) : (
                 <div className="large-empty">
                   <Feather size={32} />
@@ -2201,7 +2358,17 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
             </div>
           ) : (
             <>
-              <WorldStatus snapshot={s} onTarget={canTarget ? insertTarget : undefined} />
+              {viewingCurrent ? (
+                <WorldStatus
+                  snapshot={s}
+                  memberId={!screen ? (s.myMemberId ?? undefined) : undefined}
+                  onTarget={canTarget ? insertTarget : undefined}
+                />
+              ) : (
+                <p className="small">
+                  Viewing an earlier turn. Equipment and player controls below apply to the current situation.
+                </p>
+              )}
               {s.status === 'lobby' && (
                 <div className="lobby-scene">
                   <div className="lobby-art">
@@ -2360,6 +2527,22 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       <Check size={15} />
                     </div>
                   ))}
+                  {!!turn.factionChanges?.length && (
+                    <div className="turn-faction-changes">
+                      <b>
+                        {s.config.language === 'Nederlands'
+                          ? 'Reputatieveranderingen'
+                          : 'Reputation changes this turn'}
+                      </b>
+                      {turn.factionChanges.map((change, index) => (
+                        <p key={index}>
+                          {s.factions?.find((faction) => faction.id === change.factionId)?.name}:{' '}
+                          {change.characterName} · {change.amount >= 0 ? '+' : ''}
+                          {change.amount} ({change.before} → {change.after}). {change.reason}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   {!!turn.equipmentChanges?.length && (
                     <div className="turn-equipment-changes">
                       <b>Equipment changes this turn</b>
@@ -2461,13 +2644,17 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     }}
                   >
                     <label htmlFor="action-input">
-                      {mine?.supportAction
-                        ? 'Helping your party uses your turn. You can cancel while the party decides.'
-                        : mine
-                          ? 'Your action is submitted. Cancel it before rewriting to stop the party from advancing.'
-                          : 'What does your character do?'}
+                      {incapacitated
+                        ? `You are ${incapacitated}. Your turn is skipped automatically. No action is needed; the party does not have to wait for you.`
+                        : mine?.gathering
+                          ? 'You are joining the gathering. Travel uses your whole turn; you can cancel while the party decides.'
+                          : mine?.supportAction
+                            ? 'Helping your party uses your turn. You can cancel while the party decides.'
+                            : mine
+                              ? 'Your action is submitted. Cancel it before rewriting to stop the party from advancing.'
+                              : 'What does your character do?'}
                     </label>
-                    {abilityName && !mine?.supportAction && (
+                    {abilityName && !mine?.supportAction && !mine?.gathering && (
                       <p className="selected-ability">
                         Using <b>{abilityName}</b>. Describe the situation and your intended target below.
                         <button
@@ -2485,7 +2672,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       id="action-input"
                       aria-label="Your action"
                       rows={3}
-                      value={mine?.supportAction ? mine.text : action}
+                      value={mine?.supportAction || mine?.gathering ? mine.text : action}
                       onChange={(e) => setAction(e.target.value)}
                       maxLength={2000}
                       disabled={!canAct || busy}
@@ -2505,11 +2692,11 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                           <Button
                             type="button"
                             secondary
-                            disabled={busy}
+                            disabled={busy || !!incapacitated}
                             onClick={async () => {
                               const updated = await command('action/cancel', { turnId: turn.id });
                               if (updated) {
-                                if (!action.trim() || mine.supportAction) setAction(mine.text);
+                                if (!mine.gathering && (!action.trim() || mine.supportAction)) setAction(mine.text);
                                 setAbilityName(mine.abilityName ?? null);
                               }
                             }}
@@ -2537,6 +2724,23 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           )}
         </section>
         <aside className="party-column">
+          {s.status !== 'lobby' && (
+            <Gathering
+              snapshot={s}
+              canAct={!!canAct}
+              busy={busy}
+              controls={!!(viewingCurrent && !screen && myCharacter)}
+              command={command}
+            />
+          )}
+          {s.status !== 'lobby' && (
+            <WorldMap
+              scene={s.scene}
+              members={s.members}
+              historical={!viewingCurrent}
+              dutch={s.config.language === 'Nederlands'}
+            />
+          )}
           <div className="party-heading">
             <h3>
               <Users size={17} />
@@ -2554,6 +2758,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
             <MemberCard
               key={m.id}
               member={m}
+              factions={s.factions}
+              dutch={s.config.language === 'Nederlands'}
               ready={!!turn?.actions.some((a) => a.memberId === m.id)}
               current={s.status === 'lobby' || !!turn?.roster.includes(m.id)}
               host={host}

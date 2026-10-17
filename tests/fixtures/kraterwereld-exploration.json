@@ -1,0 +1,1072 @@
+{
+  "7": {
+    "scene": {
+      "location": {
+        "name": "Ribbenmeer",
+        "atmosphere": "Een zwarte teeroever glimt onder reusachtige ribben; zure motregen sist op kale delen, terwijl de ribben een smalle strook beschutting vormen. Aan de overkant rijst dichte jungle op.",
+        "hazard": "De zure regen tast onbeschermde oppervlakken aan; onder de ribben is er plaatselijke beschutting.",
+        "id": "8fb06a13-77e6-4126-83e4-7bbb27f71b73"
+      },
+      "worldMap": {
+        "nodes": {
+          "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2": {
+            "id": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "name": "Een continent-grote krater, met een dikke meteoriet in het midden. Binnenin de krater bevinden zich meren van teer. Grote stukken dichte jungle ook, prehistorische flora en fauna, magische kristalen. De meteoriet die gevallen is was magisch (warpstone). Reuzen botten. Zure regen. Mutanten en niet-mutanten (uit bunkers) samenleving. Archeologen.",
+            "visited": true
+          },
+          "b96e9b5d-4af0-43e1-872f-11b90dd31504": {
+            "id": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+            "name": "Jungle-afdaling",
+            "visited": false
+          },
+          "8fb06a13-77e6-4126-83e4-7bbb27f71b73": {
+            "id": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+            "name": "Ribbenmeer",
+            "visited": true
+          },
+          "cfefc8e0-d750-4998-b770-d676fea34996": {
+            "id": "cfefc8e0-d750-4998-b770-d676fea34996",
+            "name": "Rotsrichel",
+            "visited": false
+          }
+        },
+        "connections": [
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+            "label": "Afdaling door de natte varens",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+            "label": "Randpad langs de reusachtige ribben",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "cfefc8e0-d750-4998-b770-d676fea34996",
+            "label": "Smalle richel boven het groen",
+            "blocked": false,
+            "bidirectional": true
+          }
+        ]
+      },
+      "memberLocations": {
+        "5084d08e-ee6d-4a2b-b45e-1d1ab184472b": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+        "6980619e-5620-4d36-84e8-ff7109a6e24e": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+        "0f540768-3eda-4b6a-b583-be244eb3587b": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+        "2dd523b6-8ed1-469d-a390-a9d028ee5e37": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+        "b0a19962-c09e-4f00-a0d8-146dfe53a688": "8fb06a13-77e6-4126-83e4-7bbb27f71b73"
+      },
+      "searchedLoot": {
+        "ribbenmeer:sporenonderzoek": "Afgeworpen schaalplaat"
+      },
+      "encounter": null,
+      "encounters": 0,
+      "loot": [],
+      "lethalWarning": null,
+      "places": {
+        "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2": {
+          "location": {
+            "name": "Een continent-grote krater, met een dikke meteoriet in het midden. Binnenin de krater bevinden zich meren van teer. Grote stukken dichte jungle ook, prehistorische flora en fauna, magische kristalen. De meteoriet die gevallen is was magisch (warpstone). Reuzen botten. Zure regen. Mutanten en niet-mutanten (uit bunkers) samenleving. Archeologen.",
+            "atmosphere": "",
+            "hazard": "",
+            "id": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2"
+          },
+          "encounter": null,
+          "loot": []
+        }
+      }
+    },
+    "turn": {
+      "id": "47882774-e282-4c44-a327-5638c5ecf870",
+      "number": 7,
+      "phase": "adjudicating",
+      "actions": [
+        {
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "text": "Ik ga richting de rotsrichel",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:23:33.767Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "text": "Ik loop om het meer heen naar de andere kant van het meer",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:23:39.141Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "text": "Ik rijs naar de rotsrichel",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:23:55.944Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "text": "Ik volg kras.",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:24:51.146Z",
+          "acceptsLethalRisk": false
+        }
+      ],
+      "rolls": []
+    },
+    "members": [
+      {
+        "id": "5084d08e-ee6d-4a2b-b45e-1d1ab184472b",
+        "name": "Bingus"
+      },
+      {
+        "id": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+        "name": "Kras"
+      },
+      {
+        "id": "0f540768-3eda-4b6a-b583-be244eb3587b",
+        "name": "Thanquol"
+      },
+      {
+        "id": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+        "name": "Roberto inspecto"
+      },
+      {
+        "id": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+        "name": "Dr. Moodswinger"
+      }
+    ],
+    "adjudication": {
+      "version": 2,
+      "turnId": "47882774-e282-4c44-a327-5638c5ecf870",
+      "actions": [
+        {
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "status": "blocked",
+          "basis": "none",
+          "fact": "Roberto blijft bij het Ribbenmeer; de rotsrichel blijft buiten de bekende route vanaf deze plek.",
+          "reason": "Er is geen bekende verbinding van het Ribbenmeer naar de rotsrichel.",
+          "receiptRefs": [],
+          "eventIds": ["turn7:roberto-route"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "blocked",
+              "basis": "none",
+              "fact": "Roberto blijft aan de oever van het Ribbenmeer; de rotsrichel is vanaf hier niet via een bekende route bereikbaar.",
+              "reason": "De bekende verbinding naar de rotsrichel begint bij de bunkerhelling. Tussen het Ribbenmeer en die verbinding is geen route vastgesteld.",
+              "receiptRefs": [],
+              "eventIds": ["turn7:roberto-route"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        },
+        {
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "status": "blocked",
+          "basis": "none",
+          "fact": "Kras blijft aan de huidige oever; een route om het meer naar de overzijde is niet bekend.",
+          "reason": "Er is geen vastgelegde verbinding rond het meer naar een andere oever.",
+          "receiptRefs": [],
+          "eventIds": ["turn7:kras-route"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "blocked",
+              "basis": "none",
+              "fact": "Kras blijft aan de huidige oever van het Ribbenmeer; een begaanbare route helemaal rond het meer naar de overzijde is niet vastgesteld.",
+              "reason": "Het meer wordt door ondoorzichtige teer begrensd en de bekende kaart bevat geen verbinding naar een overzijde. De reis eromheen kan daarom niet als een bekende route worden afgelegd.",
+              "receiptRefs": [],
+              "eventIds": ["turn7:kras-route"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        },
+        {
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:0f540768-3eda-4b6a-b583-be244eb3587b",
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "status": "blocked",
+          "basis": "none",
+          "fact": "Thanquol blijft bij het Ribbenmeer; de rotsrichel blijft buiten de bekende route vanaf deze plek.",
+          "reason": "Er is geen bekende verbinding van het Ribbenmeer naar de rotsrichel.",
+          "receiptRefs": [],
+          "eventIds": ["turn7:thanquol-route"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "blocked",
+              "basis": "none",
+              "fact": "Thanquol blijft aan de oever van het Ribbenmeer; de rotsrichel is vanaf hier niet via een bekende route bereikbaar.",
+              "reason": "De bekende verbinding naar de rotsrichel begint bij de bunkerhelling. Tussen het Ribbenmeer en die verbinding is geen route vastgesteld.",
+              "receiptRefs": [],
+              "eventIds": ["turn7:thanquol-route"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        },
+        {
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "status": "blocked",
+          "basis": "none",
+          "fact": "Dr. Moodswinger blijft bij de groep aan de huidige oever van het Ribbenmeer.",
+          "reason": "Kras is niet naar de overzijde verplaatst en er is geen bekende route om het meer.",
+          "receiptRefs": [],
+          "eventIds": ["turn7:doctor-route"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "blocked",
+              "basis": "none",
+              "fact": "Dr. Moodswinger blijft bij de groep aan de huidige oever van het Ribbenmeer; Kras heeft geen route naar de overzijde bereikt.",
+              "reason": "De route die Dr. Moodswinger wil volgen is niet vastgesteld en Kras is niet verplaatst.",
+              "receiptRefs": [],
+              "eventIds": ["turn7:doctor-route"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        }
+      ],
+      "events": [
+        {
+          "id": "turn7:roberto-route",
+          "sequence": 0,
+          "kind": "action",
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "fact": "Roberto blijft bij het Ribbenmeer; vanaf deze plek is geen bekende route naar de rotsrichel vastgesteld.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "blocked"
+        },
+        {
+          "id": "turn7:kras-route",
+          "sequence": 1,
+          "kind": "action",
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "fact": "Kras blijft aan de huidige oever; de kaart toont geen verbinding rond het meer naar de overzijde.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "blocked"
+        },
+        {
+          "id": "turn7:thanquol-route",
+          "sequence": 2,
+          "kind": "action",
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:0f540768-3eda-4b6a-b583-be244eb3587b",
+          "fact": "Thanquol blijft bij het Ribbenmeer; vanaf deze plek is geen bekende route naar de rotsrichel vastgesteld.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "blocked"
+        },
+        {
+          "id": "turn7:doctor-route",
+          "sequence": 3,
+          "kind": "action",
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "actionId": "47882774-e282-4c44-a327-5638c5ecf870:action:b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "fact": "Dr. Moodswinger blijft bij de groep aan de huidige oever; Kras heeft geen route naar de overzijde bereikt.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "blocked"
+        }
+      ],
+      "changes": [],
+      "journal": [],
+      "location": null,
+      "memberLocations": [],
+      "placeUpdates": [],
+      "mapUpdates": {
+        "locations": [],
+        "connections": []
+      },
+      "sceneFocus": "current",
+      "separations": [],
+      "rewards": {
+        "xp": 0,
+        "gold": 0,
+        "reason": "Geen nieuwe ontdekking of voltooide uitdaging."
+      },
+      "factionEffects": []
+    }
+  },
+  "9": {
+    "scene": {
+      "location": {
+        "name": "Bunker 67 — kraterhelling",
+        "atmosphere": "De open bunkeruitgang ligt boven een natte, gebarsten helling. De zure motregen sist op de rots en op de deurplaat; onder de reusachtige ribben ligt het pad terug naar het glimmende Ribbenmeer.",
+        "hazard": "Zure regen tast onbeschermde oppervlakken aan; de open bunkeruitgang en de ribbenrand bieden nabijgelegen beschutting.",
+        "id": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2"
+      },
+      "worldMap": {
+        "nodes": {
+          "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2": {
+            "id": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "name": "Bunker 67 — kraterhelling",
+            "visited": true
+          },
+          "b96e9b5d-4af0-43e1-872f-11b90dd31504": {
+            "id": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+            "name": "Jungle-afdaling",
+            "visited": false
+          },
+          "8fb06a13-77e6-4126-83e4-7bbb27f71b73": {
+            "id": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+            "name": "Ribbenmeer",
+            "visited": true
+          },
+          "cfefc8e0-d750-4998-b770-d676fea34996": {
+            "id": "cfefc8e0-d750-4998-b770-d676fea34996",
+            "name": "Rotsrichel",
+            "visited": false
+          }
+        },
+        "connections": [
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+            "label": "Afdaling door de natte varens",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+            "label": "Randpad langs de reusachtige ribben",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "cfefc8e0-d750-4998-b770-d676fea34996",
+            "label": "Smalle richel boven het groen",
+            "blocked": false,
+            "bidirectional": true
+          }
+        ]
+      },
+      "memberLocations": {
+        "5084d08e-ee6d-4a2b-b45e-1d1ab184472b": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+        "6980619e-5620-4d36-84e8-ff7109a6e24e": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+        "0f540768-3eda-4b6a-b583-be244eb3587b": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+        "2dd523b6-8ed1-469d-a390-a9d028ee5e37": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+        "b0a19962-c09e-4f00-a0d8-146dfe53a688": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2"
+      },
+      "encounter": null,
+      "encounters": 0,
+      "loot": [],
+      "lethalWarning": null,
+      "places": {
+        "8fb06a13-77e6-4126-83e4-7bbb27f71b73": {
+          "location": {
+            "name": "Ribbenmeer",
+            "atmosphere": "Een zwarte teeroever glimt onder reusachtige ribben; zure motregen sist op kale delen, terwijl de ribben een smalle strook beschutting vormen. Aan de overkant rijst dichte jungle op.",
+            "hazard": "De zure regen tast onbeschermde oppervlakken aan; onder de ribben is er plaatselijke beschutting.",
+            "id": "8fb06a13-77e6-4126-83e4-7bbb27f71b73"
+          },
+          "encounter": null,
+          "loot": []
+        }
+      }
+    },
+    "turn": {
+      "id": "08d29139-b64e-4671-a820-7646204c63a6",
+      "number": 9,
+      "phase": "adjudicating",
+      "actions": [
+        {
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "text": "Ik ga naar de jungle",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:39:29.628Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "text": "Ik zoek contact met anderen die nog mogelijke in de bunker zitten",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:40:15.921Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "text": "Ik ga naar de rotsrichel",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:40:26.987Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "text": "Ik loop naar de jungle-afdalinfg toe.",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:41:49.180Z",
+          "acceptsLethalRisk": false
+        }
+      ],
+      "rolls": []
+    },
+    "members": [
+      {
+        "id": "5084d08e-ee6d-4a2b-b45e-1d1ab184472b",
+        "name": "Bingus"
+      },
+      {
+        "id": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+        "name": "Kras"
+      },
+      {
+        "id": "0f540768-3eda-4b6a-b583-be244eb3587b",
+        "name": "Thanquol"
+      },
+      {
+        "id": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+        "name": "Roberto inspecto"
+      },
+      {
+        "id": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+        "name": "Dr. Moodswinger"
+      }
+    ],
+    "adjudication": {
+      "version": 2,
+      "turnId": "08d29139-b64e-4671-a820-7646204c63a6",
+      "actions": [
+        {
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "status": "success",
+          "basis": "routine",
+          "fact": "Kras bereikt via de natte varens de Jungle-afdaling; het dichte bladerdak verbergt wat verderop ligt.",
+          "reason": "De bekende route is zonder obstakel begaanbaar.",
+          "receiptRefs": [],
+          "eventIds": ["evt:kras-jungle"],
+          "intent": "action",
+          "components": {
+            "main": null,
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Kras daalt via het bekende varenspoor af naar de Jungle-afdaling.",
+              "reason": "De zichtbare route vanaf de bunkerhelling is open en bereikbaar.",
+              "receiptRefs": [],
+              "eventIds": ["evt:kras-jungle"]
+            }
+          }
+        },
+        {
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "status": "success",
+          "basis": "routine",
+          "fact": "Roberto roept naar eventuele achterblijvers in Bunker 67; de zure motregen en de open uitgang zijn de enige directe reacties.",
+          "reason": "Contact zoeken kan zonder dat een antwoord of aanwezige overlevende is vastgesteld.",
+          "receiptRefs": [],
+          "eventIds": ["evt:roberto-roep"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Roberto roept vanaf de open bunkeruitgang naar eventuele achterblijvers in Bunker 67.",
+              "reason": "Zijn roep is een haalbare manier om contact te zoeken; er is geen aanwezige luisteraar vastgesteld.",
+              "receiptRefs": [],
+              "eventIds": ["evt:roberto-roep"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        },
+        {
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:0f540768-3eda-4b6a-b583-be244eb3587b",
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "status": "success",
+          "basis": "routine",
+          "fact": "Thanquol bereikt de Rotsrichel boven het groen; de jungle ligt lager en het uitzicht op verdere routes blijft beperkt.",
+          "reason": "De bekende route is begaanbaar; de richel biedt zicht over het bladerdak maar geen zekerheid over het terrein daarachter.",
+          "receiptRefs": [],
+          "eventIds": ["evt:thanquol-richel"],
+          "intent": "action",
+          "components": {
+            "main": null,
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Thanquol volgt het smalle, bekende pad naar de Rotsrichel.",
+              "reason": "De richel is vanaf de bunkerhelling zichtbaar en de opgeslagen verbinding is open.",
+              "receiptRefs": [],
+              "eventIds": ["evt:thanquol-richel"]
+            }
+          }
+        },
+        {
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "status": "success",
+          "basis": "routine",
+          "fact": "Dr. Moodswinger daalt langs de natte varens af en bereikt de Jungle-afdaling; het bladerdak slokt het zicht op de helling op.",
+          "reason": "De bekende route is zonder obstakel begaanbaar.",
+          "receiptRefs": [],
+          "eventIds": ["evt:doctor-jungle"],
+          "intent": "action",
+          "components": {
+            "main": null,
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Dr. Moodswinger loopt via de bekende afdaling naar de Jungle-afdaling.",
+              "reason": "De zichtbare route vanaf de bunkerhelling is open en bereikbaar.",
+              "receiptRefs": [],
+              "eventIds": ["evt:doctor-jungle"]
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "id": "evt:kras-jungle",
+          "sequence": 0,
+          "kind": "action",
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "fact": "Kras volgt de open afdaling door de natte varens en bereikt de Jungle-afdaling.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "movement",
+          "effect": "movement",
+          "result": "success"
+        },
+        {
+          "id": "evt:roberto-roep",
+          "sequence": 1,
+          "kind": "action",
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "fact": "Roberto roept naar eventuele achterblijvers in Bunker 67; er is geen antwoord vastgesteld.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "success"
+        },
+        {
+          "id": "evt:thanquol-richel",
+          "sequence": 2,
+          "kind": "action",
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:0f540768-3eda-4b6a-b583-be244eb3587b",
+          "fact": "Thanquol volgt het open pad en bereikt de Rotsrichel.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "movement",
+          "effect": "movement",
+          "result": "success"
+        },
+        {
+          "id": "evt:doctor-jungle",
+          "sequence": 3,
+          "kind": "action",
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "actionId": "08d29139-b64e-4671-a820-7646204c63a6:action:b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "fact": "Dr. Moodswinger volgt de open afdaling door de natte varens en bereikt de Jungle-afdaling.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "movement",
+          "effect": "movement",
+          "result": "success"
+        },
+        {
+          "id": "evt:party-splits",
+          "sequence": 4,
+          "kind": "world",
+          "memberId": null,
+          "actionId": null,
+          "fact": "De groep is verdeeld over drie plekken: Kras en Dr. Moodswinger zijn samen bij de Jungle-afdaling, Thanquol staat op de Rotsrichel en Roberto blijft bij de open uitgang van Bunker 67.",
+          "receiptRefs": [],
+          "dependsOn": [
+            {
+              "eventId": "evt:kras-jungle",
+              "requires": "success"
+            },
+            {
+              "eventId": "evt:thanquol-richel",
+              "requires": "success"
+            },
+            {
+              "eventId": "evt:doctor-jungle",
+              "requires": "success"
+            }
+          ],
+          "phase": null,
+          "result": null
+        }
+      ],
+      "changes": [],
+      "journal": [
+        {
+          "kind": "location",
+          "name": "Jungle-afdaling",
+          "detail": "Een nat, dichtbegroeid spoor daalt vanaf de bunkerhelling door hoge varens af. Het bladerdak beperkt het zicht; de bekende route terug leidt naar Bunker 67 — kraterhelling."
+        },
+        {
+          "kind": "location",
+          "name": "Rotsrichel",
+          "detail": "Een smalle rotsrichel steekt boven het groen uit. Vanaf hier zijn de bunkerhelling en het bladerdak zichtbaar; terrein verderop blijft grotendeels aan het zicht onttrokken."
+        }
+      ],
+      "location": null,
+      "memberLocations": [
+        {
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "locationId": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+          "movementEventId": "evt:kras-jungle"
+        },
+        {
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "locationId": "cfefc8e0-d750-4998-b770-d676fea34996",
+          "movementEventId": "evt:thanquol-richel"
+        },
+        {
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "locationId": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+          "movementEventId": "evt:doctor-jungle"
+        }
+      ],
+      "placeUpdates": [
+        {
+          "ref": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+          "location": {
+            "name": "Jungle-afdaling",
+            "atmosphere": "Hoge, natte varens sluiten zich om het pad; zure motregen tikt op het bladerdak en bereikt de bodem in dunne druppels.",
+            "hazard": "Dicht gebladerte beperkt het zicht; de terugweg naar de bunkerhelling is bekend."
+          }
+        },
+        {
+          "ref": "cfefc8e0-d750-4998-b770-d676fea34996",
+          "location": {
+            "name": "Rotsrichel",
+            "atmosphere": "Een smalle rotsrichel steekt boven het groene bladerdak uit. Regen strijkt langs het blootliggende gesteente.",
+            "hazard": "De richel is smal en blootgesteld aan zure regen; het uitzicht verderop wordt door het bladerdak beperkt."
+          }
+        }
+      ],
+      "mapUpdates": {
+        "locations": [],
+        "connections": []
+      },
+      "sceneFocus": "current",
+      "separations": [
+        {
+          "memberIds": ["6980619e-5620-4d36-84e8-ff7109a6e24e", "0f540768-3eda-4b6a-b583-be244eb3587b"],
+          "eventId": "evt:party-splits"
+        },
+        {
+          "memberIds": ["b0a19962-c09e-4f00-a0d8-146dfe53a688", "0f540768-3eda-4b6a-b583-be244eb3587b"],
+          "eventId": "evt:party-splits"
+        }
+      ],
+      "rewards": {
+        "xp": 0,
+        "gold": 0,
+        "reason": "Geen nieuwe ontdekking of uitdaging voltooid."
+      },
+      "factionEffects": []
+    }
+  },
+  "10": {
+    "scene": {
+      "location": {
+        "name": "Bunker 67 — kraterhelling",
+        "atmosphere": "De open bunkeruitgang ligt boven een natte, gebarsten helling. De zure motregen sist op de rots en op de deurplaat; onder de reusachtige ribben ligt het pad terug naar het glimmende Ribbenmeer.",
+        "hazard": "Zure regen tast onbeschermde oppervlakken aan; de open bunkeruitgang en de ribbenrand bieden nabijgelegen beschutting.",
+        "id": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2"
+      },
+      "worldMap": {
+        "nodes": {
+          "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2": {
+            "id": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "name": "Bunker 67 — kraterhelling",
+            "visited": true
+          },
+          "b96e9b5d-4af0-43e1-872f-11b90dd31504": {
+            "id": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+            "name": "Jungle-afdaling",
+            "visited": true
+          },
+          "8fb06a13-77e6-4126-83e4-7bbb27f71b73": {
+            "id": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+            "name": "Ribbenmeer",
+            "visited": true
+          },
+          "cfefc8e0-d750-4998-b770-d676fea34996": {
+            "id": "cfefc8e0-d750-4998-b770-d676fea34996",
+            "name": "Rotsrichel",
+            "visited": true
+          }
+        },
+        "connections": [
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+            "label": "Afdaling door de natte varens",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "8fb06a13-77e6-4126-83e4-7bbb27f71b73",
+            "label": "Randpad langs de reusachtige ribben",
+            "blocked": false,
+            "bidirectional": true
+          },
+          {
+            "from": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+            "to": "cfefc8e0-d750-4998-b770-d676fea34996",
+            "label": "Smalle richel boven het groen",
+            "blocked": false,
+            "bidirectional": true
+          }
+        ]
+      },
+      "memberLocations": {
+        "5084d08e-ee6d-4a2b-b45e-1d1ab184472b": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+        "6980619e-5620-4d36-84e8-ff7109a6e24e": "b96e9b5d-4af0-43e1-872f-11b90dd31504",
+        "0f540768-3eda-4b6a-b583-be244eb3587b": "cfefc8e0-d750-4998-b770-d676fea34996",
+        "2dd523b6-8ed1-469d-a390-a9d028ee5e37": "a6fdabe7-b51d-43d7-a7e2-4f1f5b9232d2",
+        "b0a19962-c09e-4f00-a0d8-146dfe53a688": "b96e9b5d-4af0-43e1-872f-11b90dd31504"
+      },
+      "encounter": null,
+      "encounters": 0,
+      "loot": [],
+      "lethalWarning": null,
+      "places": {
+        "8fb06a13-77e6-4126-83e4-7bbb27f71b73": {
+          "location": {
+            "name": "Ribbenmeer",
+            "atmosphere": "Een zwarte teeroever glimt onder reusachtige ribben; zure motregen sist op kale delen, terwijl de ribben een smalle strook beschutting vormen. Aan de overkant rijst dichte jungle op.",
+            "hazard": "De zure regen tast onbeschermde oppervlakken aan; onder de ribben is er plaatselijke beschutting.",
+            "id": "8fb06a13-77e6-4126-83e4-7bbb27f71b73"
+          },
+          "encounter": null,
+          "loot": []
+        },
+        "b96e9b5d-4af0-43e1-872f-11b90dd31504": {
+          "location": {
+            "name": "Jungle-afdaling",
+            "atmosphere": "Hoge, natte varens sluiten zich om het pad; zure motregen tikt op het bladerdak en bereikt de bodem in dunne druppels.",
+            "hazard": "Dicht gebladerte beperkt het zicht; de terugweg naar de bunkerhelling is bekend.",
+            "id": "b96e9b5d-4af0-43e1-872f-11b90dd31504"
+          },
+          "encounter": null,
+          "loot": []
+        },
+        "cfefc8e0-d750-4998-b770-d676fea34996": {
+          "location": {
+            "name": "Rotsrichel",
+            "atmosphere": "Een smalle rotsrichel steekt boven het groene bladerdak uit. Regen strijkt langs het blootliggende gesteente.",
+            "hazard": "De richel is smal en blootgesteld aan zure regen; het uitzicht verderop wordt door het bladerdak beperkt.",
+            "id": "cfefc8e0-d750-4998-b770-d676fea34996"
+          },
+          "encounter": null,
+          "loot": []
+        }
+      }
+    },
+    "turn": {
+      "id": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb",
+      "number": 10,
+      "phase": "adjudicating",
+      "actions": [
+        {
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "text": "Roep luid om te zien of ik iemand tegen kan komen in de jungle.",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:46:39.205Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "text": "Ik ga ook naar jungle om te Zoeken naar sporen naar de meteoriet",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:46:37.867Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "text": "Ik loop verder door de jungle",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:46:47.133Z",
+          "acceptsLethalRisk": false
+        },
+        {
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "text": "Ik probeer een visioen van de meteor op te roepen",
+          "passed": false,
+          "submittedAt": "2026-10-09T20:47:25.748Z",
+          "acceptsLethalRisk": false
+        }
+      ],
+      "rolls": [
+        {
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "stat": "INT",
+          "dc": 15,
+          "reason": "Thanquol probeert bewust een visioen van de meteoriet op te roepen; de kristalgevoeligheid kan houvast bieden, maar zijn eerdere droombeelden zijn geen betrouwbare routekaart.",
+          "mode": "advantage",
+          "circumstances": {
+            "favorable": true,
+            "adverse": false
+          },
+          "lethal": false,
+          "abilityName": null,
+          "assistsMemberId": null,
+          "assistedBy": [],
+          "id": "e16ceea9-c4af-4f7f-8d6d-1358853d6f61",
+          "dice": [11, 11],
+          "modifier": 4,
+          "equipmentBonuses": [
+            {
+              "itemId": "f376b0a8-f7e5-45ab-a90d-66a867a22e1e-starter-3",
+              "name": "Thanquol’s relic 4",
+              "bonus": 1
+            }
+          ],
+          "total": 15,
+          "success": true,
+          "source": "Local OS cryptographic randomness"
+        },
+        {
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "stat": "WIS",
+          "dc": 15,
+          "reason": "Roberto inspecto speurt in de dichte jungle naar sporen die richting de meteoriet wijzen; natte bodem en zuurregen kunnen fijne tekens uitwissen.",
+          "mode": "disadvantage",
+          "circumstances": {
+            "favorable": false,
+            "adverse": true
+          },
+          "lethal": false,
+          "abilityName": null,
+          "assistsMemberId": null,
+          "assistedBy": [],
+          "id": "ea1ca4b9-d4ba-428c-a502-3fefcb06b464",
+          "dice": [5, 4],
+          "modifier": 3,
+          "equipmentBonuses": [],
+          "total": 7,
+          "success": false,
+          "source": "Local OS cryptographic randomness"
+        }
+      ]
+    },
+    "members": [
+      {
+        "id": "5084d08e-ee6d-4a2b-b45e-1d1ab184472b",
+        "name": "Bingus"
+      },
+      {
+        "id": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+        "name": "Kras"
+      },
+      {
+        "id": "0f540768-3eda-4b6a-b583-be244eb3587b",
+        "name": "Thanquol"
+      },
+      {
+        "id": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+        "name": "Roberto inspecto"
+      },
+      {
+        "id": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+        "name": "Dr. Moodswinger"
+      }
+    ],
+    "adjudication": {
+      "version": 2,
+      "turnId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb",
+      "actions": [
+        {
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "status": "success",
+          "basis": "routine",
+          "fact": "Dr. Moodswinger roept luid door de jungle. Zijn stem weerkaatst tussen de natte varens; kleine gevleugelde dieren fladderen op, maar niemand antwoordt.",
+          "reason": "De roep klinkt door het bladerdak en veroorzaakt zichtbare beweging, maar er is geen antwoordende persoon vastgesteld.",
+          "receiptRefs": [],
+          "eventIds": ["outcome:b0a19962-c09e-4f00-a0d8-146dfe53a688"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Dr. Moodswinger roept luid door de jungle. Zijn stem weerkaatst tussen de natte varens; kleine gevleugelde dieren fladderen op, maar niemand antwoordt.",
+              "reason": "De roep klinkt door het bladerdak en veroorzaakt zichtbare beweging, maar er is geen antwoordende persoon vastgesteld.",
+              "receiptRefs": [],
+              "eventIds": ["outcome:b0a19962-c09e-4f00-a0d8-146dfe53a688"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        },
+        {
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "status": "failure",
+          "basis": "check",
+          "fact": "Roberto inspecto vindt in de natte bodem geen betrouwbaar spoor dat richting de meteoriet wijst; de regen heeft fijne afdrukken en groeitekens vervaagd.",
+          "reason": "De WIS-check mislukt; de regen wist juist de subtiele aanwijzingen uit waarop hij zoekt.",
+          "receiptRefs": ["roll:ea1ca4b9-d4ba-428c-a502-3fefcb06b464"],
+          "eventIds": ["check:ea1ca4b9-d4ba-428c-a502-3fefcb06b464"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "failure",
+              "basis": "check",
+              "fact": "Roberto inspecto vindt in de natte bodem geen betrouwbaar spoor dat richting de meteoriet wijst; de regen heeft fijne afdrukken en groeitekens vervaagd.",
+              "reason": "Zijn zoekactie faalt onder de natte omstandigheden; dit sluit andere routes of latere waarnemingen niet uit.",
+              "receiptRefs": ["roll:ea1ca4b9-d4ba-428c-a502-3fefcb06b464"],
+              "eventIds": ["check:ea1ca4b9-d4ba-428c-a502-3fefcb06b464"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        },
+        {
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "status": "success",
+          "basis": "routine",
+          "fact": "Kras verkent verder over de natte jungleafdaling en bereikt binnen dit gebied een beschutte kom, waar de varens uiteenwijken rond een ondiepe modderige doorgang. Dicht groen verbergt wat daarachter ligt.",
+          "reason": "De verkenning volgt het bestaande spoor en verplaatst Kras niet naar een nieuwe geregistreerde plek.",
+          "receiptRefs": [],
+          "eventIds": ["outcome:6980619e-5620-4d36-84e8-ff7109a6e24e"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Kras verkent verder over de natte jungleafdaling en bereikt binnen dit gebied een beschutte kom, waar de varens uiteenwijken rond een ondiepe modderige doorgang. Dicht groen verbergt wat daarachter ligt.",
+              "reason": "Kras volgt het bestaande junglespoor. De verkenning brengt hem tot een opvallende plek binnen de huidige omgeving, maar er is geen aankomst in een nieuwe locatie vastgesteld.",
+              "receiptRefs": [],
+              "eventIds": ["outcome:6980619e-5620-4d36-84e8-ff7109a6e24e"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        },
+        {
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:0f540768-3eda-4b6a-b583-be244eb3587b",
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "status": "success",
+          "basis": "check",
+          "fact": "Thanquol vangt een helder visioen op van een donkere massa diep in de krater, met lichtende kristalflitsen die globaal verder het binnenland in wijzen. Het beeld geeft geen exacte plek of begaanbare route.",
+          "reason": "De INT-check slaagt; de uitgeruste Thanquol’s relic 4 droeg passief bij aan de check.",
+          "receiptRefs": ["roll:e16ceea9-c4af-4f7f-8d6d-1358853d6f61"],
+          "eventIds": ["check:e16ceea9-c4af-4f7f-8d6d-1358853d6f61"],
+          "intent": "action",
+          "components": {
+            "main": {
+              "status": "success",
+              "basis": "check",
+              "fact": "Thanquol vangt een helder visioen op: een donkere massa ligt diep in de krater, en een rij lichtende kristalflitsen wijst globaal verder het binnenland in. Het beeld onthult geen exacte plek of begaanbare route.",
+              "reason": "De kristalresonantie geeft een samenhangend, maar beperkt visioen; zijn uitgeruste reliek hielp bij de INT-check.",
+              "receiptRefs": ["roll:e16ceea9-c4af-4f7f-8d6d-1358853d6f61"],
+              "eventIds": ["check:e16ceea9-c4af-4f7f-8d6d-1358853d6f61"]
+            },
+            "minor": null,
+            "movement": null
+          }
+        }
+      ],
+      "events": [
+        {
+          "id": "check:ea1ca4b9-d4ba-428c-a502-3fefcb06b464",
+          "sequence": 0,
+          "kind": "mechanics",
+          "memberId": "2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:2dd523b6-8ed1-469d-a390-a9d028ee5e37",
+          "fact": "Roberto inspecto: de WIS check mislukt.",
+          "receiptRefs": ["roll:ea1ca4b9-d4ba-428c-a502-3fefcb06b464"],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "failure"
+        },
+        {
+          "id": "check:e16ceea9-c4af-4f7f-8d6d-1358853d6f61",
+          "sequence": 1,
+          "kind": "mechanics",
+          "memberId": "0f540768-3eda-4b6a-b583-be244eb3587b",
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:0f540768-3eda-4b6a-b583-be244eb3587b",
+          "fact": "Thanquol: de INT check slaagt. De uitgeruste Thanquol’s relic 4 draagt passief +1 bij aan deze INT check.",
+          "receiptRefs": ["roll:e16ceea9-c4af-4f7f-8d6d-1358853d6f61"],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "success"
+        },
+        {
+          "id": "outcome:b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "sequence": 2,
+          "kind": "action",
+          "memberId": "b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:b0a19962-c09e-4f00-a0d8-146dfe53a688",
+          "fact": "Dr. Moodswinger roept luid door de jungle. Zijn stem weerkaatst tussen de natte varens; kleine gevleugelde dieren fladderen op, maar niemand antwoordt.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "success"
+        },
+        {
+          "id": "outcome:6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "sequence": 3,
+          "kind": "action",
+          "memberId": "6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "actionId": "abf5d62c-6d27-4546-b6c3-df12af6f6ebb:action:6980619e-5620-4d36-84e8-ff7109a6e24e",
+          "fact": "Kras verkent verder over de natte jungleafdaling en bereikt binnen dit gebied een beschutte kom, waar de varens uiteenwijken rond een ondiepe modderige doorgang. Dicht groen verbergt wat daarachter ligt.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "success"
+        }
+      ],
+      "changes": [],
+      "journal": [
+        {
+          "kind": "fact",
+          "name": "Richtinggevende visioenen",
+          "detail": "Bij een bewust opgeroepen visioen zag Thanquol een donkere massa diep in de krater en lichtende kristalflitsen die globaal verder het binnenland in wezen. Exacte locatie en route blijven onbekend."
+        }
+      ],
+      "location": null,
+      "memberLocations": [],
+      "placeUpdates": [],
+      "mapUpdates": {
+        "locations": [],
+        "connections": []
+      },
+      "sceneFocus": "current",
+      "separations": [],
+      "rewards": {
+        "xp": 15,
+        "gold": 0,
+        "reason": "Thanquols nieuwe, samenhangende visioen levert bruikbare maar onvolledige richtinggevende informatie op over het kraterbinnenland."
+      },
+      "factionEffects": []
+    }
+  }
+}

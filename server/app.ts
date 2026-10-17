@@ -10,6 +10,7 @@ import { localDice } from './random';
 import { campaignLanguageSchema, characterSchema, levelUpChoiceSchema, slots } from '../shared/schema';
 import type { GoogleAuth } from './google';
 import { tokenHash } from './game';
+import type { ModelTraceSink } from './model-log';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -37,12 +38,15 @@ export async function createApp(options: {
   providers?: ProviderFactory;
   partyOrigins?: string[];
   google?: GoogleAuth;
+  modelTrace?: ModelTraceSink;
 }) {
   const app = Fastify({ logger: false, bodyLimit: 100_000 });
   const providers: ProviderFactory =
     options.providers ??
     ((owner, config) =>
-      config.provider === 'practice' ? new PracticeGM() : new ChatGPTGM(options.auth, owner, config.model));
+      config.provider === 'practice'
+        ? new PracticeGM()
+        : new ChatGPTGM(options.auth, owner, config.model, fetch, options.modelTrace));
   const game = new Game(options.db, providers, undefined, () => localDice);
   const streams = new Set<() => void>();
   const requests = new Map<string, { start: number; count: number }>();
@@ -286,6 +290,21 @@ export async function createApp(options: {
     );
     return snap(id, request);
   });
+  app.post('/api/campaigns/:id/gathering', async (request) => {
+    const id = campaignId(request);
+    const { turnId } = z.object({ turnId: z.string().uuid() }).strict().parse(request.body);
+    game.callGathering(id, request.player.id, turnId);
+    return snap(id, request);
+  });
+  app.post('/api/campaigns/:id/gathering/join', async (request) => {
+    const id = campaignId(request);
+    const { turnId, gatheringId } = z
+      .object({ turnId: z.string().uuid(), gatheringId: z.string().uuid() })
+      .strict()
+      .parse(request.body);
+    game.submit(id, request.player.id, turnId, '', false, false, null, null, gatheringId);
+    return snap(id, request);
+  });
   app.post('/api/campaigns/:id/action/cancel', async (request) => {
     const id = campaignId(request);
     const { turnId } = z.object({ turnId: z.string().uuid() }).strict().parse(request.body);
@@ -304,6 +323,15 @@ export async function createApp(options: {
     game.setLanguage(id, request.player.id, language);
     return snap(id, request);
   });
+  app.post('/api/campaigns/:id/goal', async (request) => {
+    const id = campaignId(request);
+    const { partyGoal } = z
+      .object({ partyGoal: z.string().trim().max(1000) })
+      .strict()
+      .parse(request.body);
+    game.setPartyGoal(id, request.player.id, partyGoal);
+    return snap(id, request);
+  });
   app.post('/api/campaigns/:id/member', async (request) => {
     const id = campaignId(request);
     const { memberId, active } = z
@@ -311,6 +339,15 @@ export async function createApp(options: {
       .strict()
       .parse(request.body);
     game.setActive(id, request.player.id, memberId, active);
+    return snap(id, request);
+  });
+  app.post('/api/campaigns/:id/faction-preference', async (request) => {
+    const id = campaignId(request);
+    const { preference } = z
+      .object({ preference: z.enum(['allow', 'unaffiliated']) })
+      .strict()
+      .parse(request.body);
+    game.setFactionPreference(id, request.player.id, preference);
     return snap(id, request);
   });
   app.post('/api/campaigns/:id/replacement', async (request) => {
@@ -323,17 +360,7 @@ export async function createApp(options: {
   app.post('/api/campaigns/:id/character', async (request) => {
     const action = z
       .object({
-        type: z.enum([
-          'starter',
-          'equip',
-          'unequip',
-          'heal',
-          'help-up',
-          'drop',
-          'take',
-          'take-equip',
-          'rest',
-        ]),
+        type: z.enum(['starter', 'equip', 'unequip', 'heal', 'help-up', 'drop', 'take', 'take-equip']),
         itemId: z.string().optional(),
         targetId: z.string().uuid().optional(),
         abilityName: z.string().min(1).max(80).optional(),

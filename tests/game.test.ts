@@ -9,6 +9,7 @@ import { Game, type GameMaster, type GMContext } from '../server/game';
 import {
   templateCharacter,
   combatSchema,
+  enemySchema,
   outcomeSchema,
   type CampaignConfig,
   type Outcome,
@@ -281,8 +282,6 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
     },
     encounter: null,
     loot: [],
-    safeRest: true,
-    usedRest: false,
     lethalWarning: null,
   };
   const oldStats = (value: unknown): unknown => {
@@ -294,8 +293,7 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
       delete result.CON;
       delete result.WIS;
     }
-    if ('restedEncounter' in result) {
-      delete result.restedEncounter;
+    if ('hp' in result && 'conditions' in result) {
       result.restedFloor = 4;
       delete result.downedThisEncounter;
     }
@@ -337,14 +335,13 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
   cleanup.unshift(() => db.close());
   const game = new Game(db, () => ({ resolve: async () => outcome() }));
   const restored = game.snapshot(f.c.id, f.host.id);
-  expect(db.pragma('user_version', { simple: true })).toBe(11);
+  expect(db.pragma('user_version', { simple: true })).toBe(17);
   expect(restored.members[0].state).toMatchObject({
     hp: 7,
     level: 3,
     xp: 42,
     gold: 9,
     stats: { CHA: 5, CON: 5, WIS: 5 },
-    restedEncounter: null,
   });
   expect(restored.scene).toMatchObject({
     location: { name: 'The old forest', atmosphere: 'Drifting mist.', hazard: 'Roots.' },
@@ -358,6 +355,66 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
   await game.idle();
   expect(game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
 });
+it('removes obsolete rest state from existing saves and resumes finalized turns without replaying gameplay', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gather-rest-removal-'));
+  cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+  const filename = join(directory, 'game.sqlite');
+  const practice = new PracticeGM();
+  let interrupt = false;
+  const adjudicate = vi.fn(practice.adjudicate.bind(practice));
+  const provider: GameMaster = {
+    adjudicate,
+    narrate: async (resolution, config) => {
+      if (interrupt) throw new Error('Interrupted narration');
+      return practice.narrate(resolution, config);
+    },
+  };
+  const f = fixture(provider, filename);
+  const turn = await start(f);
+  interrupt = true;
+  f.game.submit(f.c.id, f.p1.id, turn.id, '', true);
+  f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+  await f.game.idle();
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+  const draft = JSON.parse(f.game.pending(f.c.id)!.draft!);
+  expect(draft.resolution).toBeDefined();
+  const members = f.game.members(f.c.id);
+  const history = f.db.prepare("SELECT result,draft FROM turns WHERE phase = 'complete'").all();
+  const legacy = (input: any): any => {
+    if (Array.isArray(input)) return input.map(legacy);
+    if (!input || typeof input !== 'object') return input;
+    const value = Object.fromEntries(Object.entries(input).map(([key, child]) => [key, legacy(child)]));
+    if ('hp' in value && 'inventory' in value) value.restedEncounter = 0;
+    if ('location' in value) value.safeRest = true;
+    if ('encounters' in value) value.usedRest = true;
+    if (typeof value.factualRecap === 'string')
+      value.factualRecap = value.factualRecap.replace(/(Location: [^\n]+)\./, '$1. Safe rest: true.');
+    return value;
+  };
+  for (const member of members)
+    f.db
+      .prepare('UPDATE members SET state = ? WHERE id = ?')
+      .run(JSON.stringify(legacy(member.state)), member.id);
+  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(legacy(scene)), f.c.id);
+  f.db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(JSON.stringify(legacy(draft)), turn.id);
+  f.db.pragma('user_version = 14');
+  const calls = adjudicate.mock.calls.length;
+  f.db.close();
+  const db = openDatabase(filename);
+  cleanup.unshift(() => db.close());
+  const game = new Game(db, () => provider, f.draw);
+  expect(JSON.parse(game.pending(f.c.id)!.draft!)).toEqual(draft);
+  expect(game.members(f.c.id)).toEqual(members);
+  expect(game.snapshot(f.c.id, f.host.id).scene).toEqual(scene);
+  expect(db.prepare("SELECT result,draft FROM turns WHERE phase = 'complete'").all()).toEqual(history);
+  interrupt = false;
+  game.retry(f.c.id, f.host.id);
+  await game.idle();
+  expect(game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
+  expect(adjudicate).toHaveBeenCalledTimes(calls);
+});
+
 async function start(f: ReturnType<typeof fixture>) {
   f.game.start(f.c.id, f.host.id);
   await f.game.idle();
@@ -367,6 +424,165 @@ function submitBoth(f: ReturnType<typeof fixture>, turnId: string) {
   f.game.submit(f.c.id, f.p1.id, turnId, 'Investigate the door.', false);
   f.game.submit(f.c.id, f.p2.id, turnId, 'Watch the road.', false);
 }
+
+it.each(['Stunned', 'Frozen', 'Electrocuted'])(
+  'skips submissions for a %s player while resolving their condition ticks',
+  async (condition) => {
+    const practice = new PracticeGM();
+    const f = fixture({
+      adjudicate: practice.adjudicate.bind(practice),
+      narrate: practice.narrate.bind(practice),
+    });
+    const turn = await start(f);
+    const actor = f.game.members(f.c.id)[0];
+    applyCondition(actor.state, condition);
+    applyCondition(actor.state, 'Burning');
+    actor.state.hp -= 4;
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(actor.state), actor.id);
+    for (const passed of [false, true])
+      expect(() => f.game.submit(f.c.id, f.p1.id, turn.id, 'Attack', passed)).toThrow(
+        'Your turn is skipped automatically',
+      );
+    const potion = actor.state.inventory.find((item) => item.healing > 0)!;
+    expect(() => f.game.manageCharacter(f.c.id, f.p1.id, { type: 'heal', itemId: potion.id })).toThrow(
+      'incapacitated',
+    );
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.c.id, f.host.id);
+    expect(snapshot.history.at(-1)!.id).toBe(turn.id);
+    expect(snapshot.history.at(-1)!.roster).toContain(actor.id);
+    expect(snapshot.history.at(-1)!.actions.map((action) => action.memberId)).toEqual([
+      snapshot.members[1].id,
+    ]);
+    expect(snapshot.turn!.phase).toBe('collecting');
+    expect(snapshot.members[0].state.conditions).not.toContain(condition);
+    expect(snapshot.members[0].state.conditionTurns.Burning).toBe(2);
+    expect(snapshot.members[0].state.hp).toBeLessThan(actor.state.hp);
+    f.game.submit(f.c.id, f.p1.id, snapshot.turn!.id, 'Look around', false);
+    expect(f.game.snapshot(f.c.id, f.p1.id).turn!.actions).toHaveLength(1);
+  },
+);
+
+it('automatically advances a fully incapacitated party until they can act, respecting pause', async () => {
+  const practice = new PracticeGM();
+  const f = fixture({
+    adjudicate: practice.adjudicate.bind(practice),
+    narrate: practice.narrate.bind(practice),
+  });
+  for (const member of f.game.members(f.c.id)) {
+    applyCondition(member.state, 'Stunned');
+    member.state.conditionTurns.Stunned = 2;
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(member.state), member.id);
+  }
+  f.game.pause(f.c.id, f.host.id, true);
+  await start(f);
+  expect(f.game.snapshot(f.c.id, f.host.id).turn).toMatchObject({
+    number: 1,
+    phase: 'collecting',
+    actions: [],
+  });
+  f.game.pause(f.c.id, f.host.id, false);
+  await f.game.idle();
+  const snapshot = f.game.snapshot(f.c.id, f.host.id);
+  expect(snapshot.turn!.error).toBeNull();
+  expect(snapshot.history.map((turn) => turn.number)).toEqual([0, 1, 2]);
+  expect(snapshot.history.slice(1).every((turn) => turn.actions.length === 0)).toBe(true);
+  expect(snapshot.turn).toMatchObject({ number: 3, phase: 'collecting', actions: [] });
+  expect(snapshot.members.every((member) => !member.state.conditions.includes('Stunned'))).toBe(true);
+});
+
+it('recovers readiness after restart without waiting for an incapacitated player', async () => {
+  const practice = new PracticeGM();
+  const f = fixture({
+    adjudicate: practice.adjudicate.bind(practice),
+    narrate: practice.narrate.bind(practice),
+  });
+  const turn = await start(f);
+  f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+  const actor = f.game.members(f.c.id)[0];
+  applyCondition(actor.state, 'Frozen');
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(actor.state), actor.id);
+  const restored = new Game(f.db, () => new PracticeGM(), f.draw);
+  restored.resumeQueued();
+  await restored.idle();
+  expect(restored.snapshot(f.c.id, f.host.id).history.at(-1)!.id).toBe(turn.id);
+  expect(restored.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
+});
+
+it('resolves a combat round with no submissions when the entire party is incapacitated', async () => {
+  const practice = new PracticeGM();
+  const f = fixture({
+    adjudicate: practice.adjudicate.bind(practice),
+    narrate: practice.narrate.bind(practice),
+  });
+  const turn = await start(f);
+  const members = f.game.members(f.c.id);
+  for (const member of members) {
+    applyCondition(member.state, 'Stunned');
+    f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(member.state), member.id);
+  }
+  const scene = JSON.parse(f.game.campaign(f.c.id).scene!);
+  const enemy = enemySchema.parse({
+    id: 'foe',
+    name: 'Gatekeeper',
+    tier: 'normal',
+    hp: 30,
+    defense: 10,
+    attack: 15,
+    damage: '1d4',
+    description: 'A test foe',
+    tactic: 'Guard',
+  });
+  scene.encounter = {
+    enemies: [{ ...enemy, maxHp: 30, initiative: 1 }],
+    initiative: [...members.map((member) => ({ id: member.id, total: 15 })), { id: enemy.id, total: 1 }],
+    round: 1,
+    victory: false,
+    escaped: false,
+  };
+  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
+  f.draw.mockImplementation((sides) => Math.min(12, sides));
+  f.game.resumeQueued();
+  await f.game.idle();
+  const snapshot = f.game.snapshot(f.c.id, f.host.id);
+  expect(snapshot.turn).toMatchObject({ number: 2, phase: 'collecting', error: null });
+  expect(snapshot.history.at(-1)).toMatchObject({ id: turn.id, actions: [] });
+  expect(snapshot.scene.encounter!.round).toBe(2);
+  expect(snapshot.scene.encounter!.enemies[0].hp).toBe(30);
+  expect(snapshot.members.some((member, index) => member.state.hp < members[index].state.hp)).toBe(true);
+  expect(snapshot.members.every((member) => !member.state.conditions.includes('Stunned'))).toBe(true);
+});
+
+it('rejects a legacy false death summary against the final living enemy state', async () => {
+  const f = fixture({
+    resolve: async (context, tools) => {
+      if (!context.turn.number) return outcome();
+      tools.startCombat([
+        {
+          id: 'spider',
+          name: 'Shadow Spider',
+          tier: 'elite',
+          hp: 38,
+          defense: 12,
+          attack: 5,
+          damage: '1d8',
+          description: '',
+          tactic: 'Guard',
+        },
+      ]);
+      return outcome({ summary: 'Shadow Spider is already defeated.' });
+    },
+  });
+  f.draw.mockImplementation((sides) => Math.min(12, sides));
+  const turn = await start(f);
+  submitBoth(f, turn.id);
+  await f.game.idle();
+  const snapshot = f.game.snapshot(f.c.id, f.host.id);
+  expect(snapshot.turn!.phase).toBe('failed');
+  expect(snapshot.turn!.error).toContain('still has 38/38 HP');
+  expect(snapshot.history).toHaveLength(1);
+});
 
 it('allows a legacy encounter introduction at a new location but blocks leaving an ongoing fight', async () => {
   const deck = { name: 'Ship deck', atmosphere: 'Salt and smoke.', hazard: 'Armed defenders.' };
@@ -397,13 +613,13 @@ it('allows a legacy encounter introduction at a new location but blocks leaving 
   await f.game.idle();
   const boarded = f.game.snapshot(f.c.id, f.host.id);
   expect(boarded.turn!.phase).toBe('collecting');
-  expect(boarded.scene.location).toEqual(deck);
+  expect(boarded.scene.location).toMatchObject(deck);
   expect(boarded.scene.encounter).toMatchObject({ round: 1, victory: false });
   submitBoth(f, boarded.turn!.id);
   await f.game.idle();
   const failed = f.game.snapshot(f.c.id, f.host.id);
   expect(failed.turn!.error).toContain('The party cannot leave an active combat');
-  expect(failed.scene.location).toEqual(deck);
+  expect(failed.scene.location).toMatchObject(deck);
 });
 
 it('saves free equipment changes with their turn and includes them once in the summary after a restart and retry', async () => {
@@ -1599,15 +1815,80 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   expect(() => f.game.submit(f.c.id, f.p1.id, next.id, 'Examine again', false, false, ability.name)).toThrow(
     'already been used',
   );
-  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
-  scene.safeRest = true;
-  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
-  f.game.manageCharacter(f.c.id, f.p1.id, { type: 'rest' });
-  expect(f.game.members(f.c.id)[0].state.abilityUses?.[ability.name]).toBe(1);
-  expect(() =>
-    f.game.submit(f.c.id, f.p1.id, next.id, 'Try the spent ability', false, false, ability.name),
-  ).toThrow('already been used');
 });
+
+it.each([2, 12])(
+  'uses an explicitly requested strike on a noncombat obstacle once across retry (die=%i)',
+  async (die) => {
+    const receipts: import('../shared/schema').Roll[] = [];
+    let interrupted = true;
+    const f = fixture({
+      resolve: async (ctx, tools) => {
+        if (!ctx.turn.number) return outcome();
+        const actor = ctx.members[0];
+        const ability = actor.character.abilities[0];
+        const check: Check = {
+          memberId: actor.id,
+          stat: ability.stat,
+          dc: 15,
+          mode: 'normal',
+          lethal: false,
+          reason: 'Apply the saved strike to the weakened hull fastening.',
+          abilityName: ability.name,
+        };
+        if (!ctx.turn.rolls.length) {
+          expect(() => tools({ ...check, stat: ability.stat === 'INT' ? 'STR' : 'INT' })).toThrow(
+            'saved attribute',
+          );
+          expect(() => tools({ ...check, abilityName: null })).toThrow('exactly the ability selected');
+        }
+        receipts.push(tools(check));
+        if (interrupted) throw new Error('Interrupted after obstacle check');
+        return outcome();
+      },
+    });
+    const turn = await start(f);
+    const actor = f.game.members(f.c.id)[0];
+    const ability = actor.character.abilities[0];
+    ability.stat = 'INT';
+    ability.bonus = 2;
+    ability.level = 2;
+    actor.state.stats.INT = 7;
+    f.db
+      .prepare('UPDATE members SET sheet=?,state=? WHERE id=?')
+      .run(JSON.stringify(actor.character), JSON.stringify(actor.state), actor.id);
+    f.draw.mockImplementation(() => die);
+    f.game.submit(
+      f.c.id,
+      f.p1.id,
+      turn.id,
+      `Use ${ability.name} on the weakened hull fastening.`,
+      false,
+      false,
+      ability.name,
+    );
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('failed');
+    expect(receipts[0]).toMatchObject({
+      mode: 'normal',
+      dice: [die],
+      modifier: 5,
+      success: die === 12,
+      abilityName: ability.name,
+    });
+    interrupted = false;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    const after = f.game.snapshot(f.c.id, f.host.id);
+    expect(after.turn?.phase, after.turn?.error ?? '').toBe('collecting');
+    expect(receipts[1]).toEqual(receipts[0]);
+    expect(f.draw).toHaveBeenCalledTimes(1);
+    expect(after.members[0].state.abilityUses?.[ability.name]).toBe(1);
+    expect(after.members[1].state.conditions).toEqual([]);
+    expect(after.scene.encounter).toBeNull();
+  },
+);
 
 it('requires explicit utility selection, rejects the wrong stat, and cancels disadvantage with ability advantage', async () => {
   let memberId = '';
@@ -2954,5 +3235,5 @@ it('removes saved healing types from templates, gear, replacements and pending t
     (db.prepare('SELECT draft FROM turns WHERE id = ?').get('old-healing-history') as { draft: string })
       .draft,
   ).toBe(draft);
-  expect(db.pragma('user_version', { simple: true })).toBe(11);
+  expect(db.pragma('user_version', { simple: true })).toBe(17);
 });

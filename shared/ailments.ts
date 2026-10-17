@@ -36,7 +36,7 @@ export const ailmentRules: Record<
   Stunned: {
     turns: 1,
     damage: 0,
-    mechanic: 'Lose your main action; your minor action remains available.',
+    mechanic: 'Skip submission if already Stunned; a stun during execution blocks only main.',
     remedy: 'An ally can spend their action steadying and helping you regain focus.',
   },
   Weakened: {

@@ -74,7 +74,10 @@ export function tickConditions(member: Member, moving = false): string[] {
     if (condition === 'Downed' || condition === 'Escaped') continue;
     const immune = hasImmunity(character, state, condition);
     state.conditionTurns[condition] = (state.conditionTurns[condition] ?? conditionDuration(condition)) - 1;
-    if (state.conditionTurns[condition] <= 0 || immune) removeCondition(state, condition);
+    if (state.conditionTurns[condition] <= 0 || immune) {
+      removeCondition(state, condition);
+      if (condition === 'Stunned' && !immune) logs.push(`${character.name} is no longer Stunned.`);
+    }
   }
   return logs;
 }
@@ -106,7 +109,11 @@ export function abilityMechanics(ability: Ability): string {
     : ability.cures?.length
       ? ` · Cures ${ability.cures.join(' and ')}`
       : '';
-  return `${effect}${ailmentEffect}${['mend', 'cleanse'].includes(ability.effect) ? ' · In or out of combat' : ''} · Main action`;
+  const obstacle =
+    ability.effect === 'strike'
+      ? ` · Noncombat obstacle: ${ability.stat} check${bonus ? ` + ${bonus}` : ''}, one charge; no automatic advantage or on-hit ailments`
+      : '';
+  return `${effect}${ailmentEffect}${obstacle}${['mend', 'cleanse'].includes(ability.effect) ? ' · In or out of combat' : ''} · Main action`;
 }
 export function abilityPowerSummary(ability: Ability, scores: Record<Stat, number>): string | null {
   if (!['strike', 'mend'].includes(ability.effect)) return null;
@@ -581,7 +588,6 @@ export function initialState(character: Character, seed: string): CharacterState
     bosses: 0,
     deathReason: null,
     downedThisEncounter: false,
-    restedEncounter: null,
   };
   state.hp = state.maxHp = maxHp(character, state);
   if (character.selectedEquipmentIds.length)
@@ -898,8 +904,6 @@ export function initialScene(setting: string): Scene {
     encounter: null,
     loot: [],
     lethalWarning: null,
-    safeRest: false,
-    usedRest: false,
   };
 }
 export type Dice = (
@@ -1104,6 +1108,7 @@ export function rollEnemyLoot(
 }
 
 export type CombatEvent = {
+  locationId?: string;
   presentation?: 'log';
   actorId: string | null;
   phase: 'main' | 'minor' | 'aftermath';
@@ -1121,6 +1126,21 @@ export function runCombat(
 ) {
   if (encounter.victory || encounter.escaped) throw new RuleError('This combat has already ended.');
   const logs: string[] = [];
+  const acted = new Set<string>();
+  const inflict = (target: Enemy | Member, condition: string) => {
+    const state = 'state' in target ? target.state : target;
+    if (
+      !applyCondition(
+        state as ConditionState,
+        condition,
+        'character' in target ? target.character : undefined,
+      )
+    )
+      return;
+    // A one-turn stun inflicted after this actor's slot must survive until the next slot.
+    if (condition === 'Stunned' && state.conditionTurns!.Stunned === 1 && acted.has(target.id))
+      state.conditionTurns!.Stunned = 2;
+  };
   let actorId: string | null = null;
   let phase: CombatEvent['phase'] = 'main';
   const emit = (status: CombatEvent['status'], ...facts: string[]) => {
@@ -1168,7 +1188,7 @@ export function runCombat(
             effect.chance)
       )
         continue;
-      applyCondition(state as ConditionState, effect.ailment);
+      inflict(target, effect.ailment);
       record(
         `${'character' in target ? target.character.name : target.name} becomes ${effect.ailment} from ${item.name}.`,
       );
@@ -1400,7 +1420,7 @@ export function runCombat(
         target.hp > 0 &&
         !target.equipment?.some((gear) => gear.immunities?.includes(ability.inflicts!))
       ) {
-        applyCondition(target as ConditionState, ability.inflicts);
+        inflict(target, ability.inflicts);
         record(`${target.name} becomes ${ability.inflicts} from ${ability.name}.`);
       }
       if (weapon.id === 'natural' && member.character.traits.some((t) => t.lifesteal)) {
@@ -1412,6 +1432,7 @@ export function runCombat(
     } else failed(`${member.character.name} misses ${target.name} with ${weapon.name}.`);
   };
   for (const initiative of encounter.initiative) {
+    acted.add(initiative.id);
     actorId = initiative.id;
     phase = 'main';
     const member = members.find((m) => m.id === initiative.id);
@@ -1475,7 +1496,12 @@ export function runCombat(
       }
       member.state.guarding = false;
       if (!action) {
-        record(`${member.character.name} holds position.`);
+        const incapacitated = incapacitatingCondition(member.state);
+        record(
+          incapacitated
+            ? `${member.character.name} is ${incapacitated} and cannot act.`
+            : `${member.character.name} holds position.`,
+        );
         continue;
       }
       if (action.minor === 'equip') {
@@ -1911,7 +1937,7 @@ export function runCombat(
           if (!target.state.conditions.includes(enemy.onHit)) {
             record(`${target.character.name} becomes ${enemy.onHit} from ${enemy.name}'s attack.`);
           }
-          applyCondition(target.state, enemy.onHit, target.character);
+          inflict(target, enemy.onHit);
         }
         equipmentAilments(enemy.equipment ?? [], weapon, target, false, die === 20);
       } else record(`${enemy.name} misses ${target.character.name}.`);
@@ -1940,7 +1966,10 @@ export function runCombat(
     for (const condition of [...enemy.conditions!]) {
       enemy.conditionTurns![condition] =
         (enemy.conditionTurns![condition] ?? conditionDuration(condition)) - 1;
-      if (enemy.conditionTurns![condition] <= 0) removeCondition(enemy as ConditionState, condition);
+      if (enemy.conditionTurns![condition] <= 0) {
+        removeCondition(enemy as ConditionState, condition);
+        if (condition === 'Stunned') record(`${enemy.name} is no longer Stunned.`);
+      }
     }
   }
   encounter.round++;

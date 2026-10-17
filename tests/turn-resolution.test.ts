@@ -24,8 +24,10 @@ import {
   enemySchema,
   type CampaignConfig,
   type EnvironmentalAction,
+  type Enemy,
 } from '../shared/schema';
 import { applyCondition, baseItem, initialScene, initialState } from '../shared/rules';
+import { occupiedPlaces } from '../shared/locations';
 import type { ChatGPTAuth } from '../server/auth';
 
 const config: CampaignConfig = {
@@ -147,7 +149,6 @@ function proposal(context: GMContext): TurnAdjudication {
       { kind: 'location', name: 'Sanctuary', detail: 'Bronze sun disk; traces of the lost caravan.' },
     ],
     location: null,
-    safeRest: false,
     rewards: {
       xp: context.turn.number ? 10 : 0,
       gold: 0,
@@ -220,6 +221,9 @@ function fixture(overrides: Partial<GameMaster> = {}, databasePath = ':memory:')
     game.start(c.id, host.id);
     await game.idle();
     expect(game.snapshot(c.id, host.id).turn!.phase).toBe('collecting');
+    const scene = game.snapshot(c.id, host.id).scene;
+    scene.encounterRisk = { danger: 'safe', reason: 'The sealed sanctuary has no wandering threats.' };
+    db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), c.id);
   };
   const submit = () => {
     const turn = game.snapshot(c.id, host.id).turn!;
@@ -489,15 +493,418 @@ function resolution(): Extract<TurnResolution, { version: 2 }> {
     changes: [],
     journal: p.journal,
     location: null,
-    safeRest: false,
   };
 }
+
+function survivingSpiderContext() {
+  const c = context();
+  c.turn.actions = [c.turn.actions[0]];
+  c.scene.location.id = randomUUID();
+  const spider: Enemy = {
+    ...enemySchema.parse({
+      id: 'spider',
+      name: 'De Operazangende Schaduwspin',
+      tier: 'elite',
+      hp: 5,
+      defense: 12,
+      attack: 5,
+      damage: '1d8',
+      description: 'A shadow spider.',
+      tactic: 'Guard',
+    }),
+    maxHp: 38,
+    initiative: 19,
+  };
+  c.scene.encounter = { enemies: [spider], round: 7, initiative: [], victory: false, escaped: false };
+  c.combatResult = {
+    encounter: c.scene.encounter,
+    logs: [],
+    characters: [],
+    loot: [],
+    events: [
+      {
+        actorId: c.members[0].id,
+        phase: 'main',
+        status: 'success',
+        fact: `Amon-Sah hits ${spider.name} with a saber for 13.`,
+      },
+    ],
+  };
+  c.receipts = { combat: c.combatResult };
+  const value = proposal(c);
+  value.rewards = { xp: 0, gold: 0, reason: 'No combat victory.' };
+  return { c, value, spider };
+}
+
+it.each(['action', 'component', 'world', 'journal', 'place'] as const)(
+  'rejects a false combat victory in adjudicated %s text before publication',
+  (area) => {
+    const { c, value, spider } = survivingSpiderContext();
+    expect(() => validateAdjudication(c, value)).not.toThrow();
+    const falseDeath = `${spider.name} is verslagen; haar gestolen vioolsnaren liggen op het web.`;
+    if (area === 'action') value.actions[0].fact = falseDeath;
+    if (area === 'component') value.actions[0].components.main!.reason = falseDeath;
+    if (area === 'world') value.events.at(-1)!.fact = 'Haar gestalte lost op; het combat eindigt.';
+    if (area === 'journal') value.journal[0].detail = falseDeath;
+    if (area === 'place')
+      value.placeUpdates = [
+        {
+          ref: c.scene.location.id!,
+          location: {
+            name: c.scene.location.name,
+            atmosphere: 'The web settles.',
+            hazard: 'Er is geen actieve vijand meer; de webvloer hangt boven een diepte.',
+          },
+        },
+      ];
+    expect(() => validateAdjudication(c, value)).toThrow(/still has 5\/38 HP|is still active/);
+  },
+);
+
+it.each(['passage', 'closing', 'summary'] as const)(
+  'rejects a false enemy death in narration %s against frozen final HP',
+  (area) => {
+    const { c, spider } = survivingSpiderContext();
+    const r = resolution();
+    r.placeStates = occupiedPlaces(c.scene);
+    const narration = factualNarration(r, config.language);
+    expect(narration.version).toBe(2);
+    if (narration.version !== 2) throw new Error('Expected version 2.');
+    const falseDeath = `${spider.name} is dead and drops her loot.`;
+    if (area === 'passage') narration.passages[0].text = falseDeath;
+    if (area === 'closing') narration.closing = falseDeath;
+    if (area === 'summary') narration.summary = falseDeath;
+    expect(() => assembleResolvedNarration(r, narration)).toThrow('still has 5/38 HP');
+  },
+);
+
+it.each(['is al verslagen', 'al is verslagen', 'is already defeated'])(
+  'rejects a propagated death claim using %s',
+  (claim) => {
+    const { c, value, spider } = survivingSpiderContext();
+    value.actions[0].components.main!.reason = `${spider.name} ${claim}.`;
+    expect(() => validateAdjudication(c, value)).toThrow('still has 5/38 HP');
+  },
+);
+
+it('distinguishes living enemies, conditional goals, recorded kills and withdrawal victories', () => {
+  const { c, value, spider } = survivingSpiderContext();
+  value.events.at(-1)!.fact =
+    `${spider.name} is not dead. If combat ends, the party can recover the strings.`;
+  expect(() => validateAdjudication(c, value)).not.toThrow();
+  value.events.at(-1)!.fact = `${spider.name} is verslagen.`;
+  spider.withdrawn = true;
+  c.scene.encounter!.victory = true;
+  expect(() => validateAdjudication(c, value)).not.toThrow();
+  value.events.at(-1)!.fact = `${spider.name} is dead.`;
+  expect(() => validateAdjudication(c, value)).toThrow('still has 5/38 HP');
+  spider.hp = 0;
+  expect(() => validateAdjudication(c, value)).not.toThrow();
+});
+
+it('passes compact final enemy HP and combat status into adjudication without reapplying damage', () => {
+  const { c } = survivingSpiderContext();
+  const input = adjudicationInput(c);
+  expect(input.mechanicsTiming).toContain('AFTER');
+  expect(input.combatState[c.scene.location.id!].encounter).toMatchObject({
+    victory: false,
+    escaped: false,
+    enemies: [{ hp: 5, maxHp: 38, withdrawn: false }],
+  });
+});
 function completed(value: unknown) {
   return new Response(
     `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] }] } })}\n\n`,
   );
 }
 const auth = { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth;
+
+it('narrates the whole party after a partially completed investigation instead of falling back to rolls', async () => {
+  const f = fixture();
+  await f.start();
+  let current!: GMContext;
+  let adjudicated!: TurnAdjudication;
+  const story =
+    'Amon-Sah studies the exposed fittings of the sanctuary door, following the worn groove with his fingers. ' +
+    'The inspection reveals how the bronze latch fits its housing, but the sealed interior remains beyond his reach. ' +
+    'Beside him, Zafir al-Raml examines the markings and makes out their pattern. ' +
+    'They now understand the visible mechanism; the inner chamber remains unexplored.';
+  const fetcher = vi.fn(async (_url, init) => {
+    const body = JSON.parse(init!.body as string);
+    const data = JSON.parse(body.input[0].content);
+    if (data.task === 'Narrate the finalized turn.')
+      return completed({
+        version: 2,
+        turnId: data.resolution.turnId,
+        passages: [{ eventIds: data.resolution.events.map((event: any) => event.id), text: story }],
+        closing: '',
+        summary: 'The visible latch is understood; the inner chamber remains unexplored.',
+      });
+    if (data.candidate) return completed({ approved: true, feedback: '' });
+    const value = proposal(current);
+    const actor = value.actions[0];
+    const fact = 'Amon-Sah inspects the exposed latch but cannot inspect the sealed interior.';
+    changeMain(value, actor.memberId, 'partial', fact);
+    value.events.find((event) => event.id === 'act:0')!.effect = 'search';
+    value.events = value.events.filter((event) => event.id !== 'world:discovery');
+    const ally = value.actions[1];
+    const allyMain = ally.components.main!;
+    ally.fact = allyMain.fact = 'Zafir al-Raml reads the visible markings and makes out their pattern.';
+    ally.eventIds.push('act:markings');
+    allyMain.eventIds.push('act:markings');
+    value.events.push({
+      id: 'act:markings',
+      sequence: value.events.length,
+      kind: 'action',
+      memberId: ally.memberId,
+      actionId: ally.actionId,
+      phase: 'main',
+      result: 'success',
+      fact: ally.fact,
+      receiptRefs: allyMain.receiptRefs,
+      dependsOn: [{ eventId: allyMain.eventIds[0], requires: 'success' }],
+    });
+    value.events.push({
+      id: 'world:latch',
+      sequence: value.events.length,
+      kind: 'world',
+      memberId: null,
+      actionId: null,
+      phase: null,
+      result: null,
+      locationRef: current.scene.location.id!,
+      fact: 'The exposed bronze latch fits a worn groove; the sealed interior remains unexplored.',
+      receiptRefs: [],
+      dependsOn: [{ eventId: 'act:0', requires: 'occurrence' }],
+    });
+    actor.intent = 'search';
+    actor.search = {
+      sourceId: 'sanctuary:door',
+      locationId: current.scene.location.id!,
+      informationEventId: 'world:latch',
+      reward: null,
+    };
+    value.journal = [];
+    value.rewards.xp = 0;
+    adjudicated = structuredClone(value);
+    return completed(value);
+  }) as unknown as typeof fetch;
+  const gm = new ChatGPTGM(auth, 'owner', 'model', fetcher);
+  f.provider.adjudicate = async (context, tools) => {
+    tools({
+      memberId: context.turn.actions[1].memberId,
+      stat: 'WIS',
+      dc: 10,
+      mode: 'normal',
+      reason: 'Read the visible markings.',
+      lethal: false,
+    });
+    current = context;
+    return gm.adjudicate(context, tools);
+  };
+  f.provider.narrate = gm.narrate.bind(gm);
+  const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+  f.game.submit(f.c.id, f.p1.id, turn.id, 'Inspect the latch and the sealed interior.', false);
+  f.game.submit(f.c.id, f.p2.id, turn.id, 'Read the markings.', false);
+  await f.game.idle();
+  const snapshot = f.game.snapshot(f.c.id, f.host.id);
+  const done = snapshot.history.at(-1)!;
+  expect(done.id).toBe(turn.id);
+  expect(done.phase, snapshot.turn?.error ?? '').toBe('complete');
+  expect(done.resolution!.actions.map((action) => action.status)).toEqual(['partial', 'success']);
+  expect(done.result!.narration).toBe(story);
+  expect(f.draft(turn.id).adjudicationFallback).toBeUndefined();
+  expect(fetcher).toHaveBeenCalledTimes(3); // Adjudication, narration and fidelity review.
+  expect(done.rolls).toHaveLength(1);
+  expect(f.draw).toHaveBeenCalledTimes(1); // A partial search earns no bonus-loot roll.
+  expect(snapshot.scene.searches!['sanctuary:door']).toMatchObject({ rewardRolled: false });
+
+  const missing = structuredClone(adjudicated);
+  missing.actions[0].search = null;
+  expect(() => validateAdjudication(current, missing)).toThrow('useful information event');
+  const blocked = changeMain(
+    structuredClone(adjudicated),
+    adjudicated.actions[0].memberId,
+    'blocked',
+    'The inspection cannot be performed.',
+  );
+  blocked.actions[0].basis = blocked.actions[0].components.main!.basis = 'none';
+  expect(() => validateAdjudication(current, blocked)).toThrow('resolved noncombat main search action');
+
+  const moved = changeMain(
+    structuredClone(adjudicated),
+    adjudicated.actions[0].memberId,
+    'success',
+    'Amon-Sah finishes inspecting the exposed latch.',
+  );
+  moved.placeUpdates = [
+    { ref: 'new:interior', location: { name: 'Inner chamber', atmosphere: 'Still air.', hazard: '' } },
+  ];
+  moved.memberLocations = [
+    { memberId: moved.actions[0].memberId, locationId: 'new:interior', movementEventId: 'act:0' },
+  ];
+  expect(() => validateAdjudication(current, moved)).toThrow('explicit movement effect');
+});
+
+it.each([
+  { mode: 'advantage' as const, dice: [4, 16], success: true },
+  { mode: 'advantage' as const, dice: [2, 4], success: false },
+  { mode: 'disadvantage' as const, dice: [4, 16], success: false },
+  { mode: 'disadvantage' as const, dice: [12, 16], success: true },
+  { mode: 'normal' as const, dice: [12], success: true },
+])(
+  'preserves a contextual $mode response with success=$success in the existing four requests',
+  async (scenario) => {
+    const f = fixture();
+    const attitude = scenario.mode === 'disadvantage' ? 'supports Flo’s captors' : 'sympathizes with Flo';
+    const background = `The postmoth ${attitude} and recognizes the emblem on Amon-Sah's visible banner.${scenario.mode === 'normal' ? ' A nearby guard inhibits disclosure.' : ''}`;
+    const opening = f.provider.adjudicate!;
+    f.provider.adjudicate = async (context, tools) => {
+      const value = await opening(context, tools);
+      value.journal.push({ kind: 'npc', name: 'Postmoth', detail: background });
+      value.events.push({
+        id: 'world:postmoth',
+        sequence: value.events.length,
+        kind: 'world',
+        memberId: null,
+        actionId: null,
+        phase: null,
+        result: null,
+        fact: background,
+        receiptRefs: [],
+        dependsOn: [],
+      });
+      return value;
+    };
+    await f.start();
+    const reaction =
+      scenario.mode === 'advantage'
+        ? 'The postmoth brightens at Flo’s emblem.'
+        : 'The postmoth answers guardedly beneath Flo’s emblem.';
+    const fact = `${reaction} ${scenario.success ? 'Amon-Sah learns that the prison scroll went to the quay.' : 'Amon-Sah gets no information about the prison scroll.'}`;
+    const reason = `Amon-Sah asks about Flo while the postmoth ${scenario.mode === 'advantage' ? 'responds warmly to his emblem' : 'remains guarded'}.`;
+    let current: GMContext;
+    const requests: string[] = [];
+    const fetcher = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init!.body as string);
+      const input = JSON.parse(body.input[0].content);
+      requests.push(input.task);
+      if (input.turn) {
+        expect(input.journal).toContainEqual({ kind: 'npc', name: 'Postmoth', detail: background });
+        expect(body.instructions).toContain('Situational noncombat checks:');
+        if (!input.turn.rolls.length) {
+          const tool = body.tools[0].tools.find((tool: { name: string }) => tool.name === 'roll_check');
+          expect(tool.parameters.required).toContain('circumstances');
+          expect(tool.parameters.properties.circumstances.description).toContain('independently');
+          return new Response(
+            `data: ${JSON.stringify({
+              type: 'response.completed',
+              response: {
+                output: [
+                  {
+                    type: 'function_call',
+                    namespace: 'game',
+                    name: 'roll_check',
+                    call_id: 'inquiry',
+                    arguments: JSON.stringify({
+                      memberId: input.turn.actions[0].memberId,
+                      stat: 'CHA',
+                      dc: 10,
+                      mode: 'normal',
+                      circumstances: {
+                        favorable: scenario.mode !== 'disadvantage',
+                        adverse: scenario.mode !== 'advantage',
+                      },
+                      reason,
+                      lethal: false,
+                    }),
+                  },
+                ],
+              },
+            })}\n\n`,
+          );
+        }
+        const value = proposal(current);
+        value.events = value.events.filter((event) => event.kind !== 'world');
+        const action = value.actions[0];
+        const main = action.components.main!;
+        const event = {
+          id: 'action:inquiry',
+          sequence: value.events.length,
+          kind: 'action' as const,
+          memberId: action.memberId,
+          actionId: action.actionId,
+          phase: 'main' as const,
+          result: main.status,
+          fact,
+          receiptRefs: main.receiptRefs,
+          dependsOn: [{ eventId: main.eventIds[0], requires: 'occurrence' as const }],
+        };
+        value.events.push(event);
+        main.eventIds.push(event.id);
+        main.fact += ` ${fact}`;
+        main.reason = reason;
+        action.eventIds.push(event.id);
+        action.fact = main.fact;
+        action.reason = reason;
+        value.journal = [{ kind: 'npc', name: 'Postmoth', detail: `${background} ${fact}` }];
+        value.rewards = { xp: 0, gold: 0, reason: 'An inquiry is resolved.' };
+        value.events = value.events.filter((event) => event.kind !== 'mechanics');
+        return completed(value);
+      }
+      expect(body.tools).toBeUndefined();
+      expect(body.instructions).toContain('recorded in resolved event facts');
+      expect(input.resolution.events).toContainEqual(expect.objectContaining({ id: 'action:inquiry', fact }));
+      expect(input.resolution.checkReasons).toEqual({
+        [`check:${current.turn.rolls[0].id}`]: reason,
+      });
+      expect(input.resolution.actions[0].components.main.status).toBe(
+        scenario.success ? 'success' : 'failure',
+      );
+      if (input.candidate) return completed({ approved: true, feedback: '' });
+      return completed({
+        version: 2,
+        turnId: input.resolution.turnId,
+        passages: [
+          {
+            eventIds: input.resolution.events.map((event: { id: string }) => event.id),
+            text: `${fact} Zafir al-Raml waits nearby.`,
+          },
+        ],
+        closing: '',
+        summary: fact,
+      });
+    }) as unknown as typeof fetch;
+    const gm = new ChatGPTGM(auth, 'owner', 'model', fetcher);
+    f.provider.adjudicate = (context, tools) => {
+      current = context;
+      return gm.adjudicate(context, tools);
+    };
+    f.provider.narrate = gm.narrate.bind(gm);
+    const dice = [...scenario.dice];
+    f.draw.mockClear().mockImplementation(() => dice.shift() ?? 12);
+    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Ask the postmoth about Flo.', false);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.c.id, f.host.id);
+    expect(snapshot.turn!.phase, snapshot.turn!.error ?? '').toBe('collecting');
+    const done = snapshot.history.at(-1)!;
+    expect(done.id).toBe(turn.id);
+    expect(done.rolls).toMatchObject([
+      { mode: scenario.mode, dice: scenario.dice, success: scenario.success, reason },
+    ]);
+    expect(done.result!.narration).toContain(fact);
+    expect(done.resolution!.checkReasons).toEqual({ [`check:${done.rolls[0].id}`]: reason });
+    expect(f.draw).toHaveBeenCalledTimes(scenario.dice.length);
+    expect(requests).toEqual([
+      'Adjudicate submitted intent using authoritative receipts; return structured outcomes.',
+      'Adjudicate submitted intent using authoritative receipts; return structured outcomes.',
+      'Narrate the finalized turn.',
+      'Review all event paragraphs, closing and situation summary against the finalized resolution.',
+    ]);
+  },
+);
 
 it.each([
   'missing actor',
@@ -583,8 +990,44 @@ it('uses three normal model requests with tools confined to adjudication', async
   await gm.narrate(r, config);
   expect(inputs).toHaveLength(3);
   expect(inputs.map((input) => !!(input as { tools?: unknown }).tools)).toEqual([true, false, false]);
+  const narratedFacts = JSON.parse(
+    (inputs[1] as { input: { content: string }[] }).input[0].content,
+  ).resolution;
+  expect(narratedFacts).not.toHaveProperty('factualRecap');
+  expect(narratedFacts.events).toEqual(r.events);
+  expect(r.factualRecap).toBeTruthy(); // The durable history still has its full recap.
   const review = JSON.parse((inputs[2] as { input: { content: string }[] }).input[0].content);
   expect(Object.keys(review)).toEqual(['task', 'resolution', 'candidate']);
+});
+
+it('deduplicates provider snapshots without dropping history events or changed starting state', () => {
+  const c = context();
+  c.startingMembers = structuredClone(c.members);
+  c.journal = [{ kind: 'quest', name: 'Restore the violin', detail: 'The violin now has four strings.' }];
+  c.history = [
+    {
+      source: 'resolution',
+      summary: [
+        'Romano repairs the violin.',
+        'quest Restore the violin: The violin had no strings.',
+        `Location: ${JSON.stringify(c.scene.location)}.`,
+        'fact Earlier clue: A hidden inscription was found.',
+        'Location: invalid legacy prose.',
+      ].join('\n'),
+    },
+  ];
+  const before = structuredClone(c);
+  const input = adjudicationInput(c);
+  expect(input.startingMembers![0]).not.toHaveProperty('state');
+  expect(input.contextSemantics).toContain('same state');
+  expect(input.movementProof).toEqual({ phase: 'main', effect: 'movement', result: 'success' });
+  expect(input.journal).toEqual(c.journal);
+  expect(input.history[0].summary).toBe(
+    'Romano repairs the violin.\nfact Earlier clue: A hidden inscription was found.\nLocation: invalid legacy prose.',
+  );
+  expect(c).toEqual(before);
+  c.members[0].state.hp--;
+  expect(adjudicationInput(c).startingMembers![0].state).toMatchObject({ hp: before.members[0].state.hp });
 });
 
 it('bounds multi-request adjudication context and reconstructs saved engine events', async () => {
@@ -650,8 +1093,13 @@ it('bounds multi-request adjudication context and reconstructs saved engine even
   expect(tools).toHaveBeenCalledTimes(2);
   expect(requests).toHaveLength(3);
   for (const request of requests) {
-    expect(request.instructions.length).toBeLessThan(22_000);
+    // Bound the fixed contract including situational checks, factions, exploration and locations.
+    expect(request.instructions.length).toBeLessThan(36_000);
     expect(request.instructions).toContain('Batch independent tool calls');
+    expect(request.instructions).toContain(
+      'one ordinary move to an adjacent location plus one explicitly submitted main action there',
+    );
+    expect(request.instructions).toContain('Risky, ability-assisted or resource-dependent travel uses main');
     expect(
       request.input.filter((item: any) => item.role === 'user' && item.content.startsWith('{')),
     ).toHaveLength(1);
@@ -769,6 +1217,111 @@ it('retries a narration timeout from the finalized result without another adjudi
   expect(f.game.members(f.c.id).map((member) => member.state.xp)).toEqual([10, 10]);
 });
 
+it.each([false, true])(
+  'records response progress and partial-stream diagnostics (completed=%s)',
+  async (finish) => {
+    const c = context();
+    const stage = new AbortController();
+    c.requestBudget = { used: 0, limit: 8, signal: stage.signal };
+    const text = JSON.stringify(proposal(c));
+    const fetcher = vi.fn(
+      async (_url, init) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              init!.signal!.addEventListener('abort', () => controller.error(init!.signal!.reason), {
+                once: true,
+              });
+              controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\n\n'));
+              setTimeout(() => {
+                controller.enqueue(
+                  new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"{"}\n\n'),
+                );
+                setTimeout(() => {
+                  if (!finish) {
+                    stage.abort(new DOMException('Deadline', 'TimeoutError'));
+                    return;
+                  }
+                  controller.enqueue(
+                    new TextEncoder().encode(
+                      `data: ${JSON.stringify({
+                        type: 'response.completed',
+                        response: {
+                          output: [{ type: 'message', content: [{ type: 'output_text', text }] }],
+                          usage: {
+                            input_tokens: 100,
+                            output_tokens: 80,
+                            output_tokens_details: { reasoning_tokens: 30 },
+                          },
+                        },
+                      })}\n\n`,
+                    ),
+                  );
+                  controller.close();
+                }, 5);
+              }, 5);
+            },
+          }),
+        ),
+    ) as unknown as typeof fetch;
+    const result = await new ChatGPTGM(auth, 'owner', 'model', fetcher)
+      .adjudicate(c, {} as GameTools)
+      .catch((error) => error);
+    const diagnostic = c.requestBudget.requests![0];
+    expect(diagnostic.authMs).toBeLessThanOrEqual(diagnostic.headersMs!);
+    expect(diagnostic.headersMs).toBeLessThanOrEqual(diagnostic.firstByteMs!);
+    expect(diagnostic.firstByteMs).toBeLessThanOrEqual(diagnostic.firstOutputMs!);
+    expect(diagnostic.streamBytes).toBeGreaterThan(0);
+    if (finish) {
+      expect(result.turnId).toBe(c.turn.id);
+      expect(diagnostic).toMatchObject({
+        outputTextBytes: Buffer.byteLength(text),
+        inputTokens: 100,
+        outputTokens: 80,
+        reasoningTokens: 30,
+      });
+      expect(diagnostic.failure).toBeUndefined();
+    } else {
+      expect(result.name).toBe('TimeoutError');
+      expect(diagnostic.failure).toContain('stage deadline');
+      expect(diagnostic.outputBytes).toBeUndefined();
+    }
+  },
+);
+
+it('allows a slow adjudication to finish beyond the former 90-second request cap', async () => {
+  vi.useFakeTimers();
+  const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+  try {
+    const c = context();
+    c.requestBudget = { used: 0, limit: 8, signal: new AbortController().signal };
+    const requestTimeout = new AbortController();
+    timeoutSpy.mockImplementation((duration) => {
+      expect(duration).toBe(180_000);
+      setTimeout(() => requestTimeout.abort(new DOMException('Timeout', 'TimeoutError')), duration);
+      return requestTimeout.signal;
+    });
+    const fetcher = vi.fn(
+      (_url, init) =>
+        new Promise<Response>((resolve, reject) => {
+          init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+          setTimeout(() => resolve(completed(proposal(c))), 120_000);
+        }),
+    ) as unknown as typeof fetch;
+    const pending = new ChatGPTGM(auth, 'owner', 'model', fetcher).adjudicate(c, {} as GameTools);
+    await vi.advanceTimersByTimeAsync(90_001);
+    expect(requestTimeout.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await pending).turnId).toBe(c.turn.id);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(c.requestBudget.requests![0]).toMatchObject({ durationMs: 120_000 });
+    expect(c.requestBudget.requests![0].failure).toBeUndefined();
+  } finally {
+    timeoutSpy.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
 it('applies request and stage deadlines to streamed output and preserves user cancellation', async () => {
   const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
   try {
@@ -777,7 +1330,7 @@ it('applies request and stage deadlines to streamed output and preserves user ca
       const requestTimeout = new AbortController();
       const stage = new AbortController();
       timeoutSpy.mockImplementation((duration) => {
-        expect(duration).toBe(90_000);
+        expect(duration).toBe(180_000);
         return requestTimeout.signal;
       });
       const budget: StageBudget = { used: 0, limit: 8, signal: stage.signal };
@@ -804,7 +1357,7 @@ it('applies request and stage deadlines to streamed output and preserves user ca
         .catch((error) => error);
       expect(error.name).toBe(mode === 'cancel' ? 'AbortError' : 'TimeoutError');
       expect(error.message).toContain(
-        mode === 'request' ? '90 seconds' : mode === 'stage' ? 'stage deadline' : 'Stopped',
+        mode === 'request' ? '180 seconds' : mode === 'stage' ? 'stage deadline' : 'Stopped',
       );
       expect(budget.requests).toHaveLength(1);
       expect(budget.requests![0].failure).toBe(error.message);
@@ -814,7 +1367,108 @@ it('applies request and stage deadlines to streamed output and preserves user ca
   }
 });
 
-it.each(['fidelity', 'invalid JSON', 'tool call'])(
+it.each([false, true])(
+  'retains approved story when only the summary fails review (earlier story rejection: %s)',
+  async (earlierRejection) => {
+    const r = resolution();
+    const before = structuredClone(r);
+    const story = r.events.map((event) => event.fact).join(' ');
+    let reviews = 0;
+    const fetcher = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init!.body as string);
+      const data = JSON.parse(body.input[0].content);
+      expect(body.tools).toBeUndefined();
+      if (data.candidate) {
+        reviews++;
+        expect(body.instructions).toContain('independently from the situation summary');
+        return completed({
+          storyApproved: !earlierRejection || reviews > 1,
+          summaryApproved: false,
+          feedback:
+            earlierRejection && reviews === 1
+              ? 'The story invents a second sanctuary.'
+              : 'The summary claims the caravan was rescued; only traces were discovered.',
+        });
+      }
+      return completed({
+        version: 2,
+        turnId: r.turnId,
+        passages: [
+          {
+            eventIds: r.events.map((event) => event.id),
+            text: earlierRejection && !reviews ? 'A second sanctuary appears.' : story,
+          },
+        ],
+        closing: '',
+        summary: 'The lost caravan has been rescued.',
+      });
+    }) as unknown as typeof fetch;
+    const budget: StageBudget = { used: 0, limit: 4 };
+    const narration = await new ChatGPTGM(auth, 'owner', 'model', fetcher).narrate(r, config, budget);
+    expect(narrationParagraphs(r, narration)).toEqual([story]);
+    expect(narration.summary).toContain('lost caravan');
+    expect(narration.summary).not.toContain('rescued');
+    expect(budget.fallback).toBeUndefined();
+    expect(budget.corrections!.at(-1)!.feedback).toContain('Situation summary replaced with saved facts');
+    expect(fetcher).toHaveBeenCalledTimes(earlierRejection ? 4 : 2);
+    expect(r).toEqual(before);
+  },
+);
+
+it.each(['repeated', 'invented'])(
+  'preserves faithful passages when an empty-ID ending contains a %s closing defect',
+  async (defect) => {
+    const r = resolution();
+    r.checkReasons = { [r.events[0].id]: 'Rain and wet foliage obscure the search.' };
+    const before = structuredClone(r);
+    const story = r.events.map((event) => event.fact).join(' ');
+    const closing = defect === 'invented' ? 'An unknown golden key appears.' : r.events[0].fact;
+    const fetcher = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init!.body as string);
+      const data = JSON.parse(body.input[0].content);
+      expect(body.tools).toBeUndefined();
+      expect(data.resolution.checkReasons).toEqual(r.checkReasons);
+      if (data.candidate) {
+        expect(data.candidate.closing).toBe(closing);
+        expect(data.candidate.passages).toHaveLength(1);
+        expect(body.instructions).toContain('never reject a faithful complete story solely for brevity');
+        return completed({
+          storyApproved: true,
+          closingApproved: false,
+          summaryApproved: true,
+          feedback: `The closing contains a ${defect} detail.`,
+          styleFeedback: 'The passages could have more scene texture.',
+        });
+      }
+      expect(body.instructions).toContain('roughly 70–120 words');
+      expect(body.instructions).toContain('Weave material observable help or hindrance');
+      return completed({
+        version: 2,
+        turnId: r.turnId,
+        passages: [
+          { eventIds: r.events.map((event) => event.id), text: story },
+          { eventIds: [], text: closing },
+        ],
+        closing: '',
+        summary: 'The sanctuary is revealed.',
+      });
+    }) as unknown as typeof fetch;
+    const budget: StageBudget = { used: 0, limit: 4 };
+    const narrated = await new ChatGPTGM(auth, 'owner', 'model', fetcher).narrate(r, config, budget);
+    expect(narrationParagraphs(r, narrated)).toEqual([story]);
+    expect(narrated.closing).toBe('');
+    expect(budget.fallback).toBeUndefined();
+    expect(budget.used).toBe(2);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(budget.corrections!.map((item) => item.feedback)).toEqual([
+      expect.stringContaining('Closing removed'),
+      expect.stringContaining('Narration style'),
+    ]);
+    expect(r).toEqual(before);
+  },
+);
+
+it.each(['fidelity', 'split fidelity', 'invalid JSON', 'tool call'])(
   'uses a flat narration budget for %s failures',
   async (failure) => {
     const r = resolution();
@@ -827,7 +1481,11 @@ it.each(['fidelity', 'invalid JSON', 'tool call'])(
       const data = JSON.parse(body.input[0].content);
       if (data.candidate) {
         reviews++;
-        return completed({ approved: false, feedback: 'Closing invents a clue.' });
+        return completed(
+          failure === 'split fidelity'
+            ? { storyApproved: false, summaryApproved: true, feedback: 'Closing invents a clue.' }
+            : { approved: false, feedback: 'Closing invents a clue.' },
+        );
       }
       if (failure === 'invalid JSON') return completed({ summary: 'missing events' });
       if (failure === 'tool call')
@@ -849,8 +1507,8 @@ it.each(['fidelity', 'invalid JSON', 'tool call'])(
     expect(narrationParagraphs(r, narrated)).toEqual(r.events.map((event) => event.fact));
     expect(budget.fallback).toContain('two-attempt');
     expect(budget.corrections).toHaveLength(2);
-    expect(requests).toBe(failure === 'fidelity' ? 4 : 2);
-    expect(reviews).toBe(failure === 'fidelity' ? 2 : 0);
+    expect(requests).toBe(failure.endsWith('fidelity') ? 4 : 2);
+    expect(reviews).toBe(failure.endsWith('fidelity') ? 2 : 0);
   },
 );
 
@@ -973,11 +1631,115 @@ it.each([false, true])(
       executeItem ? 0 : 1,
     );
     expect(unchanged.state.abilityUses?.[ability.name] ?? 0).toBe(0);
-    expect(done.diagnostics?.some((message) => message.includes('eight-request'))).toBe(true);
-    expect(fetcher).toHaveBeenCalledTimes(8);
+    expect(done.diagnostics?.some((message) => message.includes('invalid structured responses'))).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    const narrationStage = f.db
+      .prepare("SELECT payload FROM events WHERE turn_id=? AND kind='stage:narration'")
+      .get(turn.id) as { payload: string };
+    expect(JSON.parse(narrationStage.payload)).toMatchObject({
+      requests: 0,
+      fallback: expect.stringContaining('Narration skipped'),
+    });
     expect(snapshot.members.map((member) => member.state.xp)).toEqual([0, 0]);
   },
 );
+
+it('uses saved action outcomes when check events contain only mechanical results', () => {
+  const r = resolution();
+  const facts = [
+    'Amon-Sah searches the equipment corner but finds nothing useful.',
+    'Zafir al-Raml sees movement behind the ferns, but cannot identify its source.',
+  ];
+  r.events = r.actions.map((action, index) => {
+    const id = `check:${index}`;
+    const status = index ? ('success' as const) : ('failure' as const);
+    Object.assign(action, { fact: facts[index], eventIds: [id], status, basis: 'check' });
+    Object.assign(action.components.main!, { fact: facts[index], eventIds: [id], status, basis: 'check' });
+    return {
+      id,
+      sequence: index,
+      kind: 'mechanics' as const,
+      actionId: action.actionId,
+      memberId: action.memberId,
+      phase: 'main' as const,
+      result: status,
+      fact: `${action.characterName}: the WIS check ${index ? 'succeeds' : 'fails'}.`,
+      receiptRefs: [],
+      dependsOn: [],
+    };
+  });
+  const before = structuredClone(r);
+  const narration = factualNarration(r, config.language);
+  expect(narrationParagraphs(r, narration)).toEqual(facts);
+  expect(narration.summary).toContain('finds nothing useful');
+  expect(narration.summary).toContain('cannot identify its source');
+  expect(narration.summary).not.toContain('WIS check');
+  expect(assembleResolvedNarration(r, narration)).toEqual(narration);
+  expect(r).toEqual(before);
+});
+
+it('covers check receipts without repeating their later fictional outcomes in the fallback', () => {
+  const r = resolution();
+  const facts = [
+    'Rain hides the depth of the tar from Amon-Sah.',
+    'Zafir al-Raml recognizes an impact pattern on the rib despite the wet mud.',
+  ];
+  const checks = r.actions.map((action, index) => {
+    const id = `check:${index}`;
+    const outcomeId = `action:${index}`;
+    const status = index ? ('success' as const) : ('failure' as const);
+    Object.assign(action, { fact: facts[index], eventIds: [id, outcomeId], status, basis: 'check' });
+    Object.assign(action.components.main!, {
+      fact: facts[index],
+      eventIds: [id, outcomeId],
+      status,
+      basis: 'check',
+    });
+    return {
+      id,
+      sequence: index,
+      kind: 'mechanics' as const,
+      actionId: action.actionId,
+      memberId: action.memberId,
+      phase: 'main' as const,
+      result: status,
+      fact: `${action.characterName}: the WIS check ${index ? 'succeeds' : 'fails'}.`,
+      receiptRefs: [],
+      dependsOn: [],
+    };
+  });
+  r.events = [
+    ...checks,
+    ...checks.map((check, index) => ({
+      ...check,
+      id: `action:${index}`,
+      sequence: checks.length + index,
+      kind: 'action' as const,
+      fact: facts[index],
+      dependsOn: [{ eventId: check.id, requires: 'occurrence' as const }],
+    })),
+  ];
+  const before = structuredClone(r);
+  const narration = factualNarration(r, config.language);
+  expect(narration.version).toBe(2);
+  if (narration.version !== 2) throw new Error('Expected grouped narration.');
+  expect(narration.passages).toEqual([
+    { eventIds: r.events.map((event) => event.id), text: facts.join('\n\n') },
+  ]);
+  expect(assembleResolvedNarration(r, narration)).toEqual(narration);
+  expect(r).toEqual(before);
+
+  // A separate successful effect must not hide a failed check in a partial main action.
+  r.actions[0].status = 'partial';
+  r.actions[0].components.main!.status = 'partial';
+  r.events[2].result = 'success';
+  r.events[2].fact = 'Amon-Sah startles a bird from the reeds.';
+  const partial = factualNarration(r, config.language);
+  const partialText = narrationParagraphs(r, partial).join('\n\n');
+  expect(partialText).toContain(facts[0]);
+  expect(partialText).toContain('startles a bird');
+  expect(assembleResolvedNarration(r, partial)).toEqual(partial);
+});
 
 it('keeps the trusted narration fallback within the story limit for an oversized resolution', () => {
   const r = resolution();
@@ -1146,12 +1908,15 @@ it('requires and persists victory aftermath, preserves equipment flavor and keep
     const value = proposal(current);
     value.rewards = { xp: 0, gold: 0, reason: 'Combat rewards belong to the server.' };
     if (requests > 1) {
-      expect(JSON.stringify(body.input)).toContain('Victory needs a world aftermath');
+      const feedback = JSON.parse(body.input[0].content);
+      expect(JSON.stringify(body.input), JSON.stringify(feedback.correctionsToPreserve ?? feedback.feedback)).toContain('Victory needs a local world aftermath');
       value.location = { name: 'Checkpoint', atmosphere: 'The gate is quiet and accessible.', hazard: '' };
       const aftermath = value.events.find((event) => event.id === 'world:discovery')!;
       aftermath.phase = 'aftermath';
       aftermath.fact = 'With the drone destroyed, the checkpoint gate is accessible again.';
+      aftermath.locationRef = current.scene.location.id;
       value.journal = [{ kind: 'location', name: 'Checkpoint', detail: aftermath.fact }];
+      value.encounterRisks = [{ locationId: current.scene.location.id!, eventId: aftermath.id, danger: 'safe', reason: 'The destroyed drone no longer controls or threatens the checkpoint.' }];
     }
     return completed(value);
   }) as unknown as typeof fetch;
@@ -1169,7 +1934,7 @@ it('requires and persists victory aftermath, preserves equipment flavor and keep
   const done = snapshot.history.at(-1)!;
   expect(done.id, snapshot.turn?.error ?? '').toBe(turn.id);
   expect(fetcher).toHaveBeenCalledTimes(2);
-  expect(snapshot.scene.location).toEqual({
+  expect(snapshot.scene.location).toMatchObject({
     name: 'Checkpoint',
     atmosphere: 'The gate is quiet and accessible.',
     hazard: '',
@@ -1283,7 +2048,7 @@ it('includes support receipts and blocked/pass outcomes before the narrator runs
   ).toBe(true);
 });
 
-it('enforces the shared eight-request budget including combat planning', async () => {
+it('stops invalid structured responses early within the shared request budget including combat planning', async () => {
   const c = context();
   const fetcher = vi.fn(async () => completed({ malformed: true })) as unknown as typeof fetch;
   const gm = new ChatGPTGM(auth, 'owner', 'model', fetcher);
@@ -1305,10 +2070,86 @@ it('enforces the shared eight-request budget including combat planning', async (
   expect(result.actions.map((action) => action.status)).toEqual(['blocked', 'blocked']);
   expect(result.changes).toEqual([]);
   expect(result.rewards).toMatchObject({ xp: 0, gold: 0 });
-  expect(c.requestBudget.fallback).toContain('eight-request');
-  expect(fetcher).toHaveBeenCalledTimes(8);
-  expect(c.requestBudget.used).toBe(8);
+  expect(c.requestBudget.fallback).toContain('3 invalid structured responses');
+  expect(fetcher).toHaveBeenCalledTimes(6);
+  expect(c.requestBudget.used).toBe(6);
 });
+
+it.each(['repaired', 'malformed', 'rewrites retained facts'])(
+  'preserves independent action progress when compact recovery is %s',
+  async (repair) => {
+    const f = fixture();
+    await f.start();
+    let current: GMContext;
+    let original: TurnAdjudication;
+    const requests: any[] = [];
+    const fetcher = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init!.body as string);
+      requests.push(body);
+      if (requests.length === 1) {
+        original = proposal(current);
+        const invalid = structuredClone(original);
+        invalid.events.find((event) => event.id === 'act:1')!.result = 'failure';
+        return completed(invalid);
+      }
+      const input = JSON.parse(body.input[0].content);
+      expect(body.tools).toBeUndefined();
+      expect(input.task).toContain('Repair only unresolved');
+      expect(input.lockedComponents).toEqual([`${current.members[0].id}:main`]);
+      expect(input.unresolvedActions.map((action: any) => action.memberId)).toEqual([current.members[1].id]);
+      if (repair === 'malformed') return completed({ malformed: true });
+      if (repair === 'rewrites retained facts') {
+        const changed = structuredClone(original!);
+        changed.actions[0].components.main!.fact = 'A different action was chosen.';
+        return completed({ actions: changed.actions, events: changed.events });
+      }
+      return completed({
+        actions: [original!.actions[1]],
+        events: original!.events.filter((event) => event.id !== 'act:0'),
+        journal: original!.journal,
+        rewards: original!.rewards,
+      });
+    }) as unknown as typeof fetch;
+    const gm = new ChatGPTGM(auth, 'owner', 'model', fetcher);
+    f.provider.adjudicate = (context, tools) => {
+      current = context;
+      return gm.adjudicate(context, tools);
+    };
+    const narrationCalls = f.narrate.mock.calls.length;
+    const narrate = f.provider.narrate!;
+    if (repair === 'malformed')
+      f.provider.narrate = async () => {
+        throw new Error('Interrupted after retained progress was finalized');
+      };
+    const id = f.submit();
+    await f.game.idle();
+    if (repair === 'malformed') {
+      expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('failed');
+      expect(f.draft(id).adjudication.actions[0].status).toBe('success');
+      f.provider.narrate = narrate;
+      f.game.retry(f.c.id, f.host.id);
+      await f.game.idle();
+    }
+    const snapshot = f.game.snapshot(f.c.id, f.host.id);
+    expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+    const done = snapshot.history.at(-1)!;
+    expect(done.id).toBe(id);
+    expect(done.resolution!.actions.map((action) => action.status)).toEqual([
+      'success',
+      repair === 'repaired' ? 'success' : 'blocked',
+    ]);
+    expect(done.result!.narration).toContain('unlocks the recessed closure');
+    expect(done.result!.narration.includes('bronze sun disk')).toBe(repair === 'repaired');
+    expect(done.result!.narration).not.toContain('different action');
+    expect(f.draft(id).adjudicationFallback).toBeUndefined();
+    expect(f.narrate).toHaveBeenCalledTimes(narrationCalls + 1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(f.draw).not.toHaveBeenCalled();
+    expect(snapshot.members.map((member) => member.state.xp)).toEqual(
+      repair === 'repaired' ? [10, 10] : [0, 0],
+    );
+  },
+);
 
 it('accepts the full configured setting and premise limits without truncating opening facts', async () => {
   const c = context();
@@ -1374,7 +2215,12 @@ it.each([false, true])(
       if (attempts === 1) throw new Error('Connection lost after encounter introduction.');
       const value = proposal(context);
       value.rewards.xp = 0;
-      value.location = { name: 'Guardian doorway', atmosphere: 'A sealed entrance.', hazard: 'Guardian.' };
+      value.location = {
+        id: context.scene.location.id,
+        name: 'Guardian doorway',
+        atmosphere: 'A sealed entrance.',
+        hazard: 'Guardian.',
+      };
       return value;
     });
     const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
@@ -1456,12 +2302,29 @@ it('resumes accepted boarding after a finalization interruption and rejects leav
     value.rewards.xp = 0;
     value.location =
       context.turn.number === 1 ? deck : { name: 'Open sea', atmosphere: 'Clear sky.', hazard: '' };
+    value.memberLocations = value.actions
+      .filter((action) => action.components.main?.status === 'success')
+      .map((action) => ({ memberId: action.memberId, locationId: 'destination' }));
+    if (context.turn.number === 1)
+      for (const action of value.actions) {
+        const event = value.events.find(
+          (event) => event.actionId === action.actionId && event.phase === 'main',
+        )!;
+        event.effect = 'movement';
+        event.fact = `${context.members.find((member) => member.id === action.memberId)!.character.name} boards the ship deck.`;
+        action.fact = event.fact;
+        action.components.main!.fact = event.fact;
+        value.memberLocations!.find((position) => position.memberId === action.memberId)!.movementEventId =
+          event.id;
+      }
     return value;
   });
   f.db.exec(
     `CREATE TRIGGER interrupt_boarding BEFORE UPDATE OF draft ON turns WHEN NEW.draft LIKE '%"resolution":%' BEGIN SELECT RAISE(ABORT, 'boarding interrupted'); END;`,
   );
-  const id = f.submit();
+  const id = f.game.snapshot(f.c.id, f.host.id).turn!.id;
+  f.game.submit(f.c.id, f.p1.id, id, 'Board the ship deck.', false);
+  f.game.submit(f.c.id, f.p2.id, id, 'Board the ship deck.', false);
   await f.game.idle();
   expect(f.game.snapshot(f.c.id, f.host.id).turn!.error).toContain('boarding interrupted');
   const saved = f.draft(id);
@@ -1477,7 +2340,7 @@ it('resumes accepted boarding after a finalization interruption and rejects leav
   restarted.retry(f.c.id, f.host.id);
   await restarted.idle();
   const snapshot = restarted.snapshot(f.c.id, f.host.id);
-  expect(snapshot.scene.location).toEqual(deck);
+  expect(snapshot.scene.location).toMatchObject(deck);
   expect(snapshot.scene.encounter).toEqual(saved.scene.encounter);
   expect(snapshot.scene.encounter!.round).toBe(1);
   expect(snapshot.history.at(-1)!.rolls).toEqual(rolls);
@@ -1487,11 +2350,13 @@ it('resumes accepted boarding after a finalization interruption and rejects leav
   restarted.submit(f.c.id, f.p2.id, snapshot.turn!.id, '', true);
   await restarted.idle();
   const failed = restarted.snapshot(f.c.id, f.host.id).turn!;
-  expect(failed.error).toContain('adjudication: The party cannot leave an active combat');
+  expect(failed.error).toMatch(
+    /adjudication:.*(?:successful submitted movement|cannot leave an active combat)/,
+  );
   const draft = JSON.parse(restarted.pending(f.c.id)!.draft!);
   expect(draft.adjudication).toBeUndefined();
   expect(draft.receipts.combat).toBeDefined();
-  expect(restarted.snapshot(f.c.id, f.host.id).scene.location).toEqual(deck);
+  expect(restarted.snapshot(f.c.id, f.host.id).scene.location).toMatchObject(deck);
 });
 
 it.each(['revived non-roster', 'injured inactive'] as const)(
@@ -1730,6 +2595,9 @@ it.each(['successful check', 'failed check', 'routine act'] as const)(
 
       cures: ['Stunned'],
     });
+    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p2.id, turn.id, 'Read the inscriptions', false);
+    // The target submitted while able to act, then became stunned before execution.
     applyCondition(target.state, 'Stunned');
     f.db.prepare('UPDATE members SET sheet = ? WHERE id = ?').run(JSON.stringify(actor.character), actor.id);
     f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(target.state), target.id);
@@ -1752,9 +2620,7 @@ it.each(['successful check', 'failed check', 'routine act'] as const)(
         });
       return proposal(context);
     };
-    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
     f.game.submit(f.c.id, f.p1.id, turn.id, 'Use Cleanse Stun on Zafir al-Raml', false);
-    f.game.submit(f.c.id, f.p2.id, turn.id, 'Read the inscriptions', false);
     await f.game.idle();
     const done = f.game.snapshot(f.c.id, f.host.id).history.at(-1)!;
     expect(done.id).toBe(turn.id);
@@ -1880,6 +2746,9 @@ it.each(['Stunned', 'Frozen', 'Electrocuted'] as const)(
     await f.start();
     const actor = f.game.members(f.c.id)[0];
     actor.state.hp -= 4;
+    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Drink Red Potion and open the closure', false);
+    // Exercise a condition acquired after submission; already incapacitated players cannot submit.
     applyCondition(actor.state, condition);
     const potion = { ...baseItem('potion', 'Red Potion', 'consumable'), healing: 4, quantity: 1 };
     actor.state.inventory.push(potion);
@@ -1893,8 +2762,6 @@ it.each(['Stunned', 'Frozen', 'Electrocuted'] as const)(
       expect(() => tools.useResource!(use)).toThrow('incapacitated');
       throw new Error('The prohibited minor action spent no source.');
     };
-    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
-    f.game.submit(f.c.id, f.p1.id, turn.id, 'Drink Red Potion and open the closure', false);
     f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
     await f.game.idle();
     const saved = f.draft(turn.id);
@@ -2066,7 +2933,9 @@ it('saves environmental mechanics before rolling and preserves shots, damage and
   f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
   const evidence =
     'The mounted cannon is loaded with a dry charge and chain shot and aimed at the enemy ship.';
-  f.db.prepare('INSERT INTO journal VALUES(?, ?, ?, ?)').run(f.c.id, 'fact', 'Prepared cannon', evidence);
+  f.db
+    .prepare('INSERT INTO journal(campaign_id,kind,name,detail) VALUES(?, ?, ?, ?)')
+    .run(f.c.id, 'fact', 'Prepared cannon', evidence);
   const profile: EnvironmentalAction = {
     sourceId: 'journal:fact:Prepared cannon',
     name: 'Mounted cannon',
@@ -2183,4 +3052,35 @@ it('gives the model grounded environmental profile options and blocks oversized 
   expect(c.requestBudget.corrections).toContainEqual(
     expect.objectContaining({ feedback: expect.stringContaining('Environmental proposal rejected:') }),
   );
+});
+
+it('accepts a victory refresh through the new place contract without a legacy location update', async () => {
+  const c = context();
+  c.scene.location.id = randomUUID();
+  c.combatResult = {
+    participantIds: [],
+    logs: [],
+    events: [],
+    characters: [],
+    loot: [],
+    encounter: { round: 1, victory: true, escaped: false, enemies: [], initiative: [] },
+  };
+  const value = proposal(c);
+  value.rewards.xp = 0;
+  value.placeUpdates = [
+    {
+      ref: c.scene.location.id,
+      location: { name: c.scene.location.name, atmosphere: 'The cleared gate is accessible.', hazard: '' },
+    },
+  ];
+  value.sceneFocus = 'current';
+  value.events.at(-1)!.phase = 'aftermath';
+  const fetcher = vi.fn(async () => completed(value)) as unknown as typeof fetch;
+  const tools = Object.assign(vi.fn(), {
+    validateAdjudication: (input: unknown) => validateAdjudication(c, input),
+  }) as unknown as GameTools;
+  const accepted = await new ChatGPTGM(auth, 'owner', 'model', fetcher).adjudicate(c, tools);
+  expect(accepted.location).toBeNull();
+  expect(accepted.placeUpdates![0].ref).toBe(c.scene.location.id);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

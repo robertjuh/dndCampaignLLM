@@ -12,7 +12,13 @@ import {
 } from '../shared/turn-resolution';
 import type { GMContext, ResourceReceipt } from './game';
 import { combatFact } from './narration';
-import { engineComponents, engineEvents, receiptReferences } from './turn-resolution';
+import {
+  combatReceiptForMember,
+  engineComponents,
+  engineEvents,
+  receiptReferences,
+  orderRoutineMovement,
+} from './turn-resolution';
 
 type Checkpoints = {
   receipts: Record<string, unknown>;
@@ -34,14 +40,20 @@ function recoveryError(claim: string): never {
 function recap(resolution: TurnResolution) {
   return [
     ...resolution.events.map((event) => event.fact),
-    `Location: ${JSON.stringify(resolution.location)}. Safe rest: ${resolution.safeRest}.`,
+    `Location: ${JSON.stringify(resolution.location)}.`,
     ...resolution.journal.map((entry) => `${entry.kind} ${entry.name}: ${entry.detail}`),
   ].join('\n');
 }
 
 function forVersion(event: ResolvedEvent, version: 1 | 2): Event {
   if (version === 2) return event;
-  const { phase: _phase, result: _result, presentation: _presentation, ...saved } = event;
+  const {
+    phase: _phase,
+    result: _result,
+    presentation: _presentation,
+    locationRef: _locationRef,
+    ...saved
+  } = event;
   return { ...saved, dependsOn: [] };
 }
 
@@ -137,12 +149,11 @@ export function repairTurnCheckpoints(draft: Checkpoints, context: GMContext) {
         continue;
       }
       if (submitted.passed) continue;
-      if (current.combatResult) {
+      const combat = combatReceiptForMember(current, action.memberId);
+      if (combat) {
         // V1 summarized combat before components existed; keep its accepted aggregate semantics.
         const main =
-          current.combatResult.events?.filter(
-            (event) => event.actorId === action.memberId && event.phase === 'main',
-          ) ?? [];
+          combat.events?.filter((event) => event.actorId === action.memberId && event.phase === 'main') ?? [];
         const statuses = main.flatMap((event) => (event.status ? [event.status] : []));
         const mainStatus = statuses.includes('blocked')
           ? 'blocked'
@@ -151,7 +162,7 @@ export function repairTurnCheckpoints(draft: Checkpoints, context: GMContext) {
             : main.length
               ? 'success'
               : 'blocked';
-        const minorSucceeded = current.combatResult.events?.some(
+        const minorSucceeded = combat.events?.some(
           (event) =>
             event.actorId === action.memberId && event.phase === 'minor' && event.status === 'success',
         );
@@ -188,10 +199,18 @@ export function repairTurnCheckpoints(draft: Checkpoints, context: GMContext) {
     for (const event of value.events)
       if (event.memberId && !registry.some((member) => member.id === event.memberId))
         recoveryError(`event ${event.id} has an unknown frozen actor`);
+    if (value.version === 2 && !isDeepStrictEqual(orderRoutineMovement(value).events, value.events))
+      recoveryError('routine movement has unsupported causal order');
+    const savedEngine = value.events.filter(
+      (event) => !('beforeEventId' in event && event.phase === 'movement' && event.beforeEventId),
+    );
     for (const [index, canonical] of authoritative.entries()) {
       const expected = forVersion(canonical, value.version);
-      const saved = value.events[index];
-      if (!saved || !isDeepStrictEqual({ ...saved, fact: expected.fact }, expected))
+      const saved = savedEngine[index];
+      if (
+        !saved ||
+        !isDeepStrictEqual({ ...saved, sequence: expected.sequence, fact: expected.fact }, expected)
+      )
         recoveryError(`engine event ${canonical.id} has unsupported identity, references or order`);
       if (saved.fact === expected.fact) continue;
       const correction = corrections.get(canonical.id);

@@ -49,6 +49,13 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     const generating =
       body.instructions.startsWith('Generate') || body.instructions.startsWith('Name and describe');
     const first = JSON.parse(body.input[0].content);
+    if (
+      first.task === 'Generate the campaign faction world.' ||
+      first.task === 'Connect arriving characters to factions.'
+    )
+      return completed([
+        { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(first.schemaExample) }] },
+      ]);
     if (first.candidate)
       return completed([
         {
@@ -138,6 +145,39 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
           }
       : {
           ...context.schemaExample,
+          ...(context.turn.number === 0
+            ? {
+                events: [
+                  {
+                    id: 'world:harbor',
+                    sequence: context.engineEvents.length,
+                    kind: 'world',
+                    memberId: null,
+                    actionId: null,
+                    phase: null,
+                    result: null,
+                    locationRef: context.scene.location.id,
+                    fact: 'A sheltered harbor has a sealed gate beside the water.',
+                    receiptRefs: [],
+                    dependsOn: [],
+                  },
+                ],
+                placeUpdates: [
+                  {
+                    ref: context.scene.location.id,
+                    location: {
+                      name: context.scene.location.name,
+                      atmosphere: 'Sheltered water and a sealed gate.',
+                      hazard: '',
+                    },
+                  },
+                ],
+                arrivals: [{ locationId: context.scene.location.id, eventId: 'world:harbor' }],
+                encounterRisks: [{ locationId: context.scene.location.id, eventId: 'world:harbor', danger: 'safe', reason: 'The harbor is sheltered and secured by its sealed gate.' }],
+                journal: [{ kind: 'location', name: 'Harbor gate', detail: 'A sheltered harbor has a sealed gate beside the water.' }],
+                worldProgress: [{ locationId: context.scene.location.id, eventId: 'world:harbor', kind: 'discovery', thread: 'premise', journal: { kind: 'location', name: 'Harbor gate' } }],
+              }
+            : {}),
           rewards: {
             xp: context.turn.number > 0 ? 20 : 0,
             gold: 0,

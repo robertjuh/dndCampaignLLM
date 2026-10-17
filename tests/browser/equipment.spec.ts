@@ -448,7 +448,13 @@ test('Legendary gear exposes equipped abilities with the correct combat scope an
   await expect(bootAbility).toContainText('Utility');
   await expect(bootAbility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
   await expect(focusAbility).toContainText('Combat');
-  await expect(focusAbility.getByRole('button', { name: 'Use ability' })).toBeDisabled();
+  await expect(focusAbility).toContainText('Noncombat obstacle');
+  await expect(focusAbility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
+  await focusAbility.getByRole('button', { name: 'Use ability' }).click();
+  await expect(focusAbility.getByRole('button', { name: 'Selected for your action' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   for (const kind of ['combat', 'utility']) {
     const healing = page
       .locator('.character-controls .ability-card')

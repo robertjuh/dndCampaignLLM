@@ -7,11 +7,13 @@ import { ChatGPTGM, PracticeGM, readResponseStream } from '../server/providers';
 import { initialState, initialScene } from '../shared/rules';
 import { GameError, type GMContext, type GameTools } from '../server/game';
 import { randomUUID } from 'node:crypto';
+import type { TurnResolution } from '../shared/turn-resolution';
 import {
   templateCharacter,
   blankTrait,
   outcomeSchema,
   combatSchema,
+  enemySchema,
   type Check,
   type Roll,
 } from '../shared/schema';
@@ -163,6 +165,171 @@ function combatTools(): GameTools {
     validateResolution: vi.fn(),
   });
 }
+
+it('advertises only enemy damage dice accepted by the server', async () => {
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(init!.body as string);
+    const data = JSON.parse(request.input[0].content);
+    return stream([
+      event({
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [
+            { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(data.schemaExample) }] },
+          ],
+        },
+      }),
+    ]);
+  });
+  const context = resolveContext();
+  const gm = new ChatGPTGM(
+    { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
+    'owner',
+    'test-model',
+    fetcher as typeof fetch,
+  );
+  await gm.adjudicate(context, combatTools());
+  const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
+  const tool = request.tools[0].tools.find((tool: { name: string }) => tool.name === 'start_combat');
+  const damage = tool.parameters.properties.enemies.items.properties.damage;
+  const server = enemySchema.shape.damage;
+  for (const value of [
+    '1d4',
+    '1d6',
+    '1d8',
+    '1d10',
+    '1d12',
+    '2d6',
+    '3d8',
+    '4d12',
+    '1d8+5',
+    'd8',
+    '5d6',
+    '1d20',
+    '8',
+  ])
+    expect(damage.enum.includes(value), value).toBe(server.safeParse(value).success);
+  for (const value of damage.enum) expect(server.safeParse(value).success, value).toBe(true);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it('keeps procedural route declarations through adjudication and grounds narration in the saved map', async () => {
+  const context = resolveContext();
+  const origin = randomUUID();
+  const tower = randomUUID();
+  context.scene.location.id = origin;
+  context.scene.worldMap = {
+    nodes: { [origin]: { id: origin, name: 'Forest', visited: true } },
+    connections: [],
+  };
+  context.turn.number = 0;
+  context.turn.roster = [];
+  context.turn.actions = [];
+  const mapUpdates = {
+    locations: [{ ref: 'new:tower', name: 'Watchtower' }],
+    connections: [
+      {
+        from: 'current',
+        to: 'new:tower',
+        label: 'Forest path',
+        blocked: false,
+        bidirectional: true,
+        eventId: 'world:route',
+      },
+    ],
+  };
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(init!.body as string);
+    const data = JSON.parse(request.input[0].content);
+    let output: unknown;
+    if (data.task.startsWith('Adjudicate')) {
+      expect(data.scene.worldMap).toEqual(context.scene.worldMap);
+      expect(data.schemaExample.mapUpdates).toEqual({ locations: [], connections: [] });
+      output = {
+        ...data.schemaExample,
+        mapUpdates,
+        events: [
+          ...data.schemaExample.events,
+          {
+            id: 'world:route',
+            sequence: data.schemaExample.events.length,
+            kind: 'world',
+            memberId: null,
+            actionId: null,
+            phase: null,
+            result: null,
+            fact: 'A forest path leads to a visible watchtower.',
+            receiptRefs: [],
+            dependsOn: [],
+            locationRef: origin,
+          },
+        ],
+      };
+    } else if (data.task === 'Narrate the finalized turn.') {
+      output = {
+        ...data.schemaExample,
+        passages: data.resolution.events.map((entry: { id: string; fact: string }) => ({
+          eventIds: [entry.id],
+          text: entry.fact,
+        })),
+      };
+    } else output = { approved: true, feedback: '' };
+    return stream([
+      event({
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [
+            {
+              type: 'message',
+              content: [{ type: 'output_text', text: JSON.stringify(output) }],
+            },
+          ],
+        },
+      }),
+    ]);
+  });
+  const gm = new ChatGPTGM(
+    { accessToken: async () => 'test-token' } as unknown as ChatGPTAuth,
+    'owner',
+    'test-model',
+    fetcher as typeof fetch,
+  );
+  const adjudication = await gm.adjudicate(context, combatTools());
+  expect(adjudication.mapUpdates).toEqual(mapUpdates);
+  const worldMap = {
+    nodes: {
+      ...context.scene.worldMap.nodes,
+      [tower]: { id: tower, name: 'Watchtower', visited: false },
+    },
+    connections: [{ from: origin, to: tower, label: 'Forest path', blocked: false, bidirectional: true }],
+  };
+  const resolution: TurnResolution = {
+    version: 2,
+    turnId: context.turn.id,
+    actions: [],
+    events: adjudication.events,
+    factualRecap: 'A forest path leads to a watchtower.',
+    rewards: [],
+    characters: [],
+    changes: [],
+    journal: [],
+    location: context.scene.location,
+    worldMap,
+  };
+  await gm.narrate(resolution, context.config);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  for (const call of fetcher.mock.calls.slice(1)) {
+    const request = JSON.parse(call[1]!.body as string);
+    expect(JSON.parse(request.input[0].content).resolution.worldMap).toEqual(worldMap);
+    expect(request.instructions).toContain('never invent an extra reachable exit');
+    expect(request).not.toHaveProperty('tools');
+  }
+  const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
+  expect(request.instructions).toContain('at most ONE map connection per turn');
+  expect(request.instructions).toContain('Generate no recursive destinations');
+});
 it.each(['help-up', 'heal-ally'] as const)(
   'practice narrates saved %s receipts and arriving characters without repeating mechanics',
   async (type) => {
@@ -691,7 +858,7 @@ describe('GM narration validation', () => {
       "matching the acting character's saved ability names and descriptions",
     );
     expect(request.tools[0].tools[0].parameters.properties.abilityName.description).toContain(
-      'inferred from their natural-language intent',
+      'For a generic ability request, choose a relevant saved ability',
     );
   });
   it.each(['item', 'Mend'])(
@@ -1200,7 +1367,6 @@ describe('server-driven combat phases', () => {
                       ],
                       xp: 40,
                       gold: 100,
-                      safeRest: true,
                       location: { name: 'Desert', atmosphere: 'Sunny', hazard: '' },
                     }),
                   },
@@ -1219,7 +1385,7 @@ describe('server-driven combat phases', () => {
       fetcher as typeof fetch,
     );
     const outcome = await gm.resolve(context, tools);
-    expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0, safeRest: false, location: null });
+    expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0, location: null });
     expect(outcome.narration).toContain('boarding knife');
     expect(tools).not.toHaveBeenCalled();
     expect(tools.combat).not.toHaveBeenCalled();

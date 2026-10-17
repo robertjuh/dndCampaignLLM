@@ -1,3 +1,4 @@
+import type { FactionAffiliation, PublicFaction, ReputationReceipt } from './factions';
 import { z } from 'zod';
 import { ailments } from './ailments';
 import type { TurnResolution } from './turn-resolution';
@@ -272,9 +273,10 @@ export const campaignSchema = z
   .object({
     ruleset: z.literal('roguelike-v1').default('roguelike-v1'),
     name: z.string().trim().min(1).max(100),
-    setting: z.string().trim().min(1).max(500),
-    premise: z.string().max(2500),
-    tone: z.string().max(300),
+    setting: z.string().trim().min(1).max(1700),
+    premise: z.string().max(2000),
+    partyGoal: z.string().trim().max(1000).optional(),
+    tone: z.string().max(1000),
     language: campaignLanguageSchema,
     instructions: z.string().max(3000),
     custom: z
@@ -296,6 +298,8 @@ export const checkSchema = z
     dc: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
     reason: z.string().min(1).max(500),
     mode: z.enum(['normal', 'advantage', 'disadvantage']),
+    // Absent/null preserves legacy checks; new checks keep both sides until the engine combines them.
+    circumstances: z.object({ favorable: z.boolean(), adverse: z.boolean() }).strict().nullable().optional(),
     lethal: z.boolean().default(false),
     abilityName: z.string().min(1).max(80).nullable().optional(),
     assistsMemberId: z.string().uuid().nullable().optional(),
@@ -346,6 +350,44 @@ export const changeSchema = z.discriminatedUnion('type', [
     .strict(),
 ]);
 export const maxNarrationLength = 24000;
+export const mapConnectionSchema = z
+  .object({
+    from: z.string().min(1).max(100),
+    to: z.string().min(1).max(100),
+    label: z.string().trim().min(1).max(200),
+    blocked: z.boolean(),
+    bidirectional: z.boolean(),
+  })
+  .strict();
+export const worldMapSchema = z
+  .object({
+    nodes: z.record(
+      z.object({ id: z.string().uuid(), name: z.string().min(1).max(500), visited: z.boolean() }).strict(),
+    ),
+    connections: z.array(mapConnectionSchema),
+  })
+  .strict();
+export type WorldMap = z.infer<typeof worldMapSchema>;
+export const mapUpdatesSchema = z
+  .object({
+    locations: z
+      .array(z.object({ ref: z.string().min(1).max(100), name: z.string().trim().min(1).max(100) }).strict())
+      .max(30),
+    connections: z.array(mapConnectionSchema.extend({ eventId: z.string().min(1).max(200) })).max(60),
+  })
+  .strict();
+export const placeUpdateSchema = z
+  .object({
+    ref: z.string().min(1).max(100),
+    location: z
+      .object({
+        name: z.string().min(1).max(100),
+        atmosphere: z.string().min(1).max(1500),
+        hazard: z.string().max(1000),
+      })
+      .strict(),
+  })
+  .strict();
 export const outcomeSchema = z
   .object({
     narration: z.string().min(1).max(maxNarrationLength),
@@ -355,30 +397,72 @@ export const outcomeSchema = z
     xp: z.number().int().min(0).max(40).default(0),
     gold: z.number().int().min(0).max(100).default(0),
     lethalWarning: z.string().max(1000).nullable().default(null),
-    safeRest: z.boolean().default(false),
     location: z
       .object({
+        id: z.string().uuid().nullable().optional(),
         name: z.string().min(1).max(100),
         atmosphere: z.string().min(1).max(1500),
         hazard: z.string().max(1000),
       })
       .nullable()
       .default(null),
+    memberLocations: z
+      .array(
+        z
+          .object({
+            memberId: z.string().uuid(),
+            locationId: z.string().min(1).max(100),
+            movementEventId: z.string().min(1).optional(),
+          })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
+    placeUpdates: z.array(placeUpdateSchema).max(100).optional(),
+    mapUpdates: mapUpdatesSchema.optional(),
+    sceneFocus: z.string().min(1).max(100).optional(),
+    separations: z
+      .array(
+        z
+          .object({ memberIds: z.tuple([z.string().uuid(), z.string().uuid()]), eventId: z.string().min(1) })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
     journal: z
       .array(
         z
           .object({
             kind: z.enum(['npc', 'location', 'quest', 'faction', 'fact']),
             name: z.string().min(1).max(100),
-            detail: z.string().min(1).max(1500),
+            detail: z.string().min(1).max(6000),
+            itemId: z.string().min(1).max(200).optional(),
+            itemStatus: z.string().max(500).optional(),
           })
-          .strict(),
+          .strict()
+          .superRefine((entry, ctx) => {
+            if (entry.kind !== 'faction' && entry.detail.length > 1500)
+              ctx.addIssue({
+                code: 'custom',
+                message: 'Non-faction journal facts are limited to 1500 characters.',
+                path: ['detail'],
+              });
+          }),
       )
-      .max(10),
+      .max(16)
+      .superRefine((entries, ctx) => {
+        if (entries.filter((entry) => entry.kind !== 'faction').length > 10)
+          ctx.addIssue({ code: 'custom', message: 'At most ten non-faction journal entries per turn.' });
+      }),
   })
   .strict();
 export type Outcome = z.infer<typeof outcomeSchema>;
 export type CharacterState = {
+  factionConnectionPreference?: 'allow' | 'unaffiliated';
+  factionInitialized?: boolean;
+  factionAffiliation?: FactionAffiliation | null;
+  factionReputation?: Record<string, number>;
+  factionAchievements?: Record<string, string[]>;
   hp: number;
   maxHp: number;
   stats: Record<Stat, number>;
@@ -398,7 +482,6 @@ export type CharacterState = {
   deathReason: string | null;
   downedThisEncounter?: boolean;
   respawnReady?: boolean;
-  restedEncounter: number | null;
   guarding?: boolean;
   abilityUses?: Record<string, number>;
   abilityGuard?: number;
@@ -436,7 +519,9 @@ export type Encounter = {
   escaped: boolean;
 };
 export type Scene = {
+  gathering?: { id: string; memberId: string; locationId: string };
   location: {
+    id?: string;
     name: string;
     atmosphere: string;
     hazard: string;
@@ -445,12 +530,24 @@ export type Scene = {
   encounter: Encounter | null;
   loot: (Item & { quantity: number })[];
   lethalWarning: string | null;
-  safeRest: boolean;
-  usedRest: boolean;
   // Stable, location-qualified discovery sources prevent replenishing the same searched cache.
   searchedLoot?: Record<string, string>;
+  searches?: Record<string, { information: string; rewardRolled: boolean }>;
   environment?: EnvironmentalState;
+  encounterRisk?: { danger: 'safe' | 'dangerous'; reason: string };
+  worldProgression?: {
+    version: 1;
+    places: Record<string, { stalledTurns: number; lastTurnId?: string; recentFacts: string[] }>;
+  };
+  places?: Record<string, PlaceState>;
+  memberLocations?: Record<string, string>;
+  worldMap?: WorldMap;
+  legacyLoot?: Scene['loot'];
 };
+export type PlaceState = Pick<
+  Scene,
+  'location' | 'encounter' | 'loot' | 'searchedLoot' | 'searches' | 'environment' | 'encounterRisk'
+>;
 export const environmentalActionSchema = z
   .object({
     sourceId: z.string().min(1).max(700),
@@ -484,6 +581,7 @@ export const combatSchema = z
         z
           .object({
             memberId: z.string().uuid(),
+            intent: z.enum(['action', 'orientation']).optional(),
             main: z.enum([
               'attack',
               'defend',
@@ -540,6 +638,8 @@ export type Member = {
   replacement?: { characterId: string; character: Character } | null;
 };
 export type Action = {
+  gathering?: { id: string; locationId: string; route: string[] };
+  submittedAt?: string;
   memberId: string;
   text: string;
   passed: boolean;
@@ -573,9 +673,11 @@ export type Turn = {
   automaticRetry?: boolean;
   diagnostics?: string[];
   resolution?: TurnResolution;
+  factionChanges?: ReputationReceipt[];
   equipmentChanges?: { memberId: string; characterName: string; description: string }[];
 };
 export type Snapshot = {
+  factions?: PublicFaction[];
   id: string;
   config: CampaignConfig;
   status: 'lobby' | 'active' | 'archived' | 'ended';

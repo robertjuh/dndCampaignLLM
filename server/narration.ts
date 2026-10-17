@@ -20,6 +20,7 @@ const storyProse = z
 
 // Translate fixed engine phrasing; keep names, mechanics and submitted text exact.
 const dutchCombatPhrases: [string, string][] = [
+  [' is no longer Stunned.', ' is niet langer Stunned.'],
   [
     ' its loaded shot is spent and it needs reloading.',
     ' de geladen schotvoorraad is verbruikt en opnieuw laden is nodig.',
@@ -249,7 +250,11 @@ export function combatFact(
         ...member.state.inventory.map((item) => item.name),
         ...Object.values(member.state.equipment).flatMap((item) => (item ? [item.name] : [])),
       ]),
-      ...(context.combatResult?.encounter.enemies.map((enemy) => enemy.name) ?? []),
+      ...(context.combatResult
+        ? Object.values(
+            context.combatResult.encounters ?? { current: context.combatResult.encounter },
+          ).flatMap((encounter) => encounter.enemies.map((enemy) => enemy.name))
+        : []),
       ...(context.combatResult?.characters.map((character) => character.name) ?? []),
       ...(context.combatResult?.loot.map((item) => item.name) ?? []),
       ...Object.values(context.scene?.environment?.sources ?? {}).map((source) => source.profile.name),
@@ -286,85 +291,94 @@ export function narrationBeats(
       ? `${arrival.character.name}, het nieuwe personage van ${arrival.playerName}, sluit zich aan bij de groep.`
       : `${arrival.character.name}, ${arrival.playerName}'s new character, joins the party.`,
   }));
-  if (context.combatResult)
-    return [
-      ...arrivals,
-      ...context.combatResult.logs.map((fact, index) => ({
-        id: `combat:${index}`,
-        fact: combatFact(context, fact),
-      })),
-    ];
+  const combat =
+    context.combatResult?.logs.map((fact, index) => ({
+      id: `combat:${index}`,
+      fact: combatFact(context, fact),
+    })) ?? [];
   const recovery = (context.recoveryLogs ?? []).map((fact, index) => ({
     id: `recovery:${index}`,
     fact: combatFact(context, fact),
   }));
   return [
     ...arrivals,
-    ...context.turn.actions.map((action) => {
-      const member = context.members.find((member) => member.id === action.memberId);
-      const name = action.characterName ?? member?.character.name ?? action.memberId;
-      const attempt = action.text.length > 500 ? `${action.text.slice(0, 500)}…` : action.text;
-      const checks = rolls.filter((roll) => roll.memberId === action.memberId && !roll.notation);
-      const facts = [
-        action.passed
-          ? dutch
-            ? `${name} wacht en onderneemt geen actie.`
-            : `${name} waits and takes no action.`
-          : checks.length
-            ? checks.map((roll) => roll.reason).join(' ')
+    ...combat,
+    ...context.turn.actions
+      .filter(
+        (action) =>
+          !context.combatResult ||
+          (context.combatResult.participantIds &&
+            !context.combatResult.participantIds.includes(action.memberId)),
+      )
+      .map((action) => {
+        const member = context.members.find((member) => member.id === action.memberId);
+        const name = action.characterName ?? member?.character.name ?? action.memberId;
+        const attempt = action.text.length > 500 ? `${action.text.slice(0, 500)}…` : action.text;
+        const checks = rolls.filter((roll) => roll.memberId === action.memberId && !roll.notation);
+        const facts = [
+          action.passed
+            ? dutch
+              ? `${name} wacht en onderneemt geen actie.`
+              : `${name} waits and takes no action.`
+            : checks.length
+              ? checks.map((roll) => roll.reason).join(' ')
+              : dutch
+                ? `${name} probeert: ${attempt}${action.abilityName ? ` (met ${action.abilityName})` : ''}`
+                : `${name} attempts: ${attempt}${action.abilityName ? ` (using ${action.abilityName})` : ''}`,
+        ];
+        const criticalResult =
+          member && isDead(member.state)
+            ? dutch
+              ? ` ${name} sterft door opnieuw neer te gaan.`
+              : ` ${name} dies after being downed again.`
             : dutch
-              ? `${name} probeert: ${attempt}${action.abilityName ? ` (met ${action.abilityName})` : ''}`
-              : `${name} attempts: ${attempt}${action.abilityName ? ` (using ${action.abilityName})` : ''}`,
-      ];
-      const criticalResult =
-        member && isDead(member.state)
-          ? dutch
-            ? ` ${name} sterft door opnieuw neer te gaan.`
-            : ` ${name} dies after being downed again.`
-          : dutch
-            ? ` ${name} raakt Downed met 0 HP.`
-            : ` ${name} is downed at 0 HP.`;
-      if (!action.passed)
-        for (const roll of checks)
+              ? ` ${name} raakt Downed met 0 HP.`
+              : ` ${name} is downed at 0 HP.`;
+        if (!action.passed)
+          for (const roll of checks)
+            facts.push(
+              dutch
+                ? `${name}'s ${roll.stat} check ${roll.success ? 'slaagt' : 'mislukt'}${roll.critical === 'success' ? ': natural 20, uitzonderlijk succes' : roll.critical === 'failure' ? ': natural 1, catastrofale mislukking' : ''}.${roll.abilityName ? ` ${name} gebruikt ${roll.abilityName}, waarbij de ability use wordt verbruikt.` : ''}${roll.lethal && roll.critical === 'failure' ? criticalResult : ''}`
+                : `${name}'s ${roll.stat} check ${roll.success ? 'succeeds' : 'fails'}${roll.critical === 'success' ? ': natural 20, extraordinary success' : roll.critical === 'failure' ? ': natural 1, catastrophic failure' : ''}.${roll.abilityName ? ` ${name} uses ${roll.abilityName}, spending its use.` : ''}${roll.lethal && roll.critical === 'failure' ? criticalResult : ''}`,
+            );
+        for (const support of context.supportResults?.filter(
+          (result) => result.memberId === action.memberId,
+        ) ?? [])
+          facts.push(combatFact(context, support.log));
+        for (const receipt of context.resourceUses?.filter(
+          (receipt) => receipt.memberId === action.memberId,
+        ) ?? []) {
+          const target = context.members.find(
+            (member) => member.id === (receipt.targetId ?? action.memberId),
+          );
           facts.push(
             dutch
-              ? `${name}'s ${roll.stat} check ${roll.success ? 'slaagt' : 'mislukt'}${roll.critical === 'success' ? ': natural 20, uitzonderlijk succes' : roll.critical === 'failure' ? ': natural 1, catastrofale mislukking' : ''}.${roll.abilityName ? ` ${name} gebruikt ${roll.abilityName}, waarbij de ability use wordt verbruikt.` : ''}${roll.lethal && roll.critical === 'failure' ? criticalResult : ''}`
-              : `${name}'s ${roll.stat} check ${roll.success ? 'succeeds' : 'fails'}${roll.critical === 'success' ? ': natural 20, extraordinary success' : roll.critical === 'failure' ? ': natural 1, catastrophic failure' : ''}.${roll.abilityName ? ` ${name} uses ${roll.abilityName}, spending its use.` : ''}${roll.lethal && roll.critical === 'failure' ? criticalResult : ''}`,
+              ? `${name} gebruikt ${receipt.sourceName}, ${receipt.itemId ? 'waarbij één item wordt verbruikt' : 'waarbij de ability use wordt verbruikt'}${receipt.restored > 0 ? `, en herstelt ${receipt.restored} HP bij ${target?.character.name ?? name}` : ''}.`
+              : `${name} uses ${receipt.sourceName}, ${receipt.itemId ? 'consuming one item' : 'spending its ability use'}${receipt.restored > 0 ? `, restoring ${receipt.restored} HP to ${target?.character.name ?? name}` : ''}.`,
           );
-      for (const support of context.supportResults?.filter((result) => result.memberId === action.memberId) ??
-        [])
-        facts.push(combatFact(context, support.log));
-      for (const receipt of context.resourceUses?.filter((receipt) => receipt.memberId === action.memberId) ??
-        []) {
-        const target = context.members.find((member) => member.id === (receipt.targetId ?? action.memberId));
-        facts.push(
-          dutch
-            ? `${name} gebruikt ${receipt.sourceName}, ${receipt.itemId ? 'waarbij één item wordt verbruikt' : 'waarbij de ability use wordt verbruikt'}${receipt.restored > 0 ? `, en herstelt ${receipt.restored} HP bij ${target?.character.name ?? name}` : ''}.`
-            : `${name} uses ${receipt.sourceName}, ${receipt.itemId ? 'consuming one item' : 'spending its ability use'}${receipt.restored > 0 ? `, restoring ${receipt.restored} HP to ${target?.character.name ?? name}` : ''}.`,
-        );
-        if (receipt.cured?.length)
-          facts.push(
-            dutch
-              ? `${receipt.sourceName} verwijdert ${receipt.cured.join(' en ')} bij ${target?.character.name ?? name}.`
-              : `${receipt.sourceName} removes ${receipt.cured.join(' and ')} from ${target?.character.name ?? name}.`,
-          );
-      }
-      for (const change of changes.filter((change) => change.memberId === action.memberId)) {
-        if (change.type === 'hp' && change.amount !== 0)
-          facts.push(
-            dutch
-              ? `${name} ${change.amount < 0 ? 'verliest' : 'herstelt'} ${Math.abs(change.amount)} HP: ${change.reason}`
-              : `${name} ${change.amount < 0 ? 'loses' : 'recovers'} ${Math.abs(change.amount)} HP: ${change.reason}`,
-          );
-        if (change.type === 'condition')
-          facts.push(
-            dutch
-              ? `${name} ${change.remove ? 'verliest' : 'krijgt'} ${change.name}: ${change.reason}`
-              : `${name} ${change.remove ? 'loses' : 'gains'} ${change.name}: ${change.reason}`,
-          );
-      }
-      return { id: `action:${action.memberId}`, fact: facts.join(' ') };
-    }),
+          if (receipt.cured?.length)
+            facts.push(
+              dutch
+                ? `${receipt.sourceName} verwijdert ${receipt.cured.join(' en ')} bij ${target?.character.name ?? name}.`
+                : `${receipt.sourceName} removes ${receipt.cured.join(' and ')} from ${target?.character.name ?? name}.`,
+            );
+        }
+        for (const change of changes.filter((change) => change.memberId === action.memberId)) {
+          if (change.type === 'hp' && change.amount !== 0)
+            facts.push(
+              dutch
+                ? `${name} ${change.amount < 0 ? 'verliest' : 'herstelt'} ${Math.abs(change.amount)} HP: ${change.reason}`
+                : `${name} ${change.amount < 0 ? 'loses' : 'recovers'} ${Math.abs(change.amount)} HP: ${change.reason}`,
+            );
+          if (change.type === 'condition')
+            facts.push(
+              dutch
+                ? `${name} ${change.remove ? 'verliest' : 'krijgt'} ${change.name}: ${change.reason}`
+                : `${name} ${change.remove ? 'loses' : 'gains'} ${change.name}: ${change.reason}`,
+            );
+        }
+        return { id: `action:${action.memberId}`, fact: facts.join(' ') };
+      }),
     ...recovery,
   ];
 }

@@ -1,5 +1,14 @@
+import { factionEffectsSchema } from './factions';
+import { worldProgressEvidenceSchema } from './world-progression';
 import { z } from 'zod';
-import { maxNarrationLength, outcomeSchema, type CampaignConfig } from './schema';
+import {
+  maxNarrationLength,
+  outcomeSchema,
+  lootSchema,
+  placeUpdateSchema,
+  worldMapSchema,
+  type CampaignConfig,
+} from './schema';
 
 const fact = z.string().trim().min(1).max(2500);
 export const actionId = (turnId: string, memberId: string) => `${turnId}:action:${memberId}`;
@@ -22,8 +31,36 @@ export const actionComponentSchema = actionOutcomeV1Schema
   .extend({ status: componentStatus });
 export type ActionComponent = z.infer<typeof actionComponentSchema>;
 export const actionOutcomeSchema = actionOutcomeV1Schema.extend({
+  intent: z.enum(['action', 'orientation', 'search']).optional(),
+  search: z
+    .object({
+      sourceId: z
+        .string()
+        .transform((value) => value.normalize('NFKC').trim().toLowerCase())
+        .pipe(z.string().min(1).max(200)),
+      locationId: z.string().min(1).max(100),
+      informationEventId: z.string().min(1).max(200),
+      reward: lootSchema.nullable().default(null),
+    })
+    .strict()
+    .nullable()
+    .optional(),
+  travel: z
+    .object({
+      goalId: z.string().min(1).max(100),
+      via: z.array(z.string().min(1).max(100)).max(30).optional(),
+      avoid: z.array(z.string().min(1).max(100)).max(30).optional(),
+      obstacleEventId: z.string().min(1).max(200).nullable().optional(),
+    })
+    .strict()
+    .nullable()
+    .optional(),
   components: z
-    .object({ main: actionComponentSchema.nullable(), minor: actionComponentSchema.nullable() })
+    .object({
+      main: actionComponentSchema.nullable(),
+      minor: actionComponentSchema.nullable(),
+      movement: actionComponentSchema.nullable().optional(),
+    })
     .strict(),
 });
 export type ActionOutcome = z.infer<typeof actionOutcomeSchema>;
@@ -42,7 +79,10 @@ export const resolvedEventV1Schema = z
 export type ResolvedEventV1 = z.infer<typeof resolvedEventV1Schema>;
 export const resolvedEventSchema = resolvedEventV1Schema.extend({
   presentation: z.literal('log').optional(),
-  phase: z.enum(['main', 'minor', 'aftermath']).nullable(),
+  phase: z.enum(['main', 'minor', 'movement', 'aftermath']).nullable(),
+  beforeEventId: z.string().min(1).optional(),
+  effect: z.enum(['movement', 'search']).optional(),
+  locationRef: z.string().min(1).max(100).optional(),
   result: componentStatus.nullable(),
   dependsOn: z
     .array(z.object({ eventId: z.string().min(1), requires: z.enum(['occurrence', 'success']) }).strict())
@@ -58,12 +98,38 @@ export const turnAdjudicationV1Schema = z
     changes: outcomeSchema.shape.changes,
     journal: outcomeSchema.shape.journal,
     location: outcomeSchema.shape.location,
-    safeRest: z.boolean(),
+    memberLocations: outcomeSchema.shape.memberLocations,
+    placeUpdates: outcomeSchema.shape.placeUpdates,
+    mapUpdates: outcomeSchema.shape.mapUpdates,
+    sceneFocus: outcomeSchema.shape.sceneFocus,
+    separations: outcomeSchema.shape.separations,
     rewards: z.object({ xp: outcomeSchema.shape.xp, gold: outcomeSchema.shape.gold, reason: fact }).strict(),
   })
   .strict();
 export type TurnAdjudicationV1 = z.infer<typeof turnAdjudicationV1Schema>;
+export const arrivalEvidenceSchema = z
+  .object({
+    locationId: z.string().min(1).max(100),
+    eventId: z.string().min(1).max(200),
+  })
+  .strict();
 export const turnAdjudicationSchema = turnAdjudicationV1Schema.extend({
+  worldProgress: z.array(worldProgressEvidenceSchema).max(100).optional(),
+  encounterRisks: z
+    .array(
+      z
+        .object({
+          locationId: z.string().min(1).max(100),
+          danger: z.enum(['safe', 'dangerous']),
+          reason: z.string().trim().min(1).max(500),
+          eventId: z.string().min(1).max(200),
+        })
+        .strict(),
+    )
+    .max(100)
+    .optional(),
+  arrivals: z.array(arrivalEvidenceSchema).max(100).optional(),
+  factionEffects: factionEffectsSchema.optional(),
   version: z.literal(2),
   actions: z.array(actionOutcomeSchema).max(100),
   events: z.array(resolvedEventSchema).max(400),
@@ -113,13 +179,53 @@ export const turnResolutionV1Schema = z
     // Initial/legacy scenes can retain the full campaign setting and an empty atmosphere.
     location: z
       .object({
+        id: z.string().uuid().optional(),
         name: z.string().min(1).max(500),
         atmosphere: z.string().max(1500),
         hazard: z.string().max(1000),
       })
       .strict()
       .nullable(),
-    safeRest: z.boolean(),
+    partyGoal: z.string().max(1000).optional(),
+    memberLocations: z.record(z.string()).optional(),
+    knownLocations: z.record(z.string()).optional(),
+    worldMap: worldMapSchema.optional(),
+    placeRefs: z.record(z.string()).optional(),
+    placeStates: z
+      .record(
+        z.object({
+          location: placeUpdateSchema.shape.location.extend({
+            id: z.string().optional(),
+            name: z.string().min(1).max(500),
+            atmosphere: z.string().max(1500),
+          }),
+          encounter: z
+            .object({
+              round: z.number().int().nonnegative(),
+              victory: z.boolean(),
+              escaped: z.boolean(),
+              enemies: z.array(
+                z.object({
+                  id: z.string(),
+                  name: z.string(),
+                  hp: z.number().int().nonnegative(),
+                  maxHp: z.number().int().positive(),
+                  withdrawn: z.boolean(),
+                }),
+              ),
+            })
+            .nullable()
+            .optional(),
+        }),
+      )
+      .optional(),
+    previousSituation: z
+      .object({
+        locationId: z.string().optional(),
+        memberLocations: z.record(z.string()),
+        places: z.record(z.object({ name: z.string(), hazard: z.string() })),
+      })
+      .optional(),
     executionContext: z
       .array(
         z.object({
@@ -131,9 +237,12 @@ export const turnResolutionV1Schema = z
       )
       .optional(),
     actionDescriptions: z.record(z.string()).optional(),
+    // Public pre-roll context, keyed by its immutable check event; never proof of a new outcome.
+    checkReasons: z.record(z.string().max(200), z.string().min(1).max(500)).optional(),
   })
   .strict();
 export const turnResolutionV2Schema = turnResolutionV1Schema.extend({
+  arrivals: z.array(arrivalEvidenceSchema).max(100).optional(),
   version: z.literal(2),
   actions: z.array(actionOutcomeSchema.extend({ characterId: z.string(), characterName: z.string() })),
   events: z.array(resolvedEventSchema),
@@ -143,6 +252,52 @@ export const turnResolutionSchema = z.discriminatedUnion('version', [
   turnResolutionV2Schema,
 ]);
 export type TurnResolution = z.infer<typeof turnResolutionSchema>;
+
+/** Guard direct combat-state assertions; creative prose never changes an engine outcome. */
+export function assertCombatClaims(
+  places: TurnResolution['placeStates'],
+  claims: { text: string; locationId?: string }[],
+) {
+  const escape = (name: string) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const singleEncounter = Object.values(places ?? {}).filter((place) => place.encounter).length === 1;
+  for (const [locationId, place] of Object.entries(places ?? {})) {
+    const encounter = place.encounter;
+    if (!encounter) continue;
+    for (const { text, locationId: scope } of claims) {
+      if (scope && scope !== locationId && places?.[scope]?.encounter) continue;
+      // Conditional hopes/questions do not assert a completed effect.
+      for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+        if (/^(?:if|when|once|als|wanneer|zodra)\b/i.test(sentence.trim()) || sentence.trim().endsWith('?'))
+          continue;
+        for (const enemy of encounter.enemies.filter((enemy) => enemy.hp > 0)) {
+          const name = `\\b${escape(enemy.name).replace(/^(?:de|the)\s+/i, '(?:(?:de|the)\\s+)?')}\\b`;
+          const defeated = enemy.withdrawn ? '' : '|defeated|verslagen';
+          const dead = `(?:dead|killed|slain|dood|gedood|gestorven${defeated})`;
+          if (
+            new RegExp(
+              `${name}\\s+(?:(?:already|al)\\s+)?(?:(?:is|was|lies|falls|has been|werd|ligt|valt|wordt)\\s+)?(?:(?:already|al)\\s+)?${dead}\\b|${name}\\s+(?:dies|perishes|sterft|komt om)\\b|\\b(?:kills?|slays?|doodt)\\s+${name}`,
+              'i',
+            ).test(sentence)
+          )
+            throw new Error(
+              `${enemy.name} still has ${enemy.hp}/${enemy.maxHp} HP. Do not declare their death or defeat; recorded damage is already applied.`,
+            );
+        }
+        if (
+          (scope || singleEncounter) &&
+          !encounter.victory &&
+          !encounter.escaped &&
+          /\b(?:(?:combat|fight|battle|gevecht|strijd)\s+(?:ends?|is over|has ended|is finished|eindigt|is voorbij|is afgelopen)|(?:no|geen)\s+(?:active|actieve|living|levende)\s+(?:enemies|enemy|vijand(?:en)?)\s+(?:remain(?:s)?|meer))\b/i.test(
+            sentence,
+          )
+        )
+          throw new Error(
+            `Combat at ${place.location.name} is still active. Do not declare victory, an ended fight or an enemy-free location.`,
+          );
+      }
+    }
+  }
+}
 export const turnNarrationV1Schema = z
   .object({
     version: z.literal(1),
@@ -206,28 +361,77 @@ export function factualNarration(
   };
   // ponytail: oversized facts use whole-sentence excerpts; the full resolution stays saved.
   const events = narrationEvents(resolution);
+  const facts = events.map((event) => {
+    const main =
+      resolution.version === 2 && event.kind === 'mechanics' && event.id.startsWith('check:')
+        ? resolution.actions.find((action) => action.actionId === event.actionId)?.components.main
+        : undefined;
+    if (!main?.eventIds.includes(event.id)) return event.fact;
+    // Fictional outcomes already carry these checks; do not tell them again as separate results.
+    if (
+      !events.some((event) => event.kind === 'combat') &&
+      events.some(
+        (other) =>
+          other.kind === 'action' &&
+          'phase' in other &&
+          other.phase === 'main' &&
+          other.actionId === event.actionId &&
+          other.result === main.status &&
+          main.eventIds.includes(other.id),
+      )
+    )
+      return null;
+    return main.fact;
+  });
   const limit = Math.floor((maxNarrationLength - events.length * 2) / Math.max(1, events.length));
-  const dutch = language === 'Nederlands';
+  const outcomes = resolution.actions
+    .filter((action) => action.status !== 'passed')
+    .map((action) => compact(action.fact, Math.floor(1100 / Math.max(1, resolution.actions.length))));
+  const progress =
+    events.filter((event) => event.kind === 'world').at(-1)?.fact ??
+    events.filter((event) => event.kind === 'action').at(-1)?.fact;
+  const split = new Set(Object.values(resolution.memberLocations ?? {})).size > 1;
+  const previous = resolution.previousSituation;
+  const positionsChanged =
+    !previous ||
+    Object.entries(resolution.memberLocations ?? {}).some(
+      ([id, place]) => previous.memberLocations[id] !== place,
+    );
+  const positions =
+    split && positionsChanged
+      ? resolution.characters
+          .map((character) => {
+            const place = resolution.knownLocations?.[resolution.memberLocations?.[character.memberId] ?? ''];
+            return place ? `${character.characterName}: ${place}.` : '';
+          })
+          .filter(Boolean)
+          .join(' ')
+      : '';
   const situation = resolution.location
     ? [
-        resolution.location.name,
-        resolution.location.atmosphere,
-        resolution.location.hazard,
-        resolution.safeRest
-          ? dutch
-            ? 'Veilig rusten is mogelijk.'
-            : 'Safe rest is available.'
-          : dutch
-            ? 'Veilig rusten is niet mogelijk.'
-            : 'Safe rest is not available.',
+        ...new Set(outcomes),
+        ...(progress ? [progress] : []),
+        positions || (positionsChanged ? resolution.location.name : ''),
+        !previous || previous.places[resolution.location.id ?? '']?.hazard !== resolution.location.hazard
+          ? resolution.location.hazard
+          : '',
       ]
         .filter(Boolean)
         .join(' ')
-    : (events.filter((event) => event.kind === 'world').at(-1)?.fact ?? neutral);
+    : [...new Set(outcomes), progress].filter(Boolean).join(' ') || neutral;
   return assembleResolvedNarration(resolution, {
     version: 2,
     turnId: resolution.turnId,
-    passages: events.map((event) => ({ eventIds: [event.id], text: compact(event.fact, limit) })),
+    passages: facts.includes(null)
+      ? [
+          {
+            eventIds: events.map((event) => event.id),
+            text: [...new Set(facts.filter((fact) => fact !== null))]
+              .map((fact) => compact(fact, limit))
+              .join('\n\n'),
+          },
+        ]
+      : events.map((event, index) => ({ eventIds: [event.id], text: compact(facts[index]!, limit) })),
     closing: '',
     summary: compact(situation, 1900),
   });
@@ -238,10 +442,11 @@ export function aggregateComponents(
   components: {
     main: Pick<ActionComponent, 'status' | 'basis'> | null;
     minor: Pick<ActionComponent, 'status' | 'basis'> | null;
+    movement?: Pick<ActionComponent, 'status' | 'basis'> | null;
   },
   passed = false,
 ): Pick<ActionOutcome, 'status' | 'basis'> {
-  const attempted = [components.main, components.minor].filter((part) => part !== null);
+  const attempted = [components.main, components.minor, components.movement].filter((part) => part != null);
   if (passed) {
     if (attempted.length) throw new Error('A pass cannot contain action components.');
     return { status: 'passed', basis: 'none' };
@@ -257,7 +462,7 @@ export function aggregateComponents(
         : statuses.every((value) => value === 'blocked')
           ? 'blocked'
           : 'failure';
-  return { status, basis: (components.main ?? components.minor)!.basis };
+  return { status, basis: (components.main ?? components.minor ?? components.movement)!.basis };
 }
 
 /** Cross-reference validation is shared by accepted proposals and finalized resolutions. */
@@ -294,7 +499,7 @@ export function validateReferences(
         (!action ||
           (action.status === 'passed'
             ? event.phase !== null || event.result !== null
-            : !['main', 'minor'].includes(event.phase ?? '')))
+            : !['main', 'minor', 'movement'].includes(event.phase ?? '')))
       )
         throw new Error(
           'Action events must declare their requested slot; pass events have no phase or result.',
@@ -350,7 +555,7 @@ export function validateReferences(
     const aggregate = aggregateComponents(action.components, action.status === 'passed');
     if (aggregate.status !== action.status || aggregate.basis !== action.basis)
       throw new Error('The aggregate outcome must match its main and minor components.');
-    for (const phase of ['main', 'minor'] as const) {
+    for (const phase of ['main', 'minor', 'movement'] as const) {
       const component = action.components[phase];
       const phased = own.filter((event) => 'phase' in event && event.phase === phase);
       if (!component) {
@@ -385,6 +590,10 @@ export function validateReferences(
 
 export function assembleResolvedNarration(resolution: TurnResolution, input: unknown): TurnNarration {
   const narration = turnNarrationSchema.parse(input);
+  assertCombatClaims(resolution.placeStates, [
+    ...narrationParagraphs(resolution, narration).map((text) => ({ text })),
+    { text: narration.summary, locationId: resolution.location?.id },
+  ]);
   // Accepted v1 checkpoints retain full coverage; new prose covers only story events.
   const events = narration.version === 1 ? resolution.events : narrationEvents(resolution);
   const ids =
@@ -400,6 +609,14 @@ export function assembleResolvedNarration(resolution: TurnResolution, input: unk
     throw new Error('Narration must cover exactly the finalized event IDs.');
   if (narration.version === 2) {
     const positions = new Map(ids.map((id, index) => [id, index]));
+    for (const event of events)
+      if (
+        'beforeEventId' in event &&
+        event.beforeEventId &&
+        positions.has(event.beforeEventId) &&
+        positions.get(event.id)! >= positions.get(event.beforeEventId)!
+      )
+        throw new Error('Narration must preserve completed movement before its later check.');
     for (const event of events)
       for (const dependency of event.dependsOn) {
         const id = typeof dependency === 'string' ? dependency : dependency.eventId;

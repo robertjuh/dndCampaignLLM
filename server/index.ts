@@ -5,6 +5,7 @@ import { createApp } from './app';
 import { openDatabase } from './db';
 import { ChatGPTAuth } from './auth';
 import { GoogleAuth, createGoogleCallbackApp } from './google';
+import { createModelLog } from './model-log';
 
 try {
   process.loadEnvFile(resolve('.env'));
@@ -38,6 +39,7 @@ const { app } = await createApp({
   port,
   partyOrigins,
   google,
+  modelTrace: createModelLog(join(directory, 'logs')),
 });
 if (google) {
   const callback = createGoogleCallbackApp(google);

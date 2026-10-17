@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { migrateLocations, migrateWorldMaps } from './location-migration';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { rollStartingEquipment, grantEquipmentPowers } from '../shared/rules';
@@ -20,7 +21,7 @@ export function openDatabase(filename: string) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 11) throw new Error('This database was created by a newer Gather version.');
+  if (version > 17) throw new Error('This database was created by a newer Gather version.');
   if (version === 0)
     db.transaction(() => {
       db.exec(`
@@ -235,7 +236,6 @@ export function openDatabase(filename: string) {
           delete value.nextFloor;
         }
         if ('restedFloor' in value) {
-          value.restedEncounter = null;
           delete value.restedFloor;
         }
         if ('hp' in value && Array.isArray(value.conditions))
@@ -389,6 +389,77 @@ export function openDatabase(filename: string) {
               row.id,
             );
       db.pragma('user_version = 11');
+    })();
+  if (version < 12)
+    db.transaction(() => {
+      const columns = db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[];
+      if (!columns.some((column) => column.name === 'factions'))
+        db.exec('ALTER TABLE campaigns ADD COLUMN factions TEXT;');
+      db.pragma('user_version = 12');
+    })();
+  if (version < 13)
+    db.transaction(() => {
+      migrateLocations(db);
+      db.pragma('user_version = 13');
+    })();
+  if (version < 14)
+    db.transaction(() => {
+      for (const [table, column] of [
+        ['journal', 'item_id'],
+        ['actions', 'submitted_at'],
+      ]) {
+        const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+        if (!columns.some((existing) => existing.name === column))
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT;`);
+      }
+      db.pragma('user_version = 14');
+    })();
+  if (version < 15)
+    db.transaction(() => {
+      // Remove obsolete rest state from active saves and interrupted checkpoints.
+      // Completed history and all gameplay receipts retain their recorded values.
+      const migrate = (input: unknown): unknown => {
+        if (Array.isArray(input)) return input.map(migrate);
+        if (!input || typeof input !== 'object') return input;
+        return Object.fromEntries(
+          Object.entries(input)
+            .filter(([key]) => !['safeRest', 'usedRest', 'restedEncounter', 'restedFloor'].includes(key))
+            .map(([key, value]) => [
+              key,
+              key === 'factualRecap' && typeof value === 'string'
+                ? value.replace(/\. Safe rest: (?:true|false)\./g, '.')
+                : migrate(value),
+            ]),
+        );
+      };
+      for (const [table, fields, where] of [
+        ['members', ['state', 'replacement'], ''],
+        ['campaigns', ['scene'], ''],
+        ['turns', ['draft', 'result'], " WHERE phase != 'complete'"],
+      ] as const)
+        for (const row of db.prepare(`SELECT id, ${fields.join(', ')} FROM ${table}${where}`).all() as Record<
+          string,
+          string
+        >[])
+          for (const field of fields)
+            if (row[field])
+              db.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).run(
+                JSON.stringify(migrate(JSON.parse(row[field]))),
+                row.id,
+              );
+      db.pragma('user_version = 15');
+    })();
+  if (version < 16)
+    db.transaction(() => {
+      migrateWorldMaps(db);
+      db.pragma('user_version = 16');
+    })();
+  if (version < 17)
+    db.transaction(() => {
+      const columns = db.prepare('PRAGMA table_info(actions)').all() as { name: string }[];
+      if (!columns.some((column) => column.name === 'gathering'))
+        db.exec('ALTER TABLE actions ADD COLUMN gathering TEXT;');
+      db.pragma('user_version = 17');
     })();
   // A model may have been interrupted after a roll. Keep its receipts and require a deliberate retry.
   db.prepare(

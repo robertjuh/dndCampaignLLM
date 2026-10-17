@@ -1253,6 +1253,123 @@ p {
   color: light-dark(#9da58d, #a4b09b);
   margin-left: auto;
 }
+.world-map {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: light-dark(#fafbf5, #1d2b23);
+  overflow: hidden;
+}
+.world-map-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 12px 0;
+}
+.world-map-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+.world-map-heading > span,
+.world-map-caption {
+  font-size: 10px;
+  color: var(--muted);
+}
+.world-map-caption {
+  margin: 5px 12px 10px;
+}
+.world-map-viewport {
+  max-height: 330px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-block: 1px solid var(--line);
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+.world-map-viewport:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+.world-map-canvas {
+  position: relative;
+}
+.world-map-canvas > svg {
+  position: absolute;
+  inset: 0;
+  color: light-dark(#8e9d7a, #b6cbaa);
+}
+.world-map-route {
+  stroke: currentColor;
+  stroke-width: 2;
+}
+.world-map-route.blocked {
+  color: light-dark(#b98056, #dfa678);
+  stroke-dasharray: 5 4;
+}
+.world-map-tile {
+  position: absolute;
+  padding: 9px;
+  border: 1px solid light-dark(#cdd8bc, #607151);
+  border-radius: 6px;
+  background: light-dark(#fffef9, #1d2b23);
+  overflow: auto;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.world-map-tile.known {
+  border-style: dashed;
+  background: light-dark(#f0f2e8, #243126);
+}
+.world-map-tile.current {
+  border: 2px solid light-dark(#64804e, #9dbb85);
+}
+.world-map-tile:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.world-map-tile > b {
+  display: block;
+  line-height: 1.3;
+  font-size: 11px;
+}
+.world-map-tile small {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+}
+.world-map-tile .world-map-focus {
+  color: light-dark(#576f44, #b6cbaa);
+}
+.world-map-tile ul {
+  list-style: none;
+  padding: 0;
+  margin: 5px 0 0;
+}
+.world-map-tile li > span {
+  color: light-dark(#64804e, #9dbb85);
+  font-size: 8px;
+}
+.world-map-connections {
+  padding: 9px 12px;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.world-map-connections summary {
+  cursor: pointer;
+}
+.world-map-connections ul {
+  margin: 8px 0 0;
+  padding-left: 15px;
+}
+.world-map-connections li + li {
+  margin-top: 6px;
+}
 .party-heading {
   display: flex;
   justify-content: space-between;
@@ -3326,4 +3443,43 @@ p {
   padding: 10px 8px;
   border-bottom: 1px solid var(--line);
   text-align: left;
+}
+
+.faction-preference {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-block: 1rem;
+}
+.faction-preference input {
+  width: auto;
+}
+.faction-relations {
+  margin-block: 1rem;
+}
+.faction-relations > div {
+  margin-block: 0.5rem;
+}
+.faction-card li {
+  margin-block: 0.35rem;
+}
+.gathering-panel {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 1rem;
+}
+.gathering-panel h3 {
+  margin-top: 0;
+}
+.gathering-panel ul {
+  list-style: none;
+  padding: 0;
+}
+.gathering-panel li {
+  margin: 0.35rem 0;
+  overflow-wrap: anywhere;
+}
+.gathering-panel .button {
+  margin: 0.25rem 0.25rem 0.25rem 0;
 }

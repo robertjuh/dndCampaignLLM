@@ -29,7 +29,7 @@ export function requestedAbility(
   suggestedName?: string | null,
   state?: CharacterState,
 ): Ability | undefined {
-  if (action.passed || action.supportAction) return undefined;
+  if (action.passed || action.supportAction || action.gathering) return undefined;
   const all = availableAbilities(character, state);
   const abilities = all.filter((ability) => !kind || ability.kind === kind);
   if (action.abilityName) return abilities.find((ability) => ability.name === action.abilityName);
@@ -64,7 +64,7 @@ export function requestedConsumable(
   action: Action,
   suggestedId?: string | null,
 ): CharacterState['inventory'][number] | undefined {
-  if (action.passed || action.supportAction) return undefined;
+  if (action.passed || action.supportAction || action.gathering) return undefined;
   const text = resourceText(action.text);
   if (
     !/\b(?:use(?:d)?|using|drink\w*|drank|consume\w*|take|apply|heal(?:ed|s)?|revive(?:d|s)?|gebruik\w*|neem|genees(?:t|de)?)\b/i.test(

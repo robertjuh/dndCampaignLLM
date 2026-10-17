@@ -101,9 +101,9 @@ test('a live host language change reaches the next GM output and preserves earli
     const updated = await snapshot(page, campaign.id);
     expect(updated.config.language).toBe('Nederlands');
     expect(updated.history[0]).toEqual(opening);
-    expect(updated.history.at(-1)!.result!.summary).toContain(
-      updated.scene.safeRest ? 'Veilig rusten is mogelijk.' : 'Veilig rusten is niet mogelijk.',
-    );
+    const summary = updated.history.at(-1)!.result!.summary;
+    expect(summary).not.toContain('Safe rest');
+    expect(summary).not.toContain('Veilig rusten is mogelijk.');
     expect(updated.history.at(-1)!.result!.summary).toContain('XP-beloningen:');
     await expect(page.locator('.recap')).toContainText('+20 XP.');
     await expect(page.locator('.roll-receipt')).toContainText('INT');

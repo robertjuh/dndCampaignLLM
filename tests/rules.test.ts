@@ -155,6 +155,23 @@ const loot = {
   light: false,
   description: 'Instance-specific loot.',
 } as const;
+
+it.each(['Stunned', 'Frozen', 'Electrocuted'])(
+  'keeps a %s player with no submitted action in combat for enemy attacks and condition ticks',
+  (condition) => {
+    const hero = member();
+    applyCondition(hero.state, condition);
+    const fight = encounter([hero], { attack: 15 });
+    const plan = combatSchema.parse({ actions: [], enemyTargets: [], loot });
+    const hp = hero.state.hp;
+    const logs = runCombat([hero], fight, plan, (sides) => Math.min(12, sides));
+    expect(logs).toContain(`${hero.character.name} is ${condition} and cannot act.`);
+    expect(logs).not.toContain(`${hero.character.name} holds position.`);
+    expect(hero.state.hp).toBeLessThan(hp);
+    expect(hero.state.conditions).not.toContain(condition);
+    expect(fight.round).toBe(2);
+  },
+);
 function input(m: Member, overrides = {}) {
   return combatSchema.parse({
     actions: [
@@ -1959,6 +1976,54 @@ describe('shield blocking', () => {
 });
 
 describe('turn-based ailments and cures', () => {
+  it.each(
+    ['ability', 'equipment', 'enemy'].flatMap((source) =>
+      [false, true].map((targetFirst) => ({ source, targetFirst })),
+    ),
+  )(
+    'one-turn stun from $source blocks the next action (target acted: $targetFirst)',
+    ({ source, targetFirst }) => {
+      const hero = member();
+      hero.state.hp = hero.state.maxHp = 100;
+      const ability = hero.character.abilities[0];
+      ability.dice = '1d4';
+      const e = encounter([hero], { hp: 100 });
+      const enemy = e.enemies[0];
+      const target = source === 'enemy' ? hero.state : enemy;
+      const targetId = source === 'enemy' ? hero.id : enemy.id;
+      e.initiative.sort((a, b) =>
+        targetFirst
+          ? Number(b.id === targetId) - Number(a.id === targetId)
+          : Number(a.id === targetId) - Number(b.id === targetId),
+      );
+      if (source === 'ability') ability.inflicts = 'Stunned';
+      if (source === 'equipment') hero.state.equipment.right!.onHit = { ailment: 'Stunned', chance: 100 };
+      if (source === 'enemy') enemy.onHit = 'Stunned';
+      const submitted = input(
+        hero,
+        source === 'ability' ? { main: 'ability', abilityName: ability.name } : {},
+      );
+      const dice = (sides: number) => (sides === 20 ? 20 : 1);
+      const lost = source === 'enemy' ? 'loses their main action' : 'unable to attack this round';
+      const first = runCombat([hero], e, submitted, dice);
+      expect(first.some((log) => log.includes(lost))).toBe(!targetFirst);
+      expect(target.conditions!.includes('Stunned')).toBe(targetFirst);
+      if (targetFirst) expect(target.conditionTurns!.Stunned).toBe(1);
+      else
+        expect(first).toContain(
+          `${source === 'enemy' ? hero.character.name : enemy.name} is no longer Stunned.`,
+        );
+      delete ability.inflicts;
+      delete hero.state.equipment.right!.onHit;
+      enemy.onHit = null;
+      const second = runCombat([hero], e, input(hero), dice);
+      expect(second.some((log) => log.includes(lost))).toBe(targetFirst);
+      expect(target.conditions).not.toContain('Stunned');
+      const third = runCombat([hero], e, input(hero), dice);
+      expect(third.some((log) => log.includes(lost))).toBe(false);
+    },
+  );
+
   it('gives ailments distinct defaults, refreshes them without stacking and honors immunity', () => {
     const hero = member();
     applyCondition(hero.state, 'Burning', hero.character);

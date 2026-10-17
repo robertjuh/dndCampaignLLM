@@ -215,7 +215,6 @@ describe('replacement characters after successful encounters', () => {
       pendingLevelUps: 2,
       kills: 9,
       bosses: 2,
-      restedEncounter: 1,
       conditions: ['Poisoned'],
       conditionTurns: { Poisoned: 2 },
       abilityUses: { 'Focused strike': 1 },
@@ -255,7 +254,6 @@ describe('replacement characters after successful encounters', () => {
       conditionTurns: {},
       abilityUses: {},
       deathReason: null,
-      restedEncounter: null,
       equipmentChosen: true,
       starterEquipment: [],
     });
@@ -438,7 +436,7 @@ describe('replacement characters after successful encounters', () => {
     const reopened = openDatabase(filename);
     cleanup.push(() => reopened.close());
     const restored = new Game(reopened, () => f.provider, f.draw);
-    expect(reopened.pragma('user_version', { simple: true })).toBe(11);
+    expect(reopened.pragma('user_version', { simple: true })).toBe(17);
     expect(restored.members(f.c.id).map((m) => ({ character: m.character, state: m.state }))).toEqual(
       before.map((m) => ({ character: m.character, state: m.state })),
     );

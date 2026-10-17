@@ -18,6 +18,7 @@ import {
   canInteract,
 } from '../shared/rules';
 import { ItemDetails, ItemIcon, slotLabels } from './CharacterSheet';
+import { memberScene } from '../shared/locations';
 
 type Manage = (body: unknown) => Promise<Snapshot | undefined>;
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value}`;
@@ -173,6 +174,7 @@ function EquipmentItem({
           </p>
         )}
         <div id={reasonId}>
+          {ground && lockReason && <p className="gear-reason">{lockReason}</p>}
           {equippable && equipReason && <p className="gear-reason">{equipReason}</p>}
           {ground && takeReason && takeReason !== equipReason && (
             <p className="gear-reason">Take: {takeReason}</p>
@@ -318,6 +320,7 @@ export function EquipmentPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState('');
+  snapshot = { ...snapshot, scene: memberScene(snapshot.scene, member.id) };
   const combatActive =
     !!snapshot.scene.encounter && !snapshot.scene.encounter.victory && !snapshot.scene.encounter.escaped;
   const panelId = useId();
@@ -452,7 +455,8 @@ export function EquipmentPanel({
             </span>
           </div>
           <p className="muted small">
-            Take items into your backpack or equip them directly. Gear changes are free outside combat.
+            {snapshot.scene.location.name}. Take items into your backpack or equip them directly. Gear changes
+            are free outside combat.
           </p>
           {snapshot.scene.loot.map((item) => (
             <EquipmentItem

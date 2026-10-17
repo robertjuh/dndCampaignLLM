@@ -1,7 +1,9 @@
+import { validateFactionEffects } from './factions';
 import { isDeepStrictEqual } from 'node:util';
 import {
   actionId,
   aggregateComponents,
+  assertCombatClaims,
   turnAdjudicationSchema,
   validateReferences,
   type ActionOutcome,
@@ -11,9 +13,13 @@ import {
   type TurnAdjudication,
 } from '../shared/turn-resolution';
 import { incapacitatingCondition } from '../shared/rules';
-import { outcomeSchema, type ResourceUse } from '../shared/schema';
-import type { GMContext, ResourceReceipt } from './game';
+import { outcomeSchema, type ResourceUse, type CombatInput } from '../shared/schema';
+import type { CombatReceipt, GMContext, ResourceReceipt } from './game';
 import { combatFact } from './narration';
+import { memberScene, knownLocations, occupiedPlaces } from '../shared/locations';
+import { validateWorldMap } from './world-map';
+import { validateExploration } from './exploration';
+import { validateWorldProgression } from './world-progression';
 
 export function receiptReferences(context: GMContext) {
   return new Set([
@@ -42,6 +48,21 @@ function identity(context: GMContext, memberId: string) {
   return member;
 }
 
+/** Local execution receipts determine who fought, independently of the screen's focus. */
+export function combatReceiptForMember(context: GMContext, memberId: string): CombatReceipt | undefined {
+  const local = context.receipts?.combatByLocation as Record<string, CombatReceipt> | undefined;
+  if (local)
+    return Object.entries(local).find(([locationId, receipt]) =>
+      receipt.participantIds
+        ? receipt.participantIds.includes(memberId)
+        : locationId === memberScene(context.scene, memberId).location.id,
+    )?.[1];
+  const receipt = context.combatResult;
+  return receipt && (!receipt.participantIds || receipt.participantIds.includes(memberId))
+    ? receipt
+    : undefined;
+}
+
 /** Engine facts retain execution order; routine fiction must be supplied by adjudication. */
 export function engineEvents(context: GMContext): ResolvedEvent[] {
   const events: ResolvedEvent[] = [];
@@ -54,6 +75,7 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
     phase: ResolvedEvent['phase'] = null,
     result: ResolvedEvent['result'] = null,
     presentation?: 'log',
+    locationRef?: string,
   ) => {
     events.push({
       id,
@@ -70,10 +92,32 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
       receiptRefs: refs,
       dependsOn: [],
       ...(presentation ? { presentation } : {}),
+      ...(locationRef ? { locationRef } : {}),
     });
   };
   for (const [index, arrival] of (context.arrivingCharacters ?? []).entries())
     add(`arrival:${index}`, `${arrival.character.name} joins the party.`, null, [], 'arrival');
+  for (const [index, fact] of (
+    (context.receipts?.factionIntroductions as string[] | undefined) ?? []
+  ).entries())
+    add(`faction:connection:${index}`, fact, null, ['tool:factionIntroductions'], 'arrival');
+  if (context.turn.number > 0)
+    for (const member of context.startingMembers ?? context.members) {
+      const incapacitated = incapacitatingCondition(member.state);
+      if (
+        incapacitated &&
+        context.turn.roster.includes(member.id) &&
+        !context.turn.actions.some((action) => action.memberId === member.id)
+      )
+        add(
+          `incapacitated:${member.id}`,
+          context.config.language === 'Nederlands'
+            ? `${member.character.name} begint de beurt ${incapacitated} en slaat de actie over.`
+            : `${member.character.name} starts the turn ${incapacitated} and skips their action.`,
+          member.id,
+          [],
+        );
+    }
   if (context.combatResult) {
     if (!context.combatResult.events)
       throw new Error('This legacy combat receipt lacks typed outcomes; finish it through the legacy route.');
@@ -91,8 +135,8 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
           ? null
           : event.status,
         event.presentation,
+        event.locationId ?? context.combatResult.locationId,
       );
-    return events;
   }
   for (const roll of context.turn.rolls.filter((roll) => !roll.notation)) {
     const member = identity(context, roll.memberId);
@@ -208,12 +252,12 @@ export function engineComponents(context: GMContext, memberId: string): EngineCo
   const action = context.turn.actions.find((action) => action.memberId === memberId);
   if (!action) throw new Error('Only submitted actions have component outcomes.');
   if (action.passed) return { main: null, minor: null };
-  if (context.combatResult) {
+  const combat = combatReceiptForMember(context, memberId);
+  if (combat) {
     const result = {} as EngineComponents;
     for (const phase of ['main', 'minor'] as const) {
       const events =
-        context.combatResult.events?.filter((event) => event.actorId === memberId && event.phase === phase) ??
-        [];
+        combat.events?.filter((event) => event.actorId === memberId && event.phase === phase) ?? [];
       const statuses = events.flatMap((event) => (event.status ? [event.status] : []));
       result[phase] = !events.length
         ? phase === 'main'
@@ -271,6 +315,7 @@ export function engineDisposition(
 }
 
 export function adjudicationOutcome(value: SavedTurnAdjudication) {
+  // Private faction proposals stay in adjudication; finalization creates public facts/receipts.
   return outcomeSchema.parse({
     narration: 'Pending narration.',
     summary: 'Pending narration.',
@@ -278,15 +323,487 @@ export function adjudicationOutcome(value: SavedTurnAdjudication) {
     changes: value.changes,
     journal: value.journal,
     location: value.location,
-    safeRest: value.safeRest,
+    memberLocations: value.memberLocations,
+    placeUpdates: value.placeUpdates,
+    mapUpdates: value.mapUpdates,
+    sceneFocus: value.sceneFocus,
+    separations: value.separations,
     xp: value.rewards.xp,
     gold: value.rewards.gold,
     lethalWarning: null,
   });
 }
 
+/** Ordinary movement can precede its actor's saved main-action execution. */
+export function orderRoutineMovement<T extends { events: ResolvedEvent[] }>(value: T): T {
+  if (!value.events.some((event) => event.beforeEventId)) return value;
+  if (value.events.some((event, sequence) => event.sequence !== sequence))
+    throw new Error('Event sequences must match execution order.');
+  const events = [...value.events];
+  for (const event of value.events.filter((event) => event.beforeEventId)) {
+    const target = events.find((candidate) => candidate.id === event.beforeEventId);
+    if (
+      event.phase !== 'movement' ||
+      event.kind !== 'action' ||
+      event.result !== 'success' ||
+      !target ||
+      target.kind !== 'mechanics' ||
+      target.phase !== 'main' ||
+      target.actionId !== event.actionId
+    )
+      throw new Error('Routine movement can precede only its own later main action.');
+    events.splice(events.indexOf(event), 1);
+    events.splice(events.indexOf(target), 0, event);
+  }
+  return { ...value, events: events.map((event, sequence) => ({ ...event, sequence })) };
+}
+
+export function adjudicationPlaceRef(
+  context: GMContext,
+  value: { sceneFocus?: string; location?: TurnAdjudication['location'] },
+) {
+  const focus = value.sceneFocus === 'current' ? context.scene.location.id! : value.sceneFocus;
+  const destination =
+    focus ??
+    (value.location?.id === null
+      ? 'legacy:destination'
+      : (value.location?.id ??
+        (value.location && value.location.name !== context.scene.location.name
+          ? (Object.entries(knownLocations(context.scene)).find(
+              ([, name]) => name === value.location!.name,
+            )?.[0] ?? 'legacy:destination')
+          : context.scene.location.id!)));
+  return (ref: string) =>
+    ref === 'current' ? context.scene.location.id! : ref === 'destination' ? destination : ref;
+}
+
+/** New continuity failures use local recovery, never an additional model request. */
+export class PositionContinuityError extends Error {}
+
+export function assertMovementPositions(context: GMContext, value: TurnAdjudication) {
+  if (context.turn.number === 0) return;
+  const resolve = adjudicationPlaceRef(context, value);
+  for (const event of value.events) {
+    if (
+      event.kind !== 'action' ||
+      event.result !== 'success' ||
+      !event.memberId ||
+      !(event.phase === 'movement' || (event.phase === 'main' && event.effect === 'movement'))
+    )
+      continue;
+    const position = value.memberLocations?.find((position) => position.memberId === event.memberId);
+    const origin = memberScene(context.scene, event.memberId).location.id;
+    if (
+      (event.phase === 'movement' && !position && !event.locationRef) ||
+      (event.locationRef &&
+        (position
+          ? resolve(position.locationId) !== resolve(event.locationRef)
+          : resolve(event.locationRef) !== origin))
+    )
+      throw new PositionContinuityError('A successful location move needs its matching saved position.');
+  }
+}
+
+/** Repair references to already-declared effects; the full validator still decides legality. */
+export function normalizeAdjudicationStructure(context: GMContext, input: unknown): unknown {
+  const record = (value: unknown): value is Record<string, any> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!record(input) || !Array.isArray(input.actions) || !Array.isArray(input.events)) return input;
+  const output = structuredClone(input);
+  const events: Record<string, any>[] = output.events.filter(record);
+  const proposedPositions: Record<string, any>[] = Array.isArray(output.memberLocations)
+    ? output.memberLocations.filter(record)
+    : [];
+  const engine = engineEvents(context);
+  const resolve = adjudicationPlaceRef(context, output);
+  for (const action of output.actions.filter(record)) {
+    const submitted = context.turn.actions.find(
+      (a) => action.actionId === actionId(context.turn.id, a.memberId) && a.memberId === action.memberId,
+    );
+    if (!submitted) continue;
+    if (!record(action.components)) continue;
+    const mainComponent = action.components.main;
+    // ponytail: recognize direct English/Dutch journeys, not arbitrary natural-language intent.
+    if (
+      !submitted.passed &&
+      !submitted.abilityName &&
+      !submitted.supportAction &&
+      /^(?:(?:i|we|ik|wij)\s+)?(?:go|head|travel|move|walk|run|follow|return|enter|leave|ga|gaan|reis|loop|ren|volg|beweeg|betreed|verlaat)\b/i.test(
+        submitted.text.trim(),
+      ) &&
+      !/\b(?:do not|don't|won't|will not|niet|geen)\b/i.test(submitted.text) &&
+      action.intent !== 'orientation' &&
+      action.intent !== 'search' &&
+      record(mainComponent) &&
+      mainComponent.status === 'success' &&
+      mainComponent.basis === 'routine' &&
+      Array.isArray(mainComponent.receiptRefs) &&
+      !mainComponent.receiptRefs.length &&
+      Array.isArray(mainComponent.eventIds) &&
+      Array.isArray(output.memberLocations)
+    ) {
+      const positions = proposedPositions.filter((position) => position.memberId === action.memberId);
+      const proof = events.find((event) => event.id === positions[0]?.movementEventId);
+      if (
+        positions.length === 1 &&
+        proof &&
+        proof.actionId === action.actionId &&
+        proof.memberId === action.memberId &&
+        proof.kind === 'action' &&
+        proof.phase === 'main' &&
+        proof.result === 'success' &&
+        proof.effect === undefined &&
+        typeof proof.locationRef === 'string' &&
+        resolve(proof.locationRef) === resolve(positions[0].locationId) &&
+        resolve(proof.locationRef) !== memberScene(context.scene, action.memberId).location.id &&
+        mainComponent.eventIds.includes(proof.id)
+      )
+        proof.effect = 'movement';
+    }
+    const movement = action.components.movement;
+    if (
+      record(movement) &&
+      movement.status === 'success' &&
+      movement.basis === 'routine' &&
+      Array.isArray(movement.receiptRefs) &&
+      !movement.receiptRefs.length &&
+      Array.isArray(movement.eventIds) &&
+      movement.eventIds.length === 1
+    ) {
+      const proofs = events.filter((event) => event.id === movement.eventIds[0]);
+      const proof = proofs.length === 1 ? proofs[0] : undefined;
+      const main = engine.find(
+        (event) => event.actionId === action.actionId && event.phase === 'main' && event.kind === 'mechanics',
+      );
+      if (
+        proof &&
+        main &&
+        proof.actionId === action.actionId &&
+        proof.memberId === action.memberId &&
+        proof.kind === 'action' &&
+        proof.phase === 'movement' &&
+        proof.result === 'success' &&
+        (!proof.beforeEventId || proof.beforeEventId === main.id) &&
+        (!movement.beforeEventId || movement.beforeEventId === main.id)
+      ) {
+        proof.beforeEventId = main.id;
+        delete movement.beforeEventId;
+      }
+    }
+    const search = action.search;
+    const roll = context.turn.rolls.find((roll) => roll.memberId === action.memberId && !roll.notation);
+    if (record(search) && roll) {
+      const information = events.find((event) => event.id === search.informationEventId);
+      const requires = roll.success ? 'success' : 'occurrence';
+      const checkId = `check:${roll.id}`;
+      if (
+        information?.kind === 'world' &&
+        information.actionId === null &&
+        information.locationRef === search.locationId &&
+        Array.isArray(information.dependsOn) &&
+        !information.dependsOn.some((dep: any) => dep?.eventId === checkId)
+      ) {
+        const grounded = information.dependsOn.some((dep: any) => {
+          const source = events.find((event) => event.id === dep?.eventId);
+          return (
+            dep?.requires === requires &&
+            source?.kind === 'action' &&
+            source.actionId === action.actionId &&
+            source.memberId === action.memberId &&
+            source.phase === 'main' &&
+            source.result === (roll.success ? 'success' : 'failure') &&
+            source.locationRef === search.locationId &&
+            Array.isArray(source.dependsOn) &&
+            source.dependsOn.some((edge: any) => edge?.eventId === checkId && edge.requires === requires)
+          );
+        });
+        if (grounded) information.dependsOn.push({ eventId: checkId, requires });
+      }
+    }
+    for (const owner of [action, ...Object.values(action.components).filter(record)]) {
+      if (!Array.isArray(owner.eventIds)) continue;
+      const ids = owner.eventIds.filter(
+        (id: unknown) =>
+          !events.some(
+            (event) =>
+              event.id === id && event.kind === 'world' && event.actionId === null && event.memberId === null,
+          ),
+      );
+      if (ids.length) owner.eventIds = ids;
+    }
+  }
+  // A separation is a projection of positions, not another fictional outcome to ask the model for.
+  let positionEventId: string | undefined;
+  const resultingPositions = context.members
+    .filter((member) => member.active)
+    .map((member) => {
+      const position = proposedPositions.find((position) => position.memberId === member.id);
+      return {
+        member,
+        ref: resolve(position?.locationId ?? memberScene(context.scene, member.id).location.id!),
+        proof: position?.movementEventId,
+      };
+    });
+  for (const separation of Array.isArray(output.separations) ? output.separations : []) {
+    if (!record(separation) || !Array.isArray(separation.memberIds) || separation.memberIds.length !== 2)
+      continue;
+    const source = events.find((event) => event.id === separation.eventId);
+    if (
+      !source ||
+      source.kind !== 'action' ||
+      source.result !== 'success' ||
+      !(source.phase === 'movement' || source.effect === 'movement') ||
+      !separation.memberIds.includes(source.memberId)
+    )
+      continue;
+    const [left, right] = separation.memberIds.map((id: string) =>
+      resultingPositions.find((position) => position.member.id === id),
+    );
+    if (!left || !right || left.ref === right.ref) continue;
+    let eventId = positionEventId;
+    if (!eventId) {
+      let index = events.length;
+      while (events.some((event) => event.id === `world:positions:${index}`)) index++;
+      eventId = `world:positions:${index}`;
+      const names = knownLocations(context.scene);
+      const facts = resultingPositions.map(({ member, ref }) => {
+        const name =
+          names[ref] ?? output.placeUpdates?.find((place: any) => place?.ref === ref)?.location?.name;
+        return (
+          name &&
+          (context.config.language === 'Nederlands'
+            ? `${member.character.name} is bij ${name}.`
+            : `${member.character.name} is at ${name}.`)
+        );
+      });
+      if (facts.some((fact: any) => !fact)) continue;
+      const world = {
+        id: eventId,
+        sequence: (events.at(-1)?.sequence ?? -1) + 1,
+        kind: 'world',
+        phase: 'aftermath',
+        result: null,
+        memberId: null,
+        actionId: null,
+        fact: facts.join(' '),
+        receiptRefs: [],
+        dependsOn: [...new Set(resultingPositions.map((position) => position.proof).filter(Boolean))].map(
+          (eventId) => ({ eventId, requires: 'success' }),
+        ),
+      };
+      output.events.push(world);
+      events.push(world);
+      positionEventId = eventId;
+    }
+    separation.eventId = eventId;
+  }
+  return output;
+}
+
 export function validateAdjudication(context: GMContext, input: unknown): TurnAdjudication {
-  const value = turnAdjudicationSchema.parse(input);
+  const value = orderRoutineMovement(
+    turnAdjudicationSchema.parse(normalizeAdjudicationStructure(context, input)),
+  );
+  const updates = value.placeUpdates ?? [];
+  const refs = new Set(updates.map((update) => update.ref));
+  if (refs.size !== updates.length) throw new Error('Place update references must be unique.');
+  const known = (ref: string) =>
+    ref === context.scene.location.id ||
+    Object.hasOwn(context.scene.places ?? {}, ref) ||
+    Object.hasOwn(context.scene.worldMap?.nodes ?? {}, ref);
+  for (const update of updates) {
+    if (!known(update.ref) && !/^new:[a-zA-Z0-9_-]{1,80}$/.test(update.ref))
+      throw new Error('Use a known place ID or a new: reference.');
+  }
+  const focus = value.sceneFocus === 'current' ? context.scene.location.id! : value.sceneFocus;
+  if (focus && !known(focus) && !refs.has(focus))
+    throw new Error('Scene focus must be an established or declared place.');
+  const resultingRef = adjudicationPlaceRef(context, value);
+  const destination = resultingRef('destination');
+  const combatScene = { ...context.scene, places: { ...context.scene.places } };
+  const encounters =
+    context.combatResult?.encounters ??
+    (context.combatResult
+      ? { [context.combatResult.locationId ?? context.scene.location.id!]: context.combatResult.encounter }
+      : {});
+  for (const [locationId, encounter] of Object.entries(encounters)) {
+    if (locationId === combatScene.location.id) combatScene.encounter = encounter;
+    else if (combatScene.places[locationId])
+      combatScene.places[locationId] = { ...combatScene.places[locationId], encounter };
+  }
+  const combatPlaces = occupiedPlaces(combatScene);
+  assertCombatClaims(combatPlaces, [
+    ...value.actions.flatMap((action) => [
+      {
+        text: `${action.fact} ${action.reason}`,
+        locationId: memberScene(context.scene, action.memberId).location.id,
+      },
+      ...Object.values(action.components)
+        .filter((component) => component != null)
+        .map((component) => ({
+          text: `${component.fact} ${component.reason}`,
+          locationId: memberScene(context.scene, action.memberId).location.id,
+        })),
+    ]),
+    ...value.events.map((event) => ({
+      text: event.fact,
+      locationId: resultingRef(event.locationRef ?? 'current'),
+    })),
+    ...value.journal.map((entry) => ({
+      text: entry.detail,
+      locationId:
+        entry.kind === 'location'
+          ? Object.entries(combatPlaces).find(([, place]) => place.location.name === entry.name)?.[0]
+          : undefined,
+    })),
+    ...updates.map((update) => ({
+      text: `${update.location.atmosphere} ${update.location.hazard}`,
+      locationId: resultingRef(update.ref),
+    })),
+    ...(value.location
+      ? [{ text: `${value.location.atmosphere} ${value.location.hazard}`, locationId: destination }]
+      : []),
+  ]);
+  const positions = value.memberLocations ?? [];
+  const informationOnly = value.actions.filter((action) => action.status !== 'passed');
+  if (informationOnly.length && informationOnly.every((action) => action.intent === 'orientation')) {
+    if (value.rewards.xp || value.rewards.gold) throw new Error('Orientation alone earns no reward.');
+    if (value.factionEffects?.some((effect) => effect.type === 'discover'))
+      throw new Error(
+        'GM orientation may hint at known or observable facts, without revealing undiscovered faction identities.',
+      );
+  }
+  if (
+    context.turn.number > 0 &&
+    value.location &&
+    destination !== context.scene.location.id &&
+    !focus &&
+    !positions.some((position) => resultingRef(position.locationId) === destination) &&
+    !context.members.some(
+      (member) => member.active && memberScene(context.scene, member.id).location.id === destination,
+    )
+  )
+    throw new Error('Entering a new place needs the successful movement of a submitted character.');
+  const loot = context.receipts?.loot as
+    { pendingPlacement?: boolean; memberId?: string; locationId?: string; item?: { id: string } } | undefined;
+  if (
+    loot?.pendingPlacement &&
+    !positions.some(
+      (position) =>
+        position.memberId === loot.memberId &&
+        resultingRef(position.locationId) === resultingRef(loot.locationId ?? 'destination') &&
+        resultingRef(position.locationId) !== memberScene(context.scene, position.memberId).location.id,
+    )
+  )
+    throw new Error(
+      'Destination loot needs its discovering character’s successful movement to that destination.',
+    );
+  if (new Set(positions.map((position) => position.memberId)).size !== positions.length)
+    throw new Error('Each character can have only one resulting location.');
+  if (
+    !focus &&
+    value.location?.id &&
+    value.location.id !== context.scene.location.id &&
+    !known(value.location.id)
+  )
+    throw new Error('Use an established location ID, or null for a new place.');
+  for (const position of positions) {
+    if (!context.members.some((member) => member.id === position.memberId))
+      throw new Error('Unknown character location.');
+    const target = resultingRef(position.locationId);
+    const action = value.actions.find((action) => action.memberId === position.memberId);
+    const origin = memberScene(context.scene, position.memberId).location.id;
+    if (context.turn.number > 0 && target !== origin) {
+      if (position.movementEventId) {
+        const event = value.events.find((event) => event.id === position.movementEventId);
+        if (
+          !event ||
+          event.actionId !== action?.actionId ||
+          event.memberId !== position.memberId ||
+          event.kind !== 'action' ||
+          event.result !== 'success' ||
+          !['main', 'movement'].includes(event.phase ?? '')
+        )
+          throw new Error('Movement must cite that character’s successful movement event.');
+        if (event.phase === 'main' && event.effect !== 'movement')
+          throw new Error(
+            `A position change requires an explicit movement effect, not an unrelated success. For every main-phase movement event, including ${event.id}, set effect:"movement"; alternatively use phase:"movement" for a movement component. Leave positions unchanged for unrelated successes.`,
+          );
+        if (action?.components[event.phase as 'main' | 'movement']?.status === 'blocked')
+          throw new Error('Blocked movement cannot change location.');
+      } else {
+        // Older v2 output may omit the event ID, but an unrelated success never proves movement.
+        const movement = value.events.filter(
+          (event) =>
+            event.actionId === action?.actionId &&
+            event.memberId === position.memberId &&
+            event.kind === 'action' &&
+            event.result === 'success' &&
+            (event.phase === 'movement' || (event.phase === 'main' && event.effect === 'movement')),
+        );
+        if (updates.length || movement.length !== 1)
+          throw new Error('A location change requires that character’s successful submitted movement.');
+        position.movementEventId = movement[0].id;
+      }
+    }
+    if (!known(target) && !refs.has(target) && target !== 'legacy:destination')
+      throw new Error('Character location must be current, destination, or an established place ID.');
+    if (position.locationId === 'destination' && !value.location && !focus)
+      throw new Error('Destination needs an established location update.');
+  }
+  for (const update of updates.filter(
+    (update) => update.ref.startsWith('new:') || context.scene.worldMap?.nodes[update.ref]?.visited === false,
+  ))
+    if (!positions.some((position) => resultingRef(position.locationId) === update.ref))
+      throw new Error('New places require an arriving character.');
+  assertMovementPositions(context, value);
+  validateWorldMap(context, value, resultingRef);
+  validateExploration(context, value, resultingRef);
+  validateWorldProgression(context, value, resultingRef);
+  if (
+    focus &&
+    !context.members.some(
+      (member) =>
+        member.active &&
+        (positions.some(
+          (position) => position.memberId === member.id && resultingRef(position.locationId) === focus,
+        ) ||
+          (!positions.some((position) => position.memberId === member.id) &&
+            memberScene(context.scene, member.id).location.id === focus)),
+    )
+  )
+    throw new Error('Scene focus needs a present character.');
+  for (const separation of value.separations ?? []) {
+    const locations = separation.memberIds.map((id) => {
+      if (!context.members.some((member) => member.id === id))
+        throw new Error('Unknown separated character.');
+      const position = positions.find((position) => position.memberId === id);
+      return position ? resultingRef(position.locationId) : memberScene(context.scene, id).location.id;
+    });
+    if (
+      locations[0] === locations[1] ||
+      !value.events.some((event) => event.id === separation.eventId && event.kind === 'world')
+    )
+      throw new Error('Separated characters need distinct saved places and a world event.');
+  }
+  validateFactionEffects(context, value);
+  const itemIds = new Set([
+    ...context.members.flatMap((member) =>
+      [
+        ...member.state.inventory,
+        ...Object.values(member.state.equipment).filter((item) => item != null),
+      ].map((item) => item.id),
+    ),
+    ...[context.scene, ...Object.values(context.scene.places ?? {})].flatMap((place) =>
+      place.loot.map((item) => item.id),
+    ),
+    ...(loot?.item ? [loot.item.id] : []),
+  ]);
+  for (const entry of value.journal) {
+    if (entry.itemId && !itemIds.has(entry.itemId))
+      throw new Error('Journal item references need an authoritative item ID.');
+    if (entry.itemStatus) throw new Error('Current journal item status is projected by the server.');
+  }
   if (value.turnId !== context.turn.id) throw new Error('Adjudication belongs to another turn.');
   validateReferences(
     value,
@@ -297,6 +814,12 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
     if (event.memberId && !context.members.some((member) => member.id === event.memberId))
       throw new Error('Unknown event actor.');
   for (const event of value.events) {
+    if (
+      event.locationRef &&
+      !known(resultingRef(event.locationRef)) &&
+      !refs.has(resultingRef(event.locationRef))
+    )
+      throw new Error('Local events must reference an established or declared place.');
     if (event.kind === 'action' && !event.actionId)
       throw new Error('Action events require an actor and action identity.');
     if (
@@ -306,21 +829,86 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
       throw new Error('Event facts must describe resolved outcomes instead of copying submissions.');
   }
   const authoritative = engineEvents(context);
-  // Engine facts form the prefix, in execution order. New scene facts follow those results.
+  const engineIds = new Set(authoritative.map((event) => event.id));
+  const actualEngine = value.events.filter((event) => !(event.phase === 'movement' && event.beforeEventId));
+  const withoutSequence = ({ sequence: _sequence, ...event }: ResolvedEvent) => event;
   for (const [index, event] of authoritative.entries())
-    if (!isDeepStrictEqual(value.events[index], event))
+    if (
+      !actualEngine[index] ||
+      !isDeepStrictEqual(withoutSequence(actualEngine[index]), withoutSequence(event))
+    )
       throw new Error(`Preserve engine event ${event.id} and its execution order exactly.`);
-  if (value.events.slice(authoritative.length).some((event) => !['action', 'world'].includes(event.kind)))
+  const fictional = value.events.filter((event) => !engineIds.has(event.id));
+  if (fictional.some((event) => !['action', 'world'].includes(event.kind)))
     throw new Error(
       'New adjudicated events must be action outcomes or world consequences; mechanics come from the server.',
     );
-  if (value.events.slice(authoritative.length).some((event) => event.presentation))
+  if (fictional.some((event) => event.presentation))
     throw new Error('Only the engine may keep bookkeeping out of story narration.');
   for (const result of value.actions) {
     const submitted = context.turn.actions.find((action) => action.memberId === result.memberId)!;
     if ((result.status === 'passed') !== submitted.passed)
       throw new Error('Pass outcomes must match the submitted pass.');
     const expected = engineComponents(context, result.memberId);
+    if (result.intent === 'orientation') {
+      const origin = memberScene(context.scene, result.memberId).location.id;
+      const localPlans = context.receipts?.combatInputByLocation as Record<string, CombatInput> | undefined;
+      const planned = (
+        localPlans?.[origin!] ?? (context.receipts?.combatInput as CombatInput | undefined)
+      )?.actions.find((action) => action.memberId === result.memberId);
+      if (
+        planned &&
+        (planned.main !== 'interact' ||
+          planned.minor !== 'none' ||
+          planned.abilityName ||
+          planned.mainItemId ||
+          planned.dc ||
+          planned.effect ||
+          planned.environment ||
+          planned.cureCondition)
+      )
+        throw new Error('Orientation cannot reinterpret an executed combat action as informational.');
+      if (
+        result.components.movement ||
+        result.components.minor ||
+        result.receiptRefs.some(
+          (ref) => ref.startsWith('roll:') || ref.startsWith('tool:resource:') || ref === 'tool:support',
+        ) ||
+        value.changes.some((change) => change.memberId === result.memberId) ||
+        positions.some(
+          (position) => position.memberId === result.memberId && resultingRef(position.locationId) !== origin,
+        )
+      )
+        throw new Error('Orientation alone cannot roll, spend resources, change characters or move them.');
+    }
+    const movement = result.components.movement;
+    if (movement) {
+      const starter = (context.startingMembers ?? context.members).find(
+        (member) => member.id === result.memberId,
+      )!;
+      if (
+        combatReceiptForMember(context, result.memberId) ||
+        starter.state.hp <= 0 ||
+        incapacitatingCondition(starter.state) ||
+        submitted.passed ||
+        movement.basis !== 'routine' ||
+        movement.status !== 'success' ||
+        movement.receiptRefs.length
+      )
+        throw new Error('Separate movement must be ordinary conscious noncombat movement without resources.');
+      const mainExecution = authoritative.find(
+        (event) => event.actionId === result.actionId && event.phase === 'main',
+      );
+      if (
+        mainExecution &&
+        movement.eventIds.some(
+          (id) =>
+            value.events.findIndex((event) => event.id === id) >
+            value.events.findIndex((event) => event.id === mainExecution.id),
+        )
+      )
+        throw new Error('Completed ordinary movement must precede the later main action.');
+    }
     const own = authoritative.filter((event) => event.actionId === result.actionId);
     for (const ref of result.receiptRefs) {
       const roll = context.turn.rolls.find((roll) => ref === `roll:${roll.id}`);
@@ -396,7 +984,19 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
     throw new Error('Adjudication must establish at least one resolved scene or action event.');
   if (!context.turn.number && (value.rewards.xp || value.rewards.gold))
     throw new Error('Opening scenes cannot grant rewards.');
-  if (context.combatResult && (value.rewards.xp || value.rewards.gold))
+  if (
+    context.combatResult &&
+    (value.rewards.xp || value.rewards.gold) &&
+    !value.actions.some(
+      (action) =>
+        !combatReceiptForMember(context, action.memberId) &&
+        action.components.main?.status === 'success' &&
+        action.intent !== 'orientation' &&
+        action.components.main.eventIds.some((id) =>
+          value.events.some((event) => event.id === id && event.result === 'success'),
+        ),
+    )
+  )
     throw new Error('Combat rewards come from the engine.');
   return value;
 }

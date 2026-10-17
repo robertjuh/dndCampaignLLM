@@ -428,7 +428,6 @@ it('retains an accepted routine success when finalization later incapacitates th
       ],
       journal: [],
       location: null,
-      safeRest: false,
       rewards: { xp: 0, gold: 0, reason: 'No discovery.' },
     };
   });
@@ -475,12 +474,15 @@ it('rejects an old minor-only receipt used as proof of an unrecorded main succes
   expect(f.adjudicate).toHaveBeenCalledTimes(calls);
 });
 
-it('keeps a requested routine main when a Stunned practice actor also drinks a potion', async () => {
+it('keeps a requested routine main when a practice actor becomes Stunned after submitting a potion action', async () => {
   const f = await fixture();
+  f.game.pause(f.campaign.id, f.host.id, true);
   f.actor.state.hp -= 4;
-  applyCondition(f.actor.state, 'Stunned');
   f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(f.actor.state), f.actor.id);
   f.game.submit(f.campaign.id, f.actor.playerId, f.turnId, 'Drink Red Potion and talk to the guard', false);
+  applyCondition(f.actor.state, 'Stunned');
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(f.actor.state), f.actor.id);
+  f.game.pause(f.campaign.id, f.host.id, false);
   await f.game.idle();
   const saved = f.draft();
   expect(saved.resolution.actions[0]).toMatchObject({

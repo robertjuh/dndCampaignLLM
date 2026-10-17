@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { templateCharacter, type Snapshot } from '../../shared/schema';
 import { baseItem } from '../../shared/rules';
+import { ensureLocations, updateLocation } from '../../shared/locations';
 
 async function table(page: Page, language: string) {
   const post = async (path: string, data: unknown) => {
@@ -133,6 +134,73 @@ test('combat hides scene loot and victory restores story-item backpack pickup', 
   await expect(backpackKey.getByRole('button', { name: 'Equip', exact: true })).toHaveCount(0);
 });
 
+test('completed enemies disappear and ground loot stays at the old location after travel', async ({
+  page,
+}) => {
+  const snapshot = await table(page, 'English');
+  ensureLocations(
+    snapshot.scene,
+    snapshot.members.map((member) => member.id),
+  );
+  const checkpoint = { ...snapshot.scene.location, atmosphere: 'Concrete and dust.' };
+  snapshot.scene.encounter!.victory = true;
+  snapshot.scene.encounter!.enemies[0].hp = 0;
+  await page.reload();
+  await expect(page.locator('.combat-panel')).toHaveCount(0);
+  await expect(page.getByLabel('Nearby loot')).toBeVisible();
+  updateLocation(snapshot.scene, {
+    id: null,
+    name: 'Bunker',
+    atmosphere: 'Red emergency lights.',
+    hazard: '',
+  });
+  snapshot.scene.memberLocations![snapshot.myMemberId!] = snapshot.scene.location.id!;
+  const former = { ...structuredClone(snapshot.members[0]), id: crypto.randomUUID(), active: false };
+  snapshot.members.push(former);
+  snapshot.scene.memberLocations![former.id] = checkpoint.id!;
+  await page.reload();
+  await expect(page.locator('.location-banner')).toContainText('Bunker');
+  await expect(page.locator('.location-banner')).not.toContainText('PARTY SPLIT');
+  await expect(page.getByLabel('Nearby loot')).toHaveCount(0);
+  await expect(page.locator('.combat-panel')).toHaveCount(0);
+  updateLocation(snapshot.scene, checkpoint);
+  snapshot.scene.memberLocations![snapshot.myMemberId!] = snapshot.scene.location.id!;
+  await page.reload();
+  await expect(page.getByLabel('Nearby loot')).toBeVisible();
+  await expect(page.locator('.combat-panel')).toHaveCount(0);
+});
+
+test('the leader can save or clear an optional goal visible on the shared screen', async ({
+  page,
+  browser,
+}) => {
+  const snapshot = await table(page, 'English');
+  await page.route(`**/api/campaigns/${snapshot.id}/goal`, async (route) => {
+    const { partyGoal } = route.request().postDataJSON();
+    snapshot.config.partyGoal = partyGoal;
+    snapshot.version++;
+    await route.fulfill({ json: snapshot });
+  });
+  await page.getByRole('button', { name: 'Set party goal', exact: true }).click();
+  await page.getByLabel("Your group's goal (optional)").fill('Remove suspicion from our dossier.');
+  await page.getByRole('button', { name: 'Save goal', exact: true }).click();
+  await expect(page.getByLabel('Party goal')).toContainText('Remove suspicion from our dossier.');
+  const context = await browser.newContext();
+  const shared = await context.newPage();
+  await shared.route(`**/api/campaigns/${snapshot.id}`, (route) => route.fulfill({ json: snapshot }));
+  await shared.route(`**/api/campaigns/${snapshot.id}/events`, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' }),
+  );
+  await shared.goto(`/screen/${snapshot.id}`);
+  await expect(shared.getByLabel('Party goal')).toContainText('Remove suspicion from our dossier.');
+  await expect(shared.getByRole('button', { name: 'Edit party goal' })).toHaveCount(0);
+  await context.close();
+  await page.getByRole('button', { name: 'Edit party goal', exact: true }).click();
+  await page.getByLabel("Your group's goal (optional)").fill('');
+  await page.getByRole('button', { name: 'Save goal', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Set party goal', exact: true })).toBeVisible();
+});
+
 test('recovery and rewards are available in a closed mechanics log beside the situation', async ({
   page,
 }) => {
@@ -153,7 +221,6 @@ test('recovery and rewards are available in a closed mechanics log beside the si
         gold: 0,
         lethalWarning: null,
         location: null,
-        safeRest: false,
       },
       resolution: {
         version: 2,
@@ -164,7 +231,6 @@ test('recovery and rewards are available in a closed mechanics log beside the si
         changes: [],
         journal: [],
         location: null,
-        safeRest: false,
         factualRecap: 'The fight has ended.',
         events: [
           {
@@ -193,4 +259,44 @@ test('recovery and rewards are available in a closed mechanics log beside the si
   await log.locator('summary').click();
   await expect(page.getByText('Mira restores one ability charge.', { exact: true })).toBeVisible();
   await expect(log).toContainText('Mira: +15 XP.');
+});
+
+test('pickup explains the acting player’s submission lock beside the disabled control', async ({ page }) => {
+  const snapshot = await table(page, 'English');
+  snapshot.scene.encounter!.victory = true;
+  snapshot.turn!.actions = [
+    {
+      memberId: snapshot.myMemberId!,
+      text: 'Wait here.',
+      passed: false,
+      submittedAt: new Date().toISOString(),
+    },
+  ];
+  await page.reload();
+  const item = page.getByRole('article', { name: 'Service key', exact: true });
+  const take = item.getByRole('button', { name: 'Take item', exact: true });
+  await expect(take).toBeDisabled();
+  await expect(item).toContainText('Equipment is locked after submitting your action, until the next turn.');
+  await expect(take).toHaveAccessibleDescription(/Equipment is locked after submitting your action/);
+});
+
+test('linked journal discovery displays the current holder without changing discovery prose', async ({
+  page,
+}) => {
+  const snapshot = await table(page, 'English');
+  snapshot.journal = [
+    {
+      kind: 'fact',
+      name: 'Service key discovery',
+      detail: 'Found at the checkpoint; opens the maintenance hatch.',
+      itemId: 'key',
+      itemStatus: 'Carried by Mira.',
+    },
+  ];
+  await page.reload();
+  await page.getByRole('button', { name: /World journal/ }).click();
+  await expect(
+    page.getByText('Found at the checkpoint; opens the maintenance hatch.', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('Carried by Mira.', { exact: true })).toBeVisible();
 });
