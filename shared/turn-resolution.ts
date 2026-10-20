@@ -1,4 +1,5 @@
 import { factionEffectsSchema } from './factions';
+import { featureUpdateSchema, sceneFeatureSchema } from './scene-state';
 import { worldProgressEvidenceSchema } from './world-progression';
 import { z } from 'zod';
 import {
@@ -78,6 +79,8 @@ export const resolvedEventV1Schema = z
   .strict();
 export type ResolvedEventV1 = z.infer<typeof resolvedEventV1Schema>;
 export const resolvedEventSchema = resolvedEventV1Schema.extend({
+  // Public participants in an NPC exchange, not people merely mentioned in prose.
+  npcIds: z.array(z.string().min(1).max(100)).min(1).max(12).optional(),
   presentation: z.literal('log').optional(),
   phase: z.enum(['main', 'minor', 'movement', 'aftermath']).nullable(),
   beforeEventId: z.string().min(1).optional(),
@@ -114,6 +117,36 @@ export const arrivalEvidenceSchema = z
   })
   .strict();
 export const turnAdjudicationSchema = turnAdjudicationV1Schema.extend({
+  featureUpdates: z.array(featureUpdateSchema).max(20).optional(),
+  npcUpdates: z
+    .array(
+      z
+        .object({
+          npcId: z.string().min(1).max(100),
+          name: z.string().min(1).max(100),
+          aliases: z.array(z.string().min(1).max(100)).max(12).optional(),
+          locationId: z.string().min(1).max(100).nullable(),
+          status: z.enum(['alive', 'withdrawn', 'surrendered', 'dead']).optional(),
+          allegiance: z.string().min(1).max(300).nullable().optional(),
+          eventId: z.string().min(1).max(200),
+        })
+        .strict(),
+    )
+    .max(30)
+    .optional(),
+  pickups: z
+    .array(
+      z
+        .object({
+          memberId: z.string().min(1),
+          itemId: z.string().min(1),
+          eventId: z.string().min(1),
+          quantity: z.number().int().min(1).max(100).optional(),
+        })
+        .strict(),
+    )
+    .max(100)
+    .optional(),
   worldProgress: z.array(worldProgressEvidenceSchema).max(100).optional(),
   encounterRisks: z
     .array(
@@ -144,6 +177,8 @@ export const turnResolutionV1Schema = z
   .object({
     version: z.literal(1),
     turnId: z.string(),
+    // Optional for saved resolutions created before opening-specific narration.
+    turnNumber: z.number().int().nonnegative().optional(),
     actions: z.array(actionOutcomeV1Schema.extend({ characterId: z.string(), characterName: z.string() })),
     events: z.array(resolvedEventV1Schema),
     factualRecap: z.string().min(1),
@@ -190,6 +225,24 @@ export const turnResolutionV1Schema = z
     memberLocations: z.record(z.string()).optional(),
     knownLocations: z.record(z.string()).optional(),
     worldMap: worldMapSchema.optional(),
+    featureStates: z.array(sceneFeatureSchema).optional(),
+    npcStates: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            name: z.string(),
+            aliases: z.array(z.string()),
+            locationId: z.string().nullable(),
+            status: z.enum(['alive', 'withdrawn', 'surrendered', 'dead']),
+            allegiance: z.string().nullable(),
+            hp: z.number().nullable(),
+            maxHp: z.number().nullable(),
+            conditions: z.array(z.string()),
+          })
+          .strict(),
+      )
+      .optional(),
     placeRefs: z.record(z.string()).optional(),
     placeStates: z
       .record(
@@ -232,6 +285,7 @@ export const turnResolutionV1Schema = z
           actorId: z.string(),
           name: z.string(),
           description: z.string(),
+          personality: z.string().max(500).optional(),
           equipment: z.array(z.object({ name: z.string(), kind: z.string(), description: z.string() })),
         }),
       )

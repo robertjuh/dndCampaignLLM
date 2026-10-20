@@ -2,6 +2,79 @@ import { test, expect } from '@playwright/test';
 import { baseItem, rollCharacterCreation } from '../../shared/rules';
 import { templateCharacter } from '../../shared/schema';
 
+test('a generated portrait survives saving, reloading, and joining the party', async ({ page }) => {
+  const sheet = templateCharacter('Portrait traveller');
+  sheet.portraitId = 'ed912aaf-a6a0-4fb9-a189-d79c64dd7627';
+  await page.route('**/api/characters/generate', (route) => route.fulfill({ json: sheet }));
+  await page.route(`**/api/portraits/${sheet.portraitId}`, (route) =>
+    route.fulfill({
+      contentType: 'image/png',
+      body: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    }),
+  );
+  await page.goto('/characters');
+  await page.getByRole('button', { name: 'Create a character', exact: true }).click();
+  await page.getByLabel('Character concept').fill('An explorer with a brass mask');
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  const portrait = page.getByRole('img', { name: `${sheet.name} portrait`, exact: true });
+  await expect(portrait).toBeVisible();
+  await expect.poll(() => portrait.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+  await page.locator('.equipment-choices button').nth(0).click();
+  await page.locator('.equipment-choices button').nth(1).click();
+  await page.getByRole('button', { name: 'Save character', exact: true }).click();
+  await page.reload();
+  await expect(
+    page.locator('.library-card').getByRole('img', { name: `${sheet.name} portrait` }),
+  ).toBeVisible();
+  const me = await (await page.request.get('/api/me')).json();
+  expect(me.characters[0].portraitId).toBe(sheet.portraitId);
+  const campaignResponse = await page.request.post('/api/campaigns', {
+    headers: { 'x-gather-request': '1' },
+    data: {
+      name: 'Portrait party',
+      setting: 'A quiet port',
+      premise: '',
+      tone: '',
+      language: 'English',
+      instructions: '',
+      custom: [],
+      provider: 'practice',
+    },
+  });
+  expect(campaignResponse.ok()).toBe(true);
+  const campaign = await campaignResponse.json();
+  const joined = await page.request.post('/api/join', {
+    headers: { 'x-gather-request': '1' },
+    data: { code: campaign.inviteCode, characterId: me.characters[0].id, playerName: 'Portrait player' },
+  });
+  expect(joined.ok()).toBe(true);
+  await page.goto(`/campaign/${campaign.id}`);
+  await expect(
+    page.locator('.member-card').getByRole('img', { name: `${sheet.name} portrait` }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('list', { name: 'Party readiness' }).getByRole('img', { name: `${sheet.name} portrait` }),
+  ).toBeVisible();
+});
+
+test('a portrait failure is visible while the generated character can still be saved', async ({ page }) => {
+  const sheet = templateCharacter('Ready without a portrait');
+  sheet.portraitError = 'Portrait unavailable. OpenAI’s image request or billing limit was reached.';
+  await page.route('**/api/characters/generate', (route) => route.fulfill({ json: sheet }));
+  await page.goto('/characters');
+  await page.getByRole('button', { name: 'Create a character', exact: true }).click();
+  await page.getByLabel('Character concept').fill('A wandering healer');
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  await expect(page.locator('.character-sheet').getByRole('status')).toHaveText(sheet.portraitError);
+  await page.locator('.equipment-choices button').nth(0).click();
+  await page.locator('.equipment-choices button').nth(1).click();
+  await page.getByRole('button', { name: 'Save character', exact: true }).click();
+  await expect(page.locator('.library-card')).toContainText(sheet.name);
+});
+
 for (const failure of ['save', 'refresh'] as const) {
   test(`a failed character ${failure} keeps the draft and retries without duplicate saves`, async ({
     page,
@@ -351,6 +424,9 @@ test('a usage rejection preserves a generated result and its selected equipment'
 });
 
 test('phone settings distinguish host sign-in from usable generation', async ({ page }) => {
+  await page.route('**/api/player-auth', (route) =>
+    route.fulfill({ json: { configured: false, signedIn: false, email: null } }),
+  );
   await page.route('**/api/chatgpt', (route) =>
     route.fulfill({
       json: { connected: true, shared: true, email: null, usageUrl: 'https://chatgpt.com/settings/usage' },

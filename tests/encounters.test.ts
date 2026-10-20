@@ -98,6 +98,30 @@ function proposal(c: GMContext): TurnAdjudication {
   };
 }
 
+function arrive(value: TurnAdjudication, memberId: string, locationId: string) {
+  const action = value.actions.find((action) => action.memberId === memberId)!;
+  const eventId = `move:${memberId}`;
+  value.events.push({
+    id: eventId,
+    sequence: value.events.length,
+    kind: 'action',
+    actionId: action.actionId,
+    memberId,
+    phase: 'main',
+    effect: 'movement',
+    result: 'success',
+    locationRef: locationId,
+    fact: 'The traveller crosses the established route.',
+    receiptRefs: [],
+    dependsOn: [],
+  });
+  value.memberLocations = [
+    ...(value.memberLocations ?? []).filter((position) => position.memberId !== memberId),
+    { memberId, locationId, movementEventId: eventId },
+  ];
+  action.eventIds = action.components.main!.eventIds = [eventId];
+}
+
 function risk(value: TurnAdjudication, locationId: string, danger: 'safe' | 'dangerous') {
   const eventId = `world:risk:${locationId}`;
   value.events.push({
@@ -255,6 +279,8 @@ it('checks actual final group locations and first arrivals independently of scre
     { memberId: 'a', locationId: 'forest' },
     { memberId: 'b', locationId: 'inn' },
   ];
+  arrive(value, 'a', 'forest');
+  arrive(value, 'b', 'inn');
   const draw = vi.fn(() => 1);
   const result = prepareEncounterChecks(c, value, {}, draw);
   expect(draw).toHaveBeenCalledExactlyOnceWith('forest');
@@ -263,6 +289,7 @@ it('checks actual final group locations and first arrivals independently of scre
   const arrival = proposal(c);
   arrival.sceneFocus = 'current';
   arrival.memberLocations = [{ memberId: 'a', locationId: 'new:ruins' }];
+  arrive(arrival, 'a', 'new:ruins');
   arrival.arrivals = [{ locationId: 'new:ruins', eventId: 'world:risk:new:ruins' }];
   risk(arrival, 'new:ruins', 'dangerous');
   const checks = prepareEncounterChecks(c, arrival, {}, () => 6).checks;
@@ -275,7 +302,7 @@ it('requires grounded risk evidence for unassessed known and new places before s
     const c = context();
     const value = proposal(c);
     if (place === 'road') delete c.scene.encounterRisk;
-    else value.memberLocations = [{ memberId: 'a', locationId: place }];
+    else arrive(value, 'a', place);
     const draw = vi.fn(() => 1);
     expect(() => prepareEncounterChecks(c, value, {}, draw)).toThrow('Supply encounterRisks');
     expect(draw).not.toHaveBeenCalled();
@@ -287,7 +314,7 @@ it('requires grounded risk evidence for unassessed known and new places before s
   }
 });
 
-it('requires a fresh risk assessment when saved local hazards change', () => {
+it('retains saved danger through prose edits and changes it through a grounded assessment', () => {
   const c = context();
   c.scene.encounterRisk = { danger: 'safe', reason: 'The secured road is guarded.' };
   const value = proposal(c);
@@ -297,13 +324,14 @@ it('requires a fresh risk assessment when saved local hazards change', () => {
       location: {
         name: 'Road',
         atmosphere: c.scene.location.atmosphere,
-        hazard: 'An enemy patrol occupies the road.',
+        hazard: 'The secured road remains quiet under guard.',
       },
     },
   ];
   const draw = vi.fn(() => 1);
-  expect(() => prepareEncounterChecks(c, value, {}, draw)).toThrow('fresh encounterRisks');
+  expect(prepareEncounterChecks(c, value, {}, draw).checks.road.danger).toBe('safe');
   expect(draw).not.toHaveBeenCalled();
+  value.placeUpdates[0].location.hazard = 'An enemy patrol occupies the road.';
   risk(value, 'road', 'dangerous');
   expect(prepareEncounterChecks(c, value, {}, draw).required.map((check) => check.locationId)).toEqual([
     'road',

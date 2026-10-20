@@ -1,4 +1,5 @@
 import type { FactionAffiliation, PublicFaction, ReputationReceipt } from './factions';
+import type { SceneFeature } from './scene-state';
 import { z } from 'zod';
 import { ailments } from './ailments';
 import type { TurnResolution } from './turn-resolution';
@@ -221,6 +222,8 @@ export const characterSchema = z
     role: z.string().trim().min(1).max(80),
     species: z.string().min(1).max(80),
     appearance: z.string().max(1000).default(''),
+    portraitId: z.string().uuid().optional(),
+    portraitError: z.string().max(300).optional(),
     traits: z.array(traitSchema).max(3),
     equipmentOptions: z.array(itemSchema).length(5),
     selectedEquipmentIds: z.array(z.string()).max(2).default([]),
@@ -365,6 +368,7 @@ export const worldMapSchema = z
       z.object({ id: z.string().uuid(), name: z.string().min(1).max(500), visited: z.boolean() }).strict(),
     ),
     connections: z.array(mapConnectionSchema),
+    positions: z.record(z.object({ x: z.number().finite(), y: z.number().finite() }).strict()).optional(),
   })
   .strict();
 export type WorldMap = z.infer<typeof worldMapSchema>;
@@ -438,6 +442,10 @@ export const outcomeSchema = z
             detail: z.string().min(1).max(6000),
             itemId: z.string().min(1).max(200).optional(),
             itemStatus: z.string().max(500).optional(),
+            npcId: z.string().max(100).optional(),
+            npcStatus: z.string().max(1000).optional(),
+            featureId: z.string().max(100).optional(),
+            featureStatus: z.string().optional(),
           })
           .strict()
           .superRefine((entry, ctx) => {
@@ -498,7 +506,7 @@ export const enemySchema = z
     damage: z.string().regex(/^[1-4]d(?:4|6|8|10|12)$/),
     description: z.string().max(1000),
     tactic: z.string().max(500),
-    equipmentBlueprints: z.array(lootSchema).min(1).max(5).optional(),
+    equipmentBlueprints: z.array(lootSchema).max(5).optional(),
     onHit: ailmentSchema.nullable().default(null),
   })
   .strict();
@@ -506,6 +514,7 @@ export type Enemy = z.infer<typeof enemySchema> & {
   equipment?: Item[];
   maxHp: number;
   initiative: number;
+  readyRound?: number;
   withdrawn?: boolean;
   stunned?: boolean;
   conditions?: string[];
@@ -518,7 +527,19 @@ export type Encounter = {
   victory: boolean;
   escaped: boolean;
 };
+export type NPCState = {
+  id: string;
+  name: string;
+  aliases: string[];
+  locationId: string | null;
+  status: 'alive' | 'withdrawn' | 'surrendered' | 'dead';
+  allegiance: string | null;
+  fact: string;
+  enemy?: Enemy;
+};
 export type Scene = {
+  features?: Record<string, SceneFeature>;
+  npcs?: Record<string, NPCState>;
   gathering?: { id: string; memberId: string; locationId: string };
   location: {
     id?: string;
@@ -574,8 +595,23 @@ export type EnvironmentalState = {
   sources: Record<string, { profile: EnvironmentalAction; ready: boolean }>;
   spentResources: string[];
 };
+export const npcReactionSchema = z
+  .object({
+    npcId: z.string().min(1).max(100),
+    npcName: z.string().min(1).max(100),
+    originLocationId: z.string().min(1).max(100),
+    sourceId: z.string().min(1).max(300),
+    evidence: z.string().min(10).max(1500),
+    reason: z.string().min(1).max(1000),
+    fact: z.string().min(1).max(1000),
+    enemy: enemySchema.nullable(),
+  })
+  .strict();
+export type NPCReaction = z.infer<typeof npcReactionSchema>;
+
 export const combatSchema = z
   .object({
+    npcReactions: z.array(npcReactionSchema).max(6).optional(),
     actions: z
       .array(
         z
@@ -671,6 +707,11 @@ export type Turn = {
   result: Outcome | null;
   error: string | null;
   automaticRetry?: boolean;
+  progress?: {
+    stage: 'factions' | 'adjudication' | 'finalization' | 'narration' | 'review' | 'publication';
+    startedAt: string;
+    stageStartedAt: string;
+  };
   diagnostics?: string[];
   resolution?: TurnResolution;
   factionChanges?: ReputationReceipt[];

@@ -121,9 +121,12 @@ test('calls, joins and cancels a gathering on phones, disables combat travel and
   s.myMemberId = s.members[1].id;
   await page.reload();
   const action = page.getByRole('textbox', { name: 'Your action', exact: true });
+  await page.getByRole('button', { name: 'Open action input', exact: true }).click();
   await action.fill('My unfinished draft.');
+  await page.getByRole('button', { name: 'Collapse action input', exact: true }).click();
   await page.getByRole('button', { name: 'Join gathering', exact: true }).click();
   await expect(gathering).toContainText('Rexmen · Travelling');
+  await page.getByRole('button', { name: 'Open action input', exact: true }).click();
   await expect(action).toBeDisabled();
   await expect(action).toHaveValue('I travel to the gathering at Inn.');
   await page.getByRole('button', { name: 'Cancel action', exact: true }).click();

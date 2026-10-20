@@ -1,3 +1,4 @@
+import { interruptNarration } from './narration-interruption';
 import { afterEach, expect, it, vi } from 'vitest';
 import { openDatabase } from '../server/db';
 import { Game, type GameMaster, type GMContext } from '../server/game';
@@ -383,7 +384,7 @@ it('attributes a new destination discovery once and resumes finalized narration 
   f.provider.adjudicate = adjudicate;
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Narration interrupted');
+    interruptNarration(f.db, 'Narration interrupted');
   };
   const id = await f.turn();
   expect(f.snapshot().turn?.phase).toBe('failed');
@@ -439,7 +440,7 @@ it('keeps party goals optional, host-authored and locked while a saved turn fini
   f.game.setPartyGoal(f.campaign.id, f.host.id, 'Change our dossier.');
   expect(f.snapshot().config.partyGoal).toBe('Change our dossier.');
   f.provider.narrate = async () => {
-    throw new Error('Pause at saved narration');
+    interruptNarration(f.db, 'Pause at saved narration');
   };
   await f.turn();
   expect(() => f.game.setPartyGoal(f.campaign.id, f.host.id, 'Another goal')).toThrow('Wait');
@@ -731,7 +732,7 @@ it('registers two new arrivals, local loot and distinct hazards once across a na
   f.provider.adjudicate = adjudicate;
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Interrupted narration');
+    interruptNarration(f.db, 'Interrupted narration');
   };
   const id = await f.turn(['Walk into the upper room.', 'Walk down to the rack.']);
   expect(f.snapshot().turn?.phase).toBe('failed');
@@ -874,7 +875,7 @@ it('keeps routine arrival before a failed stunt and reuses the single saved chec
   f.provider.adjudicate = adjudicate;
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Interrupted');
+    interruptNarration(f.db, 'Interrupted');
   };
   const id = await f.turn(['Follow the open passage, then backflip.', '']);
   expect(f.snapshot().turn?.phase, f.snapshot().turn?.error ?? '').toBe('failed');
@@ -977,19 +978,21 @@ it('orders arrival before a destination Mend and resumes narration without spend
         receiptRefs: [],
         dependsOn: [],
       });
-      value.encounterRisks = [{
-        locationId: destination,
-        eventId: 'world:shelter-safety',
-        danger: 'safe',
-        reason: 'The attended watch post secures the shelter.',
-      }];
+      value.encounterRisks = [
+        {
+          locationId: destination,
+          eventId: 'world:shelter-safety',
+          danger: 'safe',
+          reason: 'The attended watch post secures the shelter.',
+        },
+      ];
       return value;
     },
   );
   f.provider.adjudicate = adjudicate;
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Interrupted narration');
+    interruptNarration(f.db, 'Interrupted narration');
   };
   const id = await f.turn(['Walk to the shelter, then use Field Mend on myself.', '']);
   expect(f.snapshot().turn?.phase).toBe('failed');

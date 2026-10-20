@@ -343,7 +343,7 @@ it('migrates existing gear and hand-held relics without rewriting completed hist
   }
 });
 
-it('routes a Legendary utility through the game and reuses its check and charge after interruption', async () => {
+it('routes a Legendary utility through the game and publishes its check and charge when narration fails', async () => {
   const db = openDatabase(':memory:');
   try {
     let fail = false;
@@ -399,8 +399,6 @@ it('routes a Legendary utility through the game and reuses its check and charge 
     await game.idle();
     const before = draws.mock.calls.length;
     fail = false;
-    game.retry(campaign.id, host.id);
-    await game.idle();
     const result = game.snapshot(campaign.id, host.id);
     expect(result.turn?.phase).toBe('collecting');
     expect(result.history.at(-1)?.rolls[0]).toMatchObject({

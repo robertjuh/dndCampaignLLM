@@ -2,10 +2,13 @@ import type { GMContext } from './game';
 import type { TurnAdjudication } from '../shared/turn-resolution';
 import { memberScene, placeScene } from '../shared/locations';
 import { worldProgressionStateSchema, type WorldProgressionState } from '../shared/world-progression';
+import { memberLocationAtEvent } from './world-map';
 
 export { worldProgressEvidenceSchema, worldProgressionStateSchema } from '../shared/world-progression';
 
-// Two meaningful local turns may not end with the same unresolved situation.
+export class JournalCapacityError extends Error {}
+
+// After two meaningful local turns, request development without blocking publication.
 const stalledTurnLimit = 2;
 const normalize = (fact: string) =>
   fact
@@ -67,7 +70,8 @@ export function worldProgressionContext(context: GMContext) {
   );
   return {
     stalledTurnLimit,
-    threads: threads(context),
+    // Facts already travel in config, journal, motivations and history; send their identities once.
+    threads: threads(context).map(({ id }) => ({ id })),
     places: [...occupied].map((locationId) => ({
       locationId,
       stalledTurns: state.places[locationId]?.stalledTurns ?? 0,
@@ -86,7 +90,6 @@ export function validateWorldProgression(
   if (value.worldProgress === undefined) return; // Accepted legacy checkpoints retain their contract.
   const state = savedState(context);
   const knownThreads = new Set(threads(context).map((thread) => thread.id));
-  const represented = new Set<string>();
   const eventIds = new Set<string>();
   for (const progress of value.worldProgress) {
     const locationId = resolve(progress.locationId);
@@ -104,7 +107,8 @@ export function validateWorldProgression(
     eventIds.add(event.id);
     if (
       !context.members.some(
-        (member) => member.active && resultingPlace(context, value, member.id, resolve) === locationId,
+        (member) =>
+          member.active && memberLocationAtEvent(context, value, member.id, event.id, resolve) === locationId,
       )
     )
       throw new Error('World progress needs a character present at its location.');
@@ -121,13 +125,32 @@ export function validateWorldProgression(
     const previous = context.journal.find(
       (entry) => entry.kind === progress.journal.kind && entry.name === progress.journal.name,
     );
+    const frozen = (context.receipts?.encounterProposal as TurnAdjudication | undefined)?.journal.some(
+      (entry) => entry.kind === update.kind && entry.name === update.name && entry.detail === update.detail,
+    );
+    // A validated checkpoint retains its exact journal; new proposals get canonical persistence.
+    if (!frozen && !normalize(update.detail).includes(normalize(event.fact))) {
+      const facts = value.worldProgress
+        .filter((item) => item.journal.kind === update.kind && item.journal.name === update.name)
+        .map((item) => value.events.find((event) => event.id === item.eventId))
+        .filter((event) => event?.kind === 'world' && event.actionId === null && !event.presentation)
+        .map((event) => event!.fact);
+      update.detail = [...new Set([previous?.detail, ...facts].filter(Boolean))].join('\n');
+    } else if (
+      !frozen &&
+      previous &&
+      !normalize(update.detail).includes(normalize(previous.detail)) &&
+      previous.detail.length + update.detail.length + 1 <= (update.kind === 'faction' ? 6000 : 1500)
+    ) {
+      update.detail = `${previous.detail}\n${update.detail}`;
+    }
+    if (update.detail.length > (update.kind === 'faction' ? 6000 : 1500))
+      throw new JournalCapacityError(
+        `Consolidate journal ${JSON.stringify(update.name)} within ${update.kind === 'faction' ? 6000 : 1500} characters, preserving established knowledge and including the exact concise fact from event ${event.id}. Shorten an oversized new event fact without changing its outcome.`,
+      );
     if (previous && normalize(update.detail) === normalize(previous.detail))
       throw new Error('World progress must persist a new or changed public journal fact.');
-    if (
-      !normalize(event.fact) ||
-      event.fact.length > (update.kind === 'faction' ? 6000 : 1500) ||
-      !normalize(update.detail).includes(normalize(event.fact))
-    )
+    if (!normalize(event.fact) || !normalize(update.detail).includes(normalize(event.fact)))
       throw new Error(
         'World progress must persist its exact concise event fact in the cited journal detail (1500 characters for non-faction entries).',
       );
@@ -171,24 +194,26 @@ export function validateWorldProgression(
       )
         throw new Error('Failed-search progress must retain its immutable failed-check dependency.');
     }
-    represented.add(locationId);
   }
-  for (const arrival of value.arrivals ?? [])
-    if (!represented.has(resolve(arrival.locationId)))
-      throw new Error(
-        'A first arrival needs meaningful world progress grounded in an existing thread, not atmosphere alone.',
-      );
-  for (const locationId of meaningfulPlaces(context, value, resolve)) {
+}
+
+/** Pacing is a bounded writing request, independent from the legality of saved outcomes. */
+export function worldProgressDue(
+  context: GMContext,
+  value: TurnAdjudication,
+  resolve: (ref: string) => string,
+) {
+  if (value.worldProgress === undefined) return [];
+  const state = savedState(context);
+  const represented = new Set(value.worldProgress.map((progress) => resolve(progress.locationId)));
+  return [...meaningfulPlaces(context, value, resolve)].filter((locationId) => {
     const prior = state.places[locationId];
-    if (
+    return (
       prior?.lastTurnId !== context.turn.id &&
       (prior?.stalledTurns ?? 0) + 1 >= stalledTurnLimit &&
       !represented.has(locationId)
-    )
-      throw new Error(
-        `World progression is due at ${locationId}: establish a concrete discovery, NPC action, threat change or resolution in a local world event and changed journal fact. Preserve failed checks and player choices; no fight is required.`,
-      );
-  }
+    );
+  });
 }
 
 /** Called once at finalization, alongside the existing saved resolution checkpoint. */

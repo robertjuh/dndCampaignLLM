@@ -1,9 +1,11 @@
 import { FactionCard, CharacterFactions } from './Factions';
 import { Gathering } from './Gathering';
+import { TurnProgress } from './TurnProgress';
 import type { PublicFaction } from '../shared/factions';
 import { memberScene, placeScene, knownLocations, combatActive } from '../shared/locations';
 import React, { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { QRCodeSVG } from 'qrcode.react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -18,6 +20,7 @@ import {
   Feather,
   Heart,
   LoaderCircle,
+  MessageCircle,
   Monitor,
   Pause,
   Play,
@@ -66,6 +69,7 @@ import { ailments, conditionDescription, conditionDuration } from '../shared/ail
 import {
   Abilities,
   CharacterSheet,
+  CharacterPortrait,
   EquipmentChoices,
   ItemDetails,
   ItemIcon,
@@ -87,6 +91,7 @@ type Me = {
   name: string;
   characters: SavedCharacter[];
   campaigns: { id: string; config: CampaignConfig; status: string; isHost: boolean }[];
+  joinAtRoot?: boolean;
 };
 type Auth = { connected: boolean; shared: boolean; email: string | null; usageUrl: string };
 const defaultCampaign: CampaignConfig = {
@@ -102,6 +107,7 @@ const defaultCampaign: CampaignConfig = {
   model: '',
 };
 const path = location.pathname;
+const joinCode = path.match(/^\/(?:join\/)?([A-Z0-9]{4}|[A-F0-9]{12})\/?$/i)?.[1];
 const icon = { size: 18, strokeWidth: 1.6 };
 const errorText = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 function Button({
@@ -211,6 +217,7 @@ function App() {
     );
   const screen = path.startsWith('/screen/');
   const match = path.match(/^\/(campaign|screen)\/([a-f0-9-]+)$/);
+  const joinEntry = path === '/join' || (path === '/' && me.joinAtRoot);
   return (
     <div className={`app ${screen ? 'screen-app' : ''}`}>
       {!screen && (
@@ -271,7 +278,7 @@ function App() {
                   ? 'Characters'
                   : path === '/settings'
                     ? 'Settings'
-                    : path.startsWith('/join')
+                    : joinEntry || path.startsWith('/join') || joinCode
                       ? 'Join a session'
                       : 'Campaigns'}
               </b>
@@ -284,8 +291,10 @@ function App() {
         )}
         {match ? (
           <Campaign id={match[2]} screen={screen} />
-        ) : path.startsWith('/join/') ? (
-          <Join code={path.split('/')[2]} me={me} />
+        ) : joinEntry ? (
+          <JoinCodePage />
+        ) : path.startsWith('/join/') || joinCode ? (
+          <Join code={joinCode ?? path.split('/')[2]} me={me} />
         ) : path === '/characters' ? (
           <Library me={me} refresh={refresh} />
         ) : path === '/settings' ? (
@@ -300,8 +309,53 @@ function App() {
   );
 }
 
-function Dashboard({ me }: { me: Me }) {
+function SessionCodeForm({ autoFocus = false }: { autoFocus?: boolean }) {
   const [code, setCode] = useState('');
+  return (
+    <form
+      className="session-code-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        location.assign(`/${code.trim().toUpperCase()}`);
+      }}
+    >
+      <input
+        aria-label="Session code"
+        placeholder="ABCD"
+        value={code}
+        onChange={(e) => setCode(e.target.value.toUpperCase())}
+        autoFocus={autoFocus}
+        autoCapitalize="characters"
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={12}
+        required
+        pattern="[a-zA-Z0-9]{4}|[a-fA-F0-9]{12}"
+      />
+      <Button secondary>
+        Join session
+        <ArrowRight size={16} />
+      </Button>
+    </form>
+  );
+}
+
+function JoinCodePage() {
+  return (
+    <div className="page narrow join-entry">
+      <span className="eyebrow">YOUR SEAT AT THE TABLE</span>
+      <h1>Join a session</h1>
+      <p>Enter the four-character code shown on your campaign leader’s screen.</p>
+      <SessionCodeForm autoFocus />
+      <p className="small muted">Connect to the same Wi-Fi as your campaign leader.</p>
+      <a className="back-link" href="/campaigns">
+        Your campaigns
+      </a>
+    </div>
+  );
+}
+
+function Dashboard({ me }: { me: Me }) {
   return (
     <div className="page">
       <div className="page-heading">
@@ -392,27 +446,9 @@ function Dashboard({ me }: { me: Me }) {
         </span>
         <div>
           <h3>Already have a seat at the table?</h3>
-          <p>Enter the session code shared by your campaign leader.</p>
+          <p>Enter the four-character code shown on your campaign leader’s screen.</p>
         </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            location.assign(`/join/${code.trim().toUpperCase()}`);
-          }}
-        >
-          <input
-            aria-label="Session code"
-            placeholder="Session code"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            required
-            pattern="[a-fA-F0-9]{12}"
-          />
-          <Button secondary>
-            Join session
-            <ArrowRight size={16} />
-          </Button>
-        </form>
+        <SessionCodeForm />
       </section>
       <footer className="page-footer">
         <span>
@@ -687,7 +723,7 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
       <div className="character-grid">
         {me.characters.map((c) => (
           <article className="library-card" key={c.id}>
-            <span className="avatar large">{c.name[0]}</span>
+            <CharacterPortrait character={c} size="large" />
             <div className="eyebrow">{c.species}</div>
             <h2>{c.name}</h2>
             <p>{c.appearance}</p>
@@ -798,7 +834,7 @@ function Join({ code, me }: { code: string; me: Me }) {
                 placeholder="What should the party call you?"
               />
             </Field>
-            <Field label="Your character template">
+            <Field label="Which character do you want to join with?">
               <select value={selected} required onChange={(e) => setSelected(e.target.value)}>
                 <option value="">Choose a saved character</option>
                 {characters.map((c) => (
@@ -808,14 +844,12 @@ function Join({ code, me }: { code: string; me: Me }) {
                 ))}
               </select>
             </Field>
-            <button type="button" className="text-link" onClick={() => setEditing(true)}>
+
+            <button type="button" className="button" onClick={() => setEditing(true)}>
               <Plus size={16} />
               Create a new character
             </button>
-            <p className="muted small">
-              Your template is reusable. This campaign gets its own character state. Death ends this run
-              permanently; the saved template remains available for future campaigns.
-            </p>
+
             <div className="form-actions">
               <a href="/" className="muted">
                 Back to your table
@@ -1069,8 +1103,8 @@ function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
           </Badge>
         </div>
         <p>
-          Eligible requests use the connected ChatGPT plan and its usage limits. Gather has no API-key billing
-          fallback.
+          Character text and gameplay use the connected ChatGPT plan and its usage limits. Optional character
+          portraits use separate OpenAI API billing.
         </p>
         {auth?.connected ? (
           <>
@@ -1223,7 +1257,7 @@ function MemberCard({
       className={`member-card ${!member.active || dead ? 'sitting-out' : ''} ${downed ? 'downed' : ''}`}
     >
       <button className="member-heading" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className="avatar">{member.character.name[0]}</span>
+        <CharacterPortrait character={member.character} />
         <span>
           <b>{member.character.name}</b>
           <small>
@@ -1579,6 +1613,9 @@ function CharacterControls({
   command,
   selectedAbility,
   onAbilitySelect,
+  abilitiesOpen,
+  equipmentOpen,
+  onPanelClose,
 }: {
   member: Member;
   snapshot: Snapshot;
@@ -1586,6 +1623,9 @@ function CharacterControls({
   command: (route: string, body: unknown) => Promise<Snapshot | undefined>;
   selectedAbility?: string | null;
   onAbilitySelect?: (name: string | null) => void;
+  abilitiesOpen: boolean;
+  equipmentOpen: boolean;
+  onPanelClose: () => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [rewardBusy, setRewardBusy] = useState(false);
@@ -1635,11 +1675,6 @@ function CharacterControls({
     );
   return (
     <div className="character-controls">
-      <CharacterFactions
-        member={member}
-        factions={s.factions ?? []}
-        dutch={s.config.language === 'Nederlands'}
-      />
       {!state.equipmentChosen && (
         <section>
           <CharacterSheet character={member.character} />
@@ -1697,7 +1732,6 @@ function CharacterControls({
           )}
         </section>
       )}
-      {state.lastLevelUp && <p className="reward-result">{state.lastLevelUp}</p>}
       {state.conditions.includes('Escaped') && (
         <p>
           You are outside combat. You can act and use out-of-combat abilities, but must rejoin the fight
@@ -1705,14 +1739,36 @@ function CharacterControls({
           rejoins the fight.
         </p>
       )}
-      <Abilities
-        character={member.character}
-        state={state}
-        inCombat={!!inCombat}
-        selected={selectedAbility}
-        onSelect={onAbilitySelect}
-        disabled={locked || !!incapacitated || state.pendingLevelUps > 0 || !state.equipmentChosen}
-      />
+      <div className={`abilities-dock ${abilitiesOpen ? 'is-open' : ''}`}>
+        <section
+          id="player-abilities"
+          className="abilities-panel"
+          aria-label="Your abilities"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && window.matchMedia('(max-width: 650px)').matches) onPanelClose();
+          }}
+        >
+          <header className="mobile-panel-heading">
+            <h3>Your abilities</h3>
+            <button
+              type="button"
+              className="mobile-composer-close"
+              aria-label="Collapse abilities"
+              onClick={onPanelClose}
+            >
+              <X size={20} />
+            </button>
+          </header>
+          <Abilities
+            character={member.character}
+            state={state}
+            inCombat={!!inCombat}
+            selected={selectedAbility}
+            onSelect={onAbilitySelect}
+            disabled={locked || !!incapacitated || state.pendingLevelUps > 0 || !state.equipmentChosen}
+          />
+        </section>
+      </div>
       {downedAllies.length > 0 && s.status === 'active' && (
         <section>
           <h3>Help a downed ally</h3>
@@ -1723,37 +1779,57 @@ function CharacterControls({
         </section>
       )}
       {state.equipmentChosen && (
-        <EquipmentPanel
-          member={member}
-          snapshot={s}
-          command={command}
-          healingLockReason={
-            busy || rewardBusy
-              ? 'Saving your changes…'
-              : s.status === 'archived' || s.status === 'ended'
-                ? 'Healing is unavailable after this run.'
-                : incapacitated
-                  ? `You cannot act while ${incapacitated}. Your turn is skipped automatically.`
-                  : s.turn && s.turn.phase !== 'collecting'
-                    ? 'Healing is locked while this round finishes.'
-                    : s.turn?.actions.some((action) => action.memberId === member.id)
-                      ? 'Your action is already submitted.'
-                      : ''
-          }
-          lockReason={
-            busy || rewardBusy
-              ? 'Saving your changes…'
-              : s.status === 'archived' || s.status === 'ended'
-                ? 'Equipment changes are unavailable after this run.'
-                : inCombat
-                  ? 'Equipment changes are available outside combat. Healing items remain available.'
-                  : s.turn && s.turn.phase !== 'collecting'
-                    ? 'Equipment is locked while this round finishes.'
-                    : s.turn?.actions.some((action) => action.memberId === member.id)
-                      ? 'Equipment is locked after submitting your action, until the next turn.'
-                      : ''
-          }
-        />
+        <section
+          id="player-equipment"
+          className={`player-equipment-panel ${equipmentOpen ? 'is-open' : ''}`}
+          aria-label="Your equipment"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && window.matchMedia('(max-width: 650px)').matches) onPanelClose();
+          }}
+        >
+          <header className="mobile-panel-heading">
+            <h3>Equipment & backpack</h3>
+            <button
+              type="button"
+              className="mobile-composer-close"
+              aria-label="Collapse equipment"
+              onClick={onPanelClose}
+            >
+              <X size={20} />
+            </button>
+          </header>
+          <EquipmentPanel
+            member={member}
+            snapshot={s}
+            command={command}
+            healingLockReason={
+              busy || rewardBusy
+                ? 'Saving your changes…'
+                : s.status === 'archived' || s.status === 'ended'
+                  ? 'Healing is unavailable after this run.'
+                  : incapacitated
+                    ? `You cannot act while ${incapacitated}. Your turn is skipped automatically.`
+                    : s.turn && s.turn.phase !== 'collecting'
+                      ? 'Healing is locked while this round finishes.'
+                      : s.turn?.actions.some((action) => action.memberId === member.id)
+                        ? 'Your action is already submitted.'
+                        : ''
+            }
+            lockReason={
+              busy || rewardBusy
+                ? 'Saving your changes…'
+                : s.status === 'archived' || s.status === 'ended'
+                  ? 'Equipment changes are unavailable after this run.'
+                  : inCombat
+                    ? 'Equipment changes are available outside combat. Healing items remain available.'
+                    : s.turn && s.turn.phase !== 'collecting'
+                      ? 'Equipment is locked while this round finishes.'
+                      : s.turn?.actions.some((action) => action.memberId === member.id)
+                        ? 'Equipment is locked after submitting your action, until the next turn.'
+                        : ''
+            }
+          />
+        </section>
       )}
     </div>
   );
@@ -1847,6 +1923,9 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [action, setAction] = useState('');
   const actionInput = useRef<HTMLTextAreaElement>(null);
+  const campaignPage = useRef<HTMLDivElement>(null);
+  const [mobilePanel, setMobilePanel] = useState<'action' | 'abilities' | 'equipment' | null>(null);
+  const actionComposerOpen = mobilePanel === 'action';
   const [abilityName, setAbilityName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1883,6 +1962,48 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     setAction('');
     setAbilityName(null);
   }, [s?.turn?.id]);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const page = campaignPage.current;
+    if (!viewport || !page) return;
+    const updateViewport = () => {
+      page.style.setProperty('--action-viewport-height', `${viewport.height}px`);
+      page.style.setProperty(
+        '--action-viewport-bottom',
+        `${Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)}px`,
+      );
+    };
+    updateViewport();
+    viewport.addEventListener('resize', updateViewport);
+    viewport.addEventListener('scroll', updateViewport);
+    return () => {
+      viewport.removeEventListener('resize', updateViewport);
+      viewport.removeEventListener('scroll', updateViewport);
+    };
+  }, [s?.id]);
+  function openActionComposer() {
+    setMobilePanel('action');
+    requestAnimationFrame(() => actionInput.current?.focus({ preventScroll: true }));
+  }
+  function closeMobilePanel() {
+    setMobilePanel(null);
+    actionInput.current?.blur();
+    requestAnimationFrame(() =>
+      document.getElementById(`player-${mobilePanel}-toggle`)?.focus({ preventScroll: true }),
+    );
+  }
+  function toggleMobilePanel(panel: 'action' | 'abilities' | 'equipment') {
+    if (mobilePanel === panel) return closeMobilePanel();
+    if (panel === 'action') return openActionComposer();
+    setMobilePanel(panel);
+    actionInput.current?.blur();
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`player-${panel}`)
+        ?.querySelector<HTMLButtonElement>('.mobile-composer-close')
+        ?.focus({ preventScroll: true }),
+    );
+  }
   async function command(route: string, body: unknown) {
     setBusy(true);
     setError('');
@@ -1950,8 +2071,9 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     const next = action.trim() ? before + inserted + after : inserted;
     if (next.length > 2000) return;
     setAction(next);
+    setMobilePanel('action');
     requestAnimationFrame(() => {
-      actionInput.current?.focus();
+      actionInput.current?.focus({ preventScroll: window.matchMedia('(max-width: 650px)').matches });
       const position = action.trim() ? cursor + inserted.length : inserted.length;
       actionInput.current?.setSelectionRange(position, position);
     });
@@ -1965,7 +2087,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const expected = required.length;
   const host = s.isHost && !screen;
   const partyOrigin = s.partyOrigins?.[0] ?? location.origin;
-  const joinLink = `${partyOrigin}/join/${s.inviteCode}`;
+  const joinLink = `${partyOrigin}/${s.inviteCode}`;
   async function copyInvite() {
     try {
       if (!navigator.clipboard) throw new Error('Copy this session link: ' + joinLink);
@@ -1977,7 +2099,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     }
   }
   return (
-    <div className={`page campaign-page ${screen ? 'display-page' : ''}`}>
+    <div ref={campaignPage} className={`page campaign-page ${screen ? 'display-page' : ''}`}>
       {screen && (
         <div className="display-top">
           <a href="/">
@@ -2111,7 +2233,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           <ul aria-label="Party readiness">
             {s.members.map((m) => (
               <li key={m.id}>
-                <b>{m.character.name}</b> ·{' '}
+                <CharacterPortrait character={m.character} size="mini" /> <b>{m.character.name}</b> ·{' '}
                 {!m.active
                   ? 'Sitting out'
                   : m.state.equipmentChosen
@@ -2162,7 +2284,15 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   }}
                 />
               ) : (
-                <CharacterControls member={myCharacter} snapshot={s} busy={busy} command={command} />
+                <CharacterControls
+                  member={myCharacter}
+                  snapshot={s}
+                  busy={busy}
+                  command={command}
+                  abilitiesOpen={mobilePanel === 'abilities'}
+                  equipmentOpen={mobilePanel === 'equipment'}
+                  onPanelClose={closeMobilePanel}
+                />
               )}
             </>
           )}
@@ -2346,6 +2476,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       <h3>{j.name}</h3>
                       <p>{j.detail}</p>
                       {j.itemStatus && <p className="small">{j.itemStatus}</p>}
+                      {j.npcStatus && <p className="small">{j.npcStatus}</p>}
+                      {j.featureStatus && <p className="small">{j.featureStatus}</p>}
                     </article>
                   ))
               ) : (
@@ -2384,10 +2516,25 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     </p>
                     {s.config.premise && <blockquote>{s.config.premise}</blockquote>}
                     {s.inviteCode && (
-                      <div className="lobby-invite">
+                      <div className="lobby-invite" role="region" aria-label="Join this session">
                         <span>JOIN THIS SESSION</span>
                         <b>{s.inviteCode}</b>
-                        <small>{joinLink}</small>
+                        <a className="invite-qr" href={joinLink} aria-label="Open join page">
+                          <QRCodeSVG
+                            value={joinLink}
+                            size={192}
+                            marginSize={4}
+                            level="M"
+                            role="img"
+                            title="Scan to join this session"
+                          />
+                        </a>
+                        <a className="invite-link" href={joinLink}>
+                          {joinLink}
+                        </a>
+                        <small>
+                          Or open <a href={partyOrigin}>{partyOrigin}</a> and enter the code above.
+                        </small>
                       </div>
                     )}
                   </div>
@@ -2460,12 +2607,13 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     </div>
                   )}
                   {!!t.diagnostics?.length && (
-                    <div className="gm-diagnostics">
+                    <details className="gm-diagnostics">
+                      <summary>GM recovery details ({t.diagnostics.length})</summary>
                       <p>The GM recovered this turn. Debugging details:</p>
                       {t.diagnostics.map((message) => (
                         <ErrorBox key={message} error={message} />
                       ))}
-                    </div>
+                    </details>
                   )}
                   <div className="narrator">
                     <span className="gm-avatar">
@@ -2512,21 +2660,26 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       {submitted} / {expected} ready
                     </span>
                   </div>
-                  {turn.actions.map((a) => (
-                    <div className="action-bubble" key={a.memberId}>
-                      <span className="avatar mini">
-                        {(a.characterName ?? s.members.find((m) => m.id === a.memberId)?.character.name)?.[0]}
-                      </span>
-                      <div>
-                        <b>{a.characterName ?? s.members.find((m) => m.id === a.memberId)?.character.name}</b>
-                        <p>
-                          <span>{a.passed ? 'Passes this turn.' : a.text}</span>
-                          {a.abilityName && <small> · {a.abilityName}</small>}
-                        </p>
+                  {turn.actions.map((a) => {
+                    const character = s.members.find((m) => m.id === a.memberId)?.character;
+                    const name = a.characterName ?? character?.name ?? 'Unknown character';
+                    return (
+                      <div className="action-bubble" key={a.memberId}>
+                        <CharacterPortrait
+                          character={{ name, portraitId: character?.portraitId }}
+                          size="mini"
+                        />
+                        <div>
+                          <b>{name}</b>
+                          <p>
+                            <span>{a.passed ? 'Passes this turn.' : a.text}</span>
+                            {a.abilityName && <small> · {a.abilityName}</small>}
+                          </p>
+                        </div>
+                        <Check size={15} />
                       </div>
-                      <Check size={15} />
-                    </div>
-                  ))}
+                    );
+                  })}
                   {!!turn.factionChanges?.length && (
                     <div className="turn-faction-changes">
                       <b>
@@ -2565,11 +2718,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   {['queued', 'resolving'].includes(turn.phase) && (
                     <div className="thinking">
                       <LoaderCircle className="spin" size={22} />
-                      <span>
-                        {turn.automaticRetry
-                          ? 'The GM timed out. Resuming your saved turn from checkpoints…'
-                          : 'The game master is weaving your actions into the story…'}
-                      </span>
+                      <TurnProgress turn={turn} />
                     </div>
                   )}
                   {turn.phase === 'failed' && (
@@ -2615,11 +2764,15 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   busy={busy}
                   command={command}
                   selectedAbility={abilityName}
+                  abilitiesOpen={mobilePanel === 'abilities'}
+                  equipmentOpen={mobilePanel === 'equipment'}
+                  onPanelClose={closeMobilePanel}
                   onAbilitySelect={
                     canAct
                       ? (name) => {
                           setAbilityName(name);
                           if (name && !action.trim()) setAction(`Use ${name}.`);
+                          if (name && window.matchMedia('(max-width: 650px)').matches) openActionComposer();
                         }
                       : undefined
                   }
@@ -2631,94 +2784,111 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                 turn &&
                 myCharacter &&
                 myCharacter.state.hp > 0 && (
-                  <form
-                    className="action-composer"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      command('action', {
-                        turnId: turn.id,
-                        text: action,
-                        passed: false,
-                        abilityName,
-                      });
-                    }}
-                  >
-                    <label htmlFor="action-input">
-                      {incapacitated
-                        ? `You are ${incapacitated}. Your turn is skipped automatically. No action is needed; the party does not have to wait for you.`
-                        : mine?.gathering
-                          ? 'You are joining the gathering. Travel uses your whole turn; you can cancel while the party decides.'
-                          : mine?.supportAction
-                            ? 'Helping your party uses your turn. You can cancel while the party decides.'
-                            : mine
-                              ? 'Your action is submitted. Cancel it before rewriting to stop the party from advancing.'
-                              : 'What does your character do?'}
-                    </label>
-                    {abilityName && !mine?.supportAction && !mine?.gathering && (
-                      <p className="selected-ability">
-                        Using <b>{abilityName}</b>. Describe the situation and your intended target below.
-                        <button
-                          className="text-link"
-                          type="button"
-                          disabled={!canAct || busy}
-                          onClick={() => setAbilityName(null)}
-                        >
-                          Remove ability
-                        </button>
-                      </p>
-                    )}
-                    <textarea
-                      ref={actionInput}
-                      id="action-input"
-                      aria-label="Your action"
-                      rows={3}
-                      value={mine?.supportAction || mine?.gathering ? mine.text : action}
-                      onChange={(e) => setAction(e.target.value)}
-                      maxLength={2000}
-                      disabled={!canAct || busy}
-                      placeholder={
-                        canAct
-                          ? 'Describe your action. The world is listening…'
-                          : 'Your next action opens with the next turn.'
-                      }
-                    />
-                    <div className="composer-bottom">
-                      <span>
-                        <Feather size={14} />
-                        Your action will appear on the shared screen.
-                      </span>
-                      <div>
-                        {mine && turn.phase === 'collecting' && (
+                  <div className={`action-dock ${actionComposerOpen ? 'is-open' : ''}`}>
+                    <form
+                      id="action-composer"
+                      className="action-composer"
+                      aria-label="Action composer"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape' && window.matchMedia('(max-width: 650px)').matches)
+                          closeMobilePanel();
+                      }}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        command('action', {
+                          turnId: turn.id,
+                          text: action,
+                          passed: false,
+                          abilityName,
+                        });
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="mobile-composer-close"
+                        aria-label="Collapse action input"
+                        onClick={closeMobilePanel}
+                      >
+                        <X size={20} />
+                      </button>
+                      <label htmlFor="action-input">
+                        {incapacitated
+                          ? `You are ${incapacitated}. Your turn is skipped automatically. No action is needed; the party does not have to wait for you.`
+                          : mine?.gathering
+                            ? 'You are joining the gathering. Travel uses your whole turn; you can cancel while the party decides.'
+                            : mine?.supportAction
+                              ? 'Helping your party uses your turn. You can cancel while the party decides.'
+                              : mine
+                                ? 'Your action is submitted. Cancel it before rewriting to stop the party from advancing.'
+                                : 'What does your character do?'}
+                      </label>
+                      {abilityName && !mine?.supportAction && !mine?.gathering && (
+                        <p className="selected-ability">
+                          Using <b>{abilityName}</b>. Describe the situation and your intended target below.
+                          <button
+                            className="text-link"
+                            type="button"
+                            disabled={!canAct || busy}
+                            onClick={() => setAbilityName(null)}
+                          >
+                            Remove ability
+                          </button>
+                        </p>
+                      )}
+                      <textarea
+                        ref={actionInput}
+                        id="action-input"
+                        aria-label="Your action"
+                        rows={3}
+                        value={mine?.supportAction || mine?.gathering ? mine.text : action}
+                        onChange={(e) => setAction(e.target.value)}
+                        maxLength={2000}
+                        disabled={!canAct || busy}
+                        placeholder={
+                          canAct
+                            ? 'Describe your action. The world is listening…'
+                            : 'Your next action opens with the next turn.'
+                        }
+                      />
+                      <div className="composer-bottom">
+                        <span>
+                          <Feather size={14} />
+                          Your action will appear on the shared screen.
+                        </span>
+                        <div>
+                          {mine && turn.phase === 'collecting' && (
+                            <Button
+                              type="button"
+                              secondary
+                              disabled={busy || !!incapacitated}
+                              onClick={async () => {
+                                const updated = await command('action/cancel', { turnId: turn.id });
+                                if (updated) {
+                                  if (!mine.gathering && (!action.trim() || mine.supportAction))
+                                    setAction(mine.text);
+                                  setAbilityName(mine.abilityName ?? null);
+                                }
+                              }}
+                            >
+                              Cancel action
+                            </Button>
+                          )}
                           <Button
                             type="button"
                             secondary
-                            disabled={busy || !!incapacitated}
-                            onClick={async () => {
-                              const updated = await command('action/cancel', { turnId: turn.id });
-                              if (updated) {
-                                if (!mine.gathering && (!action.trim() || mine.supportAction)) setAction(mine.text);
-                                setAbilityName(mine.abilityName ?? null);
-                              }
-                            }}
+                            disabled={!canAct || busy}
+                            onClick={() => command('action', { turnId: turn.id, text: '', passed: true })}
                           >
-                            Cancel action
+                            Pass
                           </Button>
-                        )}
-                        <Button
-                          type="button"
-                          secondary
-                          disabled={!canAct || busy}
-                          onClick={() => command('action', { turnId: turn.id, text: '', passed: true })}
-                        >
-                          Pass
-                        </Button>
-                        <Button disabled={!canAct || busy || !action.trim()}>
-                          <Send size={15} />
-                          {mine ? 'Update action' : 'Submit action'}
-                        </Button>
+                          <Button disabled={!canAct || busy || !action.trim()}>
+                            <Send size={15} />
+                            {mine ? 'Update action' : 'Submit action'}
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                  </form>
+                    </form>
+                  </div>
                 )}
             </>
           )}
@@ -2735,8 +2905,10 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           )}
           {s.status !== 'lobby' && (
             <WorldMap
+              key={s.id}
               scene={s.scene}
               members={s.members}
+              myMemberId={screen ? null : s.myMemberId}
               historical={!viewingCurrent}
               dutch={s.config.language === 'Nederlands'}
             />
@@ -2797,6 +2969,53 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           )}
         </aside>
       </div>
+      {!screen &&
+        myCharacter &&
+        !isDowned(myCharacter.state) &&
+        !isDead(myCharacter.state) &&
+        (s.status === 'lobby' ? !editing : viewingCurrent && tab === 'story') && (
+          <div className="mobile-player-toolbar" role="group" aria-label="Player controls">
+            {(
+              [
+                {
+                  panel: 'action',
+                  label: 'Action',
+                  title: 'Open action input',
+                  Icon: MessageCircle,
+                  disabled: !turn || s.status === 'lobby',
+                },
+                {
+                  panel: 'abilities',
+                  label: 'Abilities',
+                  title: 'Open abilities',
+                  Icon: Sparkles,
+                  disabled: false,
+                },
+                {
+                  panel: 'equipment',
+                  label: 'Equipment',
+                  title: 'Equipment & backpack',
+                  Icon: Shield,
+                  disabled: !myCharacter.state.equipmentChosen,
+                },
+              ] as const
+            ).map(({ panel, label, title, Icon, disabled }) => (
+              <button
+                key={panel}
+                id={`player-${panel}-toggle`}
+                type="button"
+                aria-label={title}
+                aria-expanded={mobilePanel === panel}
+                aria-controls={panel === 'action' ? 'action-composer' : `player-${panel}`}
+                disabled={disabled}
+                onClick={() => toggleMobilePanel(panel)}
+              >
+                <Icon size={22} />
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
     </div>
   );
 }

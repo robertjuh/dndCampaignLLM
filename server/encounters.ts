@@ -5,6 +5,7 @@ import { combatActive, memberScene, placeScene, savePlace } from '../shared/loca
 import { incapacitatingCondition } from '../shared/rules';
 import { isDeepStrictEqual } from 'node:util';
 import { adjudicationPlaceRef } from './turn-resolution';
+import { memberLocationAtEvent } from './world-map';
 
 export type EncounterCheck = {
   locationId: string;
@@ -15,6 +16,42 @@ export type EncounterCheck = {
   triggered: boolean;
 };
 export type EncounterChecks = Record<string, EncounterCheck>;
+
+/** A saved exploration is already decided. Resume by appending receipt-derived introductions. */
+export function completedEncounterProposal(context: GMContext): TurnAdjudication | undefined {
+  const baseline = context.receipts?.encounterProposal as TurnAdjudication | undefined;
+  if (!baseline) return;
+  const checks = context.receipts?.encounterChecks as EncounterChecks | undefined;
+  const starts = context.receipts?.startCombatByLocation as Record<string, Encounter> | undefined;
+  const triggered = Object.values(checks ?? {}).filter((check) => check.triggered);
+  if (!triggered.length || triggered.some((check) => !starts?.[check.locationId])) return;
+  const value = structuredClone(baseline);
+  for (const check of triggered) {
+    const encounter = starts![check.locationId];
+    const names = encounter.enemies.map((enemy) => enemy.name).join(', ');
+    const id = `encounter:introduction:${check.locationId}`;
+    if (value.events.some((event) => event.id === id)) continue;
+    value.events.push({
+      id,
+      sequence: value.events.length,
+      kind: 'world',
+      memberId: null,
+      actionId: null,
+      phase: 'aftermath',
+      result: null,
+      locationRef: check.locationId,
+      fact:
+        context.config.language === 'Nederlands'
+          ? `Een confrontatie begint met ${names}. De eerste combat-ronde wacht op de volgende acties.`
+          : `A confrontation begins with ${names}. The first combat round waits for the next actions.`,
+      receiptRefs: ['tool:startCombatByLocation'],
+      dependsOn: baseline.events
+        .filter((event) => event.kind === 'world' && event.locationRef === check.locationId)
+        .map((event) => ({ eventId: event.id, requires: 'occurrence' })),
+    });
+  }
+  return value;
+}
 
 export function encounterPlaceRef(context: GMContext, value: TurnAdjudication) {
   return adjudicationPlaceRef(context, value);
@@ -48,6 +85,9 @@ export function assertEncounterProposal(
     'separations',
     'arrivals',
     'factionEffects',
+    'pickups',
+    'npcUpdates',
+    'featureUpdates',
   ] as const)
     if (!isDeepStrictEqual(value[field], baseline[field]))
       throw new Error(
@@ -124,12 +164,12 @@ export function assertEncounterProposal(
   }
 }
 
-/** One opportunity per exposed group, using the validated result of its actual travel/actions. */
+/** Without a draw callback, validate the complete plan without spending or saving dice. */
 export function prepareEncounterChecks(
   context: GMContext,
   value: TurnAdjudication,
   saved: EncounterChecks,
-  draw: (locationId: string) => number,
+  draw?: (locationId: string) => number,
 ) {
   const resolve = encounterPlaceRef(context, value);
   const position = (memberId: string) => {
@@ -171,7 +211,12 @@ export function prepareEncounterChecks(
       evidence.actionId !== null ||
       evidence.presentation ||
       !evidence.locationRef ||
-      resolve(evidence.locationRef) !== locationId
+      resolve(evidence.locationRef) !== locationId ||
+      !context.members.some(
+        (member) =>
+          member.active &&
+          memberLocationAtEvent(context, value, member.id, evidence.id, resolve) === locationId,
+      )
     )
       throw new Error('Encounter danger needs public local world evidence.');
     const reliesOnFailure = (eventId: string, seen = new Set<string>()): boolean => {
@@ -227,16 +272,8 @@ export function prepareEncounterChecks(
     const known = locationId === context.scene.location.id || !!context.scene.places?.[locationId];
     const place = known ? placeScene(context.scene, locationId) : undefined;
     if (started(context, locationId) || (place && combatActive(place))) continue;
-    const update =
-      value.placeUpdates?.find((entry) => resolve(entry.ref) === locationId)?.location ??
-      (locationId === resolve('destination') ? value.location : undefined);
-    if (
-      place?.encounterRisk &&
-      update &&
-      update.hazard !== place.location.hazard &&
-      !assessments.has(locationId)
-    )
-      throw new Error('Changed local hazards require a fresh encounterRisks assessment.');
+    // Descriptive edits do not change the saved danger classification. Only a grounded
+    // encounterRisks entry does; unassessed places still require one before exploration.
     const risk = assessments.get(locationId) ?? place?.encounterRisk;
     if (!risk && (candidates.has(locationId) || context.turn.number === 0))
       throw new Error(`Supply encounterRisks with grounded safe/dangerous evidence for ${locationId}.`);
@@ -251,8 +288,8 @@ export function prepareEncounterChecks(
       reason: risk.reason,
     });
   }
-  for (const plan of planned) {
-    const die = plan.danger === 'dangerous' ? draw(plan.locationId) : null;
+  for (const plan of draw ? planned : []) {
+    const die = plan.danger === 'dangerous' ? draw!(plan.locationId) : null;
     if (die !== null && (!Number.isInteger(die) || die < 1 || die > 6))
       throw new Error('Encounter checks require a valid d6 result.');
     saved[plan.locationId] = { ...plan, die, triggered: die === 1 };

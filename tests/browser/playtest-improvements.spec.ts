@@ -106,6 +106,174 @@ for (const language of ['English', 'Nederlands']) {
   });
 }
 
+test('mobile toolbar opens action, abilities and equipment without covering the last player card', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const snapshot = await table(page, 'Nederlands');
+  snapshot.factions = [
+    { id: 'wardens', name: 'Gate Wardens', knownDescription: 'Guardians of the gate.', discoveredTurn: 0 },
+  ];
+  snapshot.members[0].state.lastLevelUp = 'Gained +1 STR and +1 DEX.';
+  snapshot.members[0].character.abilities.push(
+    ...Array.from({ length: 12 }, (_, index) => ({
+      ...snapshot.members[0].character.abilities[0],
+      name: `Extra ability ${index + 1}`,
+    })),
+  );
+  await page.reload();
+  await expect(page.locator('.character-controls .faction-relations')).toHaveCount(0);
+  await expect(page.getByText(snapshot.members[0].state.lastLevelUp, { exact: true })).toHaveCount(0);
+  await page.locator('.member-heading').click();
+  await expect(page.locator('.member-card').getByRole('region', { name: 'Factierelaties' })).toContainText(
+    'Gate Wardens',
+  );
+  await page.locator('.member-heading').click();
+
+  const input = page.getByRole('textbox', { name: 'Your action', exact: true });
+  const toggle = page.getByRole('button', { name: 'Open action input', exact: true });
+  const close = page.getByRole('button', { name: 'Collapse action input', exact: true });
+  const composer = page.getByRole('form', { name: 'Action composer', exact: true });
+  const abilitiesToggle = page.getByRole('button', { name: 'Open abilities', exact: true });
+  const abilities = page.getByRole('region', { name: 'Your abilities', exact: true });
+  const abilitiesClose = page.getByRole('button', { name: 'Collapse abilities', exact: true });
+  const toolbar = page.getByRole('group', { name: 'Player controls', exact: true });
+  const equipmentToggle = toolbar.getByRole('button', { name: 'Equipment & backpack', exact: true });
+  const equipment = page.getByRole('region', { name: 'Your equipment', exact: true });
+  const equipmentClose = page.getByRole('button', { name: 'Collapse equipment', exact: true });
+  await expect(input).toBeHidden();
+  await expect(abilities).toBeHidden();
+  await expect(equipment).toBeHidden();
+  await expect(toolbar.getByRole('button')).toHaveCount(3);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect(toggle).toBeInViewport();
+  await expect(abilitiesToggle).toBeInViewport();
+  await expect(equipmentToggle).toBeInViewport();
+  const lastCard = (await page.locator('.member-card').last().boundingBox())!;
+  expect(lastCard.y + lastCard.height).toBeLessThanOrEqual((await toolbar.boundingBox())!.y);
+  expect(await toolbar.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
+    'rgba(0, 0, 0, 0)',
+  );
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await toggle.click();
+  await expect(input).toBeFocused();
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+  const composerBox = (await composer.boundingBox())!;
+  expect(composerBox.y + composerBox.height).toBeCloseTo((await toolbar.boundingBox())!.y, 0);
+  await input.fill('I inspect the checkpoint.');
+  await close.click();
+  await expect(input).toBeHidden();
+  await expect(toggle).toBeFocused();
+  await toggle.click();
+  await expect(input).toHaveValue('I inspect the checkpoint.');
+
+  // A phone keyboard can shrink the visual viewport without resizing the page layout.
+  await page.evaluate(() => {
+    Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 420 });
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+  });
+  const keyboardBox = (await composer.boundingBox())!;
+  const keyboardToolbar = (await toolbar.boundingBox())!;
+  expect(keyboardToolbar.y + keyboardToolbar.height).toBeCloseTo(420, 0);
+  expect(keyboardBox.y + keyboardBox.height).toBeCloseTo(keyboardToolbar.y, 0);
+  await expect(input).toBeInViewport();
+  await page.evaluate(() => {
+    Reflect.deleteProperty(window.visualViewport!, 'height');
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+  });
+  await page.screenshot({ path: 'test-results/action-composer-mobile.png' });
+  await input.press('Escape');
+  await expect(input).toBeHidden();
+  const storyHeight = await page.locator('.story-column').evaluate((element) => element.clientHeight);
+  const storyScroll = await page.evaluate(() => scrollY);
+  await abilitiesToggle.click();
+  await expect(abilities).toBeVisible();
+  await expect(abilitiesClose).toBeFocused();
+  await expect(input).toBeHidden();
+  expect(await page.evaluate(() => scrollY)).toBe(storyScroll);
+  expect(await page.locator('.story-column').evaluate((element) => element.clientHeight)).toBe(storyHeight);
+  expect(await abilities.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await abilities.evaluate((element) => (element.scrollTop = element.scrollHeight));
+  await expect(abilitiesClose).toBeInViewport();
+  await abilitiesClose.click();
+  await expect(abilities).toBeHidden();
+  await expect(abilitiesToggle).toBeFocused();
+  await abilitiesToggle.click();
+  await abilitiesClose.press('Escape');
+  await expect(abilities).toBeHidden();
+  await abilitiesToggle.click();
+  await abilities.evaluate((element) => (element.scrollTop = 0));
+  await page.screenshot({ path: 'test-results/abilities-mobile.png' });
+  await page
+    .locator('.character-controls')
+    .getByRole('button', { name: 'Use ability', exact: true })
+    .first()
+    .click();
+  await expect(input).toBeVisible();
+  await expect(input).toHaveValue('I inspect the checkpoint.');
+  await expect(page.locator('.selected-ability')).toBeVisible();
+  await expect(abilities).toBeHidden();
+
+  await equipmentToggle.click();
+  await expect(equipment).toBeVisible();
+  await expect(input).toBeHidden();
+  await expect(abilities).toBeHidden();
+  await expect(equipmentClose).toBeFocused();
+  await expect(equipment.getByRole('region', { name: 'Equipment and backpack', exact: true })).toBeVisible();
+  const equipmentBox = (await equipment.boundingBox())!;
+  expect(equipmentBox.y + equipmentBox.height).toBeCloseTo((await toolbar.boundingBox())!.y, 0);
+  await equipment.evaluate((element) => (element.scrollTop = element.scrollHeight));
+  await expect(equipmentClose).toBeInViewport();
+  await equipmentClose.press('Escape');
+  await expect(equipment).toBeHidden();
+  await expect(equipmentToggle).toBeFocused();
+  await equipmentToggle.click();
+  await equipment.evaluate((element) => (element.scrollTop = 0));
+  await page.screenshot({ path: 'test-results/equipment-toolbar-mobile.png' });
+  await toggle.click();
+  await expect(input).toHaveValue('I inspect the checkpoint.');
+  await expect(page.locator('.selected-ability')).toBeVisible();
+  await expect(equipment).toBeHidden();
+
+  await page.route(`**/api/campaigns/${snapshot.id}/action`, async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body).toMatchObject({
+      turnId: snapshot.turn!.id,
+      text: 'I inspect the checkpoint.',
+      passed: false,
+    });
+    expect(body.abilityName).toBeTruthy();
+    snapshot.turn!.actions = [{ ...body, memberId: snapshot.myMemberId! }];
+    snapshot.version++;
+    await route.fulfill({ json: snapshot });
+  });
+  await page.getByRole('button', { name: 'Submit action', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cancel action', exact: true })).toBeVisible();
+  await close.click();
+  await expect(input).toBeHidden();
+  await expect(toggle).toBeInViewport();
+  await page.screenshot({ path: 'test-results/action-bubble-mobile.png' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await page.setViewportSize({ width: 320, height: 568 });
+  const abilitiesButton = (await abilitiesToggle.boundingBox())!;
+  const actionButton = (await toggle.boundingBox())!;
+  const equipmentButton = (await equipmentToggle.boundingBox())!;
+  expect(actionButton.x + actionButton.width).toBeLessThanOrEqual(abilitiesButton.x);
+  expect(abilitiesButton.x + abilitiesButton.width).toBeLessThanOrEqual(equipmentButton.x);
+  expect(equipmentButton.x + equipmentButton.width).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(input).toBeVisible();
+  await expect(toggle).toBeHidden();
+  await expect(abilitiesToggle).toBeHidden();
+  await expect(toolbar).toBeHidden();
+  await expect(abilities).toBeVisible();
+  expect(await composer.evaluate((element) => getComputedStyle(element).position)).toBe('static');
+});
+
 test('combat hides scene loot and victory restores story-item backpack pickup', async ({ page }) => {
   const snapshot = await table(page, 'English');
   await expect(page.getByText('Loot at the scene', { exact: true })).toHaveCount(0);

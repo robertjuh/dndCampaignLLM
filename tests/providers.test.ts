@@ -244,7 +244,10 @@ it('keeps procedural route declarations through adjudication and grounds narrati
     const data = JSON.parse(request.input[0].content);
     let output: unknown;
     if (data.task.startsWith('Adjudicate')) {
-      expect(data.scene.worldMap).toEqual(context.scene.worldMap);
+      expect(data.scene.worldMap).toEqual({
+        nodes: { 'place:1': { id: 'place:1', name: 'Forest', visited: true } },
+        connections: [],
+      });
       expect(data.schemaExample.mapUpdates).toEqual({ locations: [], connections: [] });
       output = {
         ...data.schemaExample,

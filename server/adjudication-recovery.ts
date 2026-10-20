@@ -6,9 +6,9 @@ import {
   type ActionOutcome,
 } from '../shared/turn-resolution';
 import type { GMContext } from './game';
-import { engineEvents } from './turn-resolution';
-import { memberScene } from '../shared/locations';
+import { engineEvents, normalizeAdjudicationStructure } from './turn-resolution';
 import { encounterPlaceRef } from './encounters';
+import { memberLocationAtEvent } from './world-map';
 
 const phases = ['movement', 'minor', 'main'] as const;
 const key = (memberId: string, phase: string) => `${memberId}:${phase}`;
@@ -48,9 +48,10 @@ export function retainAdjudicationProgress(
   validate: (input: unknown) => TurnAdjudication,
 ) {
   const locked = new Set<string>();
+  const lockedWorld = new Set<string>();
   const engine = engineEvents(context);
   const engineIds = new Set(engine.map((event) => event.id));
-  const project = (selected: Set<string>): TurnAdjudication => {
+  const project = (selected: Set<string>, selectedWorld = lockedWorld): TurnAdjudication => {
     const owned = candidate.events.filter(
       (event) =>
         event.actionId &&
@@ -66,15 +67,20 @@ export function retainAdjudicationProgress(
         selected.has(key(position.memberId, 'movement')) || selected.has(key(position.memberId, 'main')),
     );
     const resolve = encounterPlaceRef(context, candidate);
-    const occupied = new Set(
-      context.members
-        .filter((member) => member.active)
-        .map((member) => {
-          const position = positions.find((position) => position.memberId === member.id);
-          return position ? resolve(position.locationId) : memberScene(context.scene, member.id).location.id;
-        }),
-    );
+    const witnessed = (evidence: { locationId: string; eventId: string }) =>
+      context.members.some(
+        (member) =>
+          member.active &&
+          memberLocationAtEvent(
+            context,
+            { ...candidate, memberLocations: positions },
+            member.id,
+            evidence.eventId,
+            resolve,
+          ) === resolve(evidence.locationId),
+      );
     const required = new Set([
+      ...selectedWorld,
       ...candidate.actions
         .filter((action) => selected.has(key(action.memberId, 'main')))
         .flatMap((action) => (action.search ? [action.search.informationEventId] : [])),
@@ -82,7 +88,7 @@ export function retainAdjudicationProgress(
         .filter((arrival) => positions.some((position) => position.locationId === arrival.locationId))
         .map((arrival) => arrival.eventId),
       ...[...(candidate.worldProgress ?? []), ...(candidate.encounterRisks ?? [])]
-        .filter((evidence) => occupied.has(resolve(evidence.locationId)))
+        .filter(witnessed)
         .map((evidence) => evidence.eventId),
     ]);
     // Missing prerequisites remain missing; never replace a dependency with a fallback success.
@@ -126,7 +132,7 @@ export function retainAdjudicationProgress(
     });
     const connections = (candidate.mapUpdates?.connections ?? []).filter((edge) => ids.has(edge.eventId));
     const localEvidence = (evidence: { eventId: string; locationId: string }) =>
-      occupied.has(resolve(evidence.locationId)) &&
+      witnessed(evidence) &&
       world.some(
         (event) =>
           event.id === evidence.eventId &&
@@ -149,6 +155,9 @@ export function retainAdjudicationProgress(
     return {
       ...fallback,
       actions,
+      pickups: candidate.pickups?.filter((pickup) => owned.some((event) => event.id === pickup.eventId)),
+      npcUpdates: candidate.npcUpdates?.filter((update) => ids.has(update.eventId)),
+      featureUpdates: candidate.featureUpdates?.filter((update) => ids.has(update.eventId)),
       journal: candidate.journal.filter(
         (entry) =>
           world.some((event) => event.fact === entry.detail) ||
@@ -187,6 +196,22 @@ export function retainAdjudicationProgress(
         /* An unresolved component is left for the one bounded model repair. */
       }
     }
+  // Standalone public exchanges/state changes may survive independently of invalid player components.
+  const stateEvents = new Set([
+    ...(candidate.npcUpdates ?? []).map((update) => update.eventId),
+    ...(candidate.featureUpdates ?? []).map((update) => update.eventId),
+  ]);
+  for (const event of candidate.events.filter(
+    (event) => event.kind === 'world' && (event.npcIds?.length || stateEvents.has(event.id)),
+  )) {
+    const selected = new Set([...lockedWorld, event.id]);
+    try {
+      value = validate(project(locked, selected));
+      lockedWorld.add(event.id);
+    } catch {
+      /* Unsupported effects cannot discard an independent accepted exchange. */
+    }
+  }
   return { value, locked };
 }
 
@@ -196,6 +221,30 @@ export function applyAdjudicationRepair(
   input: unknown,
   context: GMContext,
 ): TurnAdjudication {
+  if (input && typeof input === 'object' && 'actions' in input && 'events' in input) {
+    const raw = input as { actions: unknown; events: unknown };
+    if (Array.isArray(raw.actions) && Array.isArray(raw.events)) {
+      const eventIds = new Set(raw.events.map((event) => event?.id));
+      const background = retained.value.events.filter((event) => !eventIds.has(event.id));
+      const backgroundIds = new Set(background.map((event) => event.id));
+      const actors = new Set(raw.actions.map((action) => action?.memberId));
+      // Derive compact fields from saved facts too, without adding retained passes to the patch.
+      const normalized = normalizeAdjudicationStructure(
+        {
+          ...context,
+          turn: {
+            ...context.turn,
+            actions: context.turn.actions.filter((action) => actors.has(action.memberId)),
+          },
+        },
+        {
+          ...input,
+          events: [...background, ...raw.events],
+        },
+      ) as { events: TurnAdjudication['events'] };
+      input = { ...normalized, events: normalized.events.filter((event) => !backgroundIds.has(event.id)) };
+    }
+  }
   const patch = repairSchema.parse(input);
   const base = retained.value;
   if ((patch.turnId && patch.turnId !== base.turnId) || (patch.version && patch.version !== base.version))
@@ -249,6 +298,24 @@ export function applyAdjudicationRepair(
     ...base,
     ...patch,
     actions,
+    pickups: merge(base.pickups ?? [], patch.pickups ?? [], (item) => item.eventId),
+    npcUpdates:
+      base.npcUpdates === undefined && patch.npcUpdates === undefined
+        ? undefined
+        : merge(base.npcUpdates ?? [], patch.npcUpdates ?? [], (item) => item.npcId),
+    featureUpdates:
+      base.featureUpdates === undefined && patch.featureUpdates === undefined
+        ? undefined
+        : merge(
+            base.featureUpdates ?? [],
+            (patch.featureUpdates ?? []).map((item) => {
+              const kept = base.featureUpdates?.find((saved) => saved.featureId === item.featureId);
+              if (kept && !isDeepStrictEqual(kept, item))
+                throw new Error('Recovery cannot replace validated scene state.');
+              return item;
+            }),
+            (item) => item.featureId,
+          ),
     events: events.map((event, sequence) => ({ ...event, sequence })),
     journal: merge(base.journal, patch.journal ?? [], (entry) => `${entry.kind}:${entry.name}`),
     memberLocations: merge(base.memberLocations ?? [], patch.memberLocations ?? [], (item) => item.memberId),
@@ -270,6 +337,9 @@ export function applyAdjudicationRepair(
       JSON.stringify(item),
     ),
     worldProgress: merge(base.worldProgress ?? [], patch.worldProgress ?? [], (item) => item.eventId),
-    encounterRisks: merge(base.encounterRisks ?? [], patch.encounterRisks ?? [], (item) => item.locationId),
+    encounterRisks:
+      base.encounterRisks === undefined && patch.encounterRisks === undefined
+        ? undefined
+        : merge(base.encounterRisks ?? [], patch.encounterRisks ?? [], (item) => item.locationId),
   });
 }

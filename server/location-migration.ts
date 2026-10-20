@@ -2,6 +2,25 @@ import { randomUUID } from 'node:crypto';
 import type { DB } from './db';
 import type { Scene, PlaceState } from '../shared/schema';
 import { ensureLocations, connectLocations, recordTravel } from '../shared/locations';
+import { ensureWorldMapPositions } from '../shared/world-map-layout';
+
+/** Add presentation metadata only; completed turns and accepted checkpoints remain intact. */
+export function migrateWorldMapPositions(db: DB) {
+  for (const campaign of db.prepare('SELECT id, scene FROM campaigns WHERE scene IS NOT NULL').all() as {
+    id: string;
+    scene: string;
+  }[]) {
+    const scene: Scene = JSON.parse(campaign.scene);
+    if (!scene.worldMap) continue;
+    ensureWorldMapPositions(scene);
+    const serialized = JSON.stringify(scene);
+    if (serialized !== campaign.scene)
+      db.prepare('UPDATE campaigns SET scene = ?, version = version + 1 WHERE id = ?').run(
+        serialized,
+        campaign.id,
+      );
+  }
+}
 
 /** Reconstruct ownership from saved snapshots, without replaying any mechanics. */
 export function migrateLocations(db: DB) {

@@ -6,6 +6,71 @@ The player controls their generated character and makes all meaningful decisions
 
 ## Implemented multiplayer software contract
 
+Interpret submitted intent generously within the existing turn pipeline. Fill
+ordinary execution details and contextual references, choose a fitting equipped
+weapon, and preserve explicit restrictions. Mundane substeps do not require extra
+checks or main actions. When an unavailable goal has a feasible prerequisite,
+make that progress within the turn allowance; do not invent ownership, spend an
+unrequested resource, start unrequested violence, choose a new allegiance or move
+another player's character. Resolve the feasible portion of an oversized request
+in causal order and describe unfinished parts. Uninterpretable input may become
+observable local orientation without an invented physical action or XP. Establish
+ordinary consistent world details and a relevant opening opportunity through
+adjudication, without introducing arbitrary blockers or choosing player objectives.
+
+Adjudication develops the fiction: it can establish fitting causes, answers and
+NPC decisions where the save has not specified them. A successful investigation
+delivers its checked goal or a concrete usable finding; a natural 20 deserves an
+exceptional contextual benefit. Failure keeps its failed goal, while leaving a
+different usable opening or proportionate response. Repeated pending results,
+record distinctions and referrals between exhausted sources do not replace progress.
+NPCs respond substantively to proposals and discoveries, can make commitments and
+act on findings, and honor fulfilled conditions without inventing another hurdle.
+Persist meaningful changes through the existing journal, NPC, feature and map state.
+
+Narrate discoveries, actions and consequences in the world. Mention a genuine
+failure or relevant limitation once; omit unchanged non-results and speculative
+disclaimers from prose and summary. Keeping an answer's actual scope does not
+require listing every larger question it leaves unresolved. The narrator still
+uses finalized facts and cannot turn a failed or blocked effect into success.
+
+At campaign opening, establish connected public background: what makes the starting
+place distinctive, why it matters, and how some relevant history shaped its visible
+present. Include setting-appropriate everyday activity, customs and relationships;
+solitary settings can use ecology or traces of earlier inhabitants. Record meaningful
+context and observed exchanges as world events, persisting durable knowledge in the
+existing journal and place/NPC records. Keep rumors attributed and private agendas
+private. Honor supplied premises and goals without inventing a party mission,
+commitment or player reaction. Optional interests and routes can serve independent
+purposes; declining a lead must not put the same assignment on every path.
+
+The finalized resolution carries its turn number so opening narration can weave
+these established facts into roughly five to eight connected paragraphs (usually
+400–650 words when supported), instead of ordinary arrival length guidance. An
+approved opening below 300 words may use the remaining narration attempt for
+expansion, keeping its approved prose if expansion fails. This is
+a writing guide, not a quota or permission to invent facts. Later play deepens history,
+customs and relationships through the interests players pursue. Quiet scenes and
+ordinary conversations need not produce quests. Factions have their own grounded
+activities; a shared central conflict is optional unless the campaign supplies one.
+
+Explicit taking may supply typed `pickups` instructions with actor, real item ID,
+owning event ID and quantity. The server checks locality at that event, available
+quantity, capacity and combat restrictions and executes collection once during
+finalization. Failed pickup preserves independent progress and blocks outcomes
+requiring that collection to succeed. Discovery alone is not taking; collection
+does not automatically equip, drop, buy or consume items. Newly collected items
+do not authorize another independent action outside the existing action budget.
+
+The server derives repeated aggregate/component facts, fills known pass outcomes,
+and persists validated progress events in canonical journal entries. It repairs
+harmless metadata locally while preserving numerical and dependency checks. Once
+an encounter check saves exploration, resumption uses that exact proposal and
+existing encounter receipts; a factual local introduction is appended in code.
+Completed actions, new-place declarations and zero-reward reasons are not copied
+back through another model response. The first combat round still waits for new
+submissions. Player-facing progress shows only processing stages and elapsed time.
+
 In this application, the stage-specific provider contract supersedes this original single-player reference. The GM adjudicates submitted intent through validated server tools and returns structured outcomes for every action, including ordinary actions that do not require dice. Explicit causal dependencies preserve prerequisite failures. The server finalizes all mechanical consequences and actual rewards and saves an immutable resolution before prose is generated. Discovery XP may be justified without a roll; merely attempting an action or rolling dice is not a reward reason.
 
 Main and minor components have independent outcomes. A successful minor action with a failed or blocked main action is partial overall, while the main result stays failed or blocked. Executed receipts establish results even when an ally cured the actor's starting incapacitation or the actor was incapacitated afterward. Frozen character identities and the acting roster are separate: a healed ally remains the receipt's recipient without gaining an unsubmitted action. Dependencies distinguish an earlier event's occurrence from the success of that specific effect; a failed attempt may cause an alarm or discovery, while a failed unlock cannot satisfy the prerequisite for opening a locked door. Introduce a new encounter once and resolve its first combat round after the next submissions.
@@ -63,24 +128,130 @@ after meaningful exploration, with 1 triggering combat. Characters together shar
 check; separated groups roll independently. Safe places, opening, passes, orientation,
 healing alone and ongoing fights do not roll. Assess danger through public local world
 evidence in `encounterRisks`; failed perception cannot establish safety. Reassess when
-local hazards change. Mandatory triggered encounters use
+actual danger changes. Rewording a hazard description preserves its saved danger
+classification unless grounded `encounterRisks` explicitly changes it. Mandatory triggered encounters use
 `start_combat(locationId,enemies)` for the actual present group. Preserve the checked
 exploration outcomes and introduce the enemies in a local world event citing the
 start-combat receipt. First attacks wait for the next submissions. Story-driven fights
 remain possible. Combat resolves every occupied fight independently of screen focus;
 loot, recovery and replacement eligibility stay local.
 
+Combat planning evaluates established nearby NPCs in the same request as player
+actions. Consider awareness, allegiance, motives and feasible access when a crew,
+household or defended objective is attacked. Start coherent defending groups
+together. During ongoing fights, optional `npcReactions` cite an exact public
+source naming the NPC, their stable identity, local or openly adjacent origin,
+reason and public reaction fact. A matching enemy profile introduces a reinforcement;
+`enemy:null` records another response such as retreat, negotiation or alarm. Preserve
+the latest NPC journal decision instead of resetting them from older prose. Never
+duplicate a player/enemy, resurrect a defeated actor, or bring in distant/unseen
+opponents to fill a quota. The server saves initiative and loot once, makes arrivals
+targetable now, and delays their attacks until next round. NPC reactions become
+immutable engine events and persist through the public NPC journal. Existing
+fighters' mechanics remain authoritative. Resolve a submitted attack on a reachable
+visible NPC through actual encounter membership; retain a factual explanation for
+an unreachable target instead of silently substituting another opponent.
+
+The existing planner receives `affectedNPCs`, at most six available local/openly
+adjacent NPCs sharing an explicit public allegiance with an active combatant.
+Account for each through intervention, dialogue or grounded nonintervention;
+ordinary conversation, negotiating and speaking to another NPC are valid with
+`enemy:null`. Do not force hostility. Missing coverage uses the existing bounded
+planning corrections. Its terminal fallback preserves last observed positions,
+without inventing a motive, a speech or an attack. Saved reaction receipts remain
+immutable. NPCs without established public ties may still react when grounded.
+
+`scene.npcs` preserves public NPC identity and current state across encounters.
+Reuse stable IDs and established aliases. Saved location, allegiance, life status,
+HP, conditions and equipment override historical prose and new enemy profiles.
+The server backfills old encounters and restores returning opponents without new
+loot or healing. Dead NPCs cannot be recreated through either combat entry path.
+Known available defenders may arrive over an open adjacent route. Optional
+`npcUpdates` bind public introductions, aliases, allegiance, surrender, withdrawal
+and observed movement to resolved events; they cannot kill a living NPC or remove
+an active combatant without engine execution. Unknown whereabouts remain unknown.
+The journal displays current NPC status separately from historical discoveries.
+
+NPCs remain active storytellers with distinct voices, motives and relationships.
+They can converse with players or each other, disagree, explain customs and make
+grounded commitments. Routine dialogue does not require dice. Resolve consequential
+speech before narration, respecting failed persuasion and player agency. An NPC
+claim remains a claim rather than automatic objective truth. Optional event
+`npcIds` identifies actual public participants, not people merely mentioned.
+Established participants are remembered through existing NPC updates even when
+redundant metadata is omitted; new participants require a grounded introduction.
+Every exchange needs living participants at the actual place and a conscious
+observer there at that event. Failed interactions may be remembered without
+changing allegiance, position or mechanics. A distinct NPC response to a failure
+depends on occurrence, not success. Dialogue is saved in existing public NPC
+journal memory, frozen before narration and review; full exchanges remain in completed
+history. Consolidate important claims, promises, open threads, relationships and
+recurring voice in that journal. A submitted NPC interaction authorizes a short
+back-and-forth within the player's topic and intent, including natural clarifying
+follow-ups shaped by the character sheet. Adjudication may improvise fitting NPC
+answers, rumors, small revelations and unfinished requests, consistent with lore,
+knowledge and secrets, and records the conversation beats before narration.
+Narration performs those beats as actual quoted dialogue, preserving the meaning
+and uncertainty of each answer. Exact wording and every follow-up question need no
+separate event. Player commitments, payment, threats, secret disclosures and next
+actions still require submitted intent. Honor silence and supplied wording; never
+speak for passing, absent or incapacitated players. Opening NPC exchanges leave
+unsubmitted player replies open. Independent exchanges can survive an unrelated
+invalid action or effect.
+
+`scene.features` preserves current public scenery and vessel facts separately
+from historical descriptions. Optional `featureUpdates` reuse stable IDs, aliases
+and property keys, and cite resolved public action/world events at the feature's
+observed place. Properties merge; omitted values remain, null marks unknown/cleared
+facts. Persist actual control, remaining barriers and established berth/state.
+Remote changes need a causal local action affecting an already known feature.
+Characters, items, HP, charges and resource use retain their existing mechanics.
+An optional `route` binds a feature to an existing or normally discovered adjacent
+connection. `passable` updates that route through ordinary map validation; detaching
+or rebinding closes the old passage. Current passability always comes from the map.
+The canonical boolean property `passable`, if supplied redundantly in properties,
+normalizes into the typed update and is not stored as a second authority. Conflicting
+values are rejected. Arbitrary descriptive words do not silently change access.
+Updates and route changes finalize atomically; they never move passengers or grant
+ownership by themselves. Narration receives frozen `featureStates`; matching journal
+entries display current properties beside historical prose. Recovery retains proven
+feature changes and cannot replace them with an unrelated repair.
+
+Movement uses route state at its crossing event. Closing a passage after crossing
+cannot undo that arrival. A causally later opening cannot authorize an earlier
+crossing. An unordered, uncaused local world opening of a known blocked route may
+be moved before its matching crossing as a bookkeeping repair without another call.
+NPC and scenery movement use the same event-time route state. A later player
+arrival cannot witness an earlier remote interaction. NPC/scenery/item identities
+cannot collide, including entities proposed together in one turn.
+Route discovery, world-progress evidence and danger assessments use that same
+witness timeline. Partial recovery keeps supported observations made before a
+retained departure, even when the observer ends the turn elsewhere.
+
+After finalization, a narration or review provider failure uses factual narration
+from the saved resolution and continues to atomic publication. It does not retry
+adjudication, replay mechanics or consume the automatic gameplay retry. Storage
+errors and a changed resolution revision still stop publication safely.
+
 World progression uses saved local counters and supplied public thread identities.
-Every first arrival and the second meaningful local turn without development needs
-actionable evidence, an NPC decision, a proportionate threat change or an objective
-resolved. Record `worldProgress` citing its public local world event, an existing
-thread and the new/changed journal entry containing that concise progress fact.
+First arrivals may simply establish the surroundings, occupants and ordinary activity;
+no clue or connection to an existing thread is required. After two meaningful local
+turns without progress, consider relevant actionable evidence, an NPC decision, a
+proportionate threat change or an objective resolved. When an existing thread advances,
+record `worldProgress` citing its public local world event, thread and new/changed
+journal entry containing that concise progress fact; otherwise use `worldProgress: []`.
+Independent discoveries may use ordinary events and journal entries.
 Retain earlier facts and completed objectives. Another unspecified patch to inspect,
 weather obscuring the same question and reworded clues do not establish progress.
 Failed checks retain their failed main result; distinct lesser information or an
 independent world response may follow through an occurrence dependency. Passes,
 orientation, blocked actions and engine-owned combat/support do not advance the
 counter. Meaningful progress does not require a fight or a replacement objective.
+Pacing receives at most one repair. If it remains unresolved, publish legal actions
+and preserve the due counter for later turns; pacing alone cannot fail a turn.
+An action from a local control point may change an already known route elsewhere
+when its public endpoint event retains that causal dependency. This cannot reveal
+unknown remote routes or move another player by decision.
 The situation summary briefly explains relevant achievements, character locations,
 known surroundings and established unresolved concerns. Avoid unchanged atmosphere,
 repeated safety/separation warnings and advice. Use the frozen previous situation to identify changes; explain safety for the relevant character’s place when it changes or is asked about. Narration may use only facts adjudicated earlier.
@@ -1476,7 +1647,7 @@ They do not automatically succeed unless the trait explicitly states that they d
 
 At the opening and whenever the participants, proximity, abilities, equipment, or surroundings change, consider how the present characters' concepts and traits interact with the campaign's setting and established lore. Explicit campaign instructions and established campaign facts take precedence over default setting lore. Establish ordinary scene details and follow submitted movement, but do not impose an effect by assuming proximity unsupported by the scene or invent precise ranges, absolute restrictions, or certainty when the lore or circumstances are unclear.
 
-Resolve meaningful consequences of established interactions in the current turn through supported rules. Describe concrete sensory changes, their impact, and their connection to the interaction in the storytelling tone, rather than hypothetical warnings. Scale effects to the actual scene and lore; do not add arbitrary obstacles, penalties, or invented mechanics for drama. Leave players' decisions, dialogue, and chosen reactions to them. Consequences, submitted actions, and turn completion must never wait for extra consent, confirmation, or a separate reaction stage. After resolving the consequences, you may ask a brief, open-ended question in that same tone to invite a response on the normal next turn, without suggested actions, recommended approaches, or menus. This invitation never requires another submission or reconfirmation to complete the current turn.
+Resolve meaningful consequences of established interactions in the current turn through supported rules. Describe concrete sensory changes, their impact, and their connection to the interaction in the storytelling tone, rather than hypothetical warnings. Scale effects to the actual scene and lore; do not add arbitrary obstacles, penalties, or invented mechanics for drama. Leave players' decisions, consequential dialogue, and chosen reactions to them. The narrator may add brief incidental voice lines expressing an already submitted action or recorded observation, grounded in the frozen character-sheet personality. Honor explicit silence and supplied wording; add no promise, agreement, social effect, clue or extra action. Submitted NPC interactions may include actual back-and-forth dialogue and natural player follow-ups within their topic, using NPC answers and new hooks established during adjudication. Incidental physical execution within the same place does not require a separate map movement event and grants no new reach, cover or tactical advantage. Consequences, submitted actions, and turn completion must never wait for extra consent, confirmation, or a separate reaction stage. After resolving the consequences, you may ask a brief, open-ended question in that same tone to invite a response on the normal next turn, without suggested actions, recommended approaches, or menus. This invitation never requires another submission or reconfirmation to complete the current turn.
 
 Save publicly established ongoing interactions and the circumstances in which they apply as world journal facts, so they remain consistent in later scenes. Keep uncertain explanations uncertain and private information private. The server owns mechanical effects and action results; setting lore does not authorize invented modifiers, ability restrictions, or changes to saved outcomes.
 

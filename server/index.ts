@@ -81,7 +81,11 @@ if (process.argv.includes('--production')) {
 } else {
   const { createServer } = await import('vite');
   const vite = await createServer({
-    server: { middlewareMode: true, hmr: { server: app.server } },
+    server: {
+      middlewareMode: true,
+      hmr: { server: app.server },
+      allowedHosts: partyOrigins.map((origin) => new URL(origin).hostname),
+    },
     appType: 'spa',
   });
   app.setNotFoundHandler((request, reply) => {

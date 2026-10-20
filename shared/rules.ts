@@ -111,7 +111,7 @@ export function abilityMechanics(ability: Ability): string {
       : '';
   const obstacle =
     ability.effect === 'strike'
-      ? ` · Noncombat obstacle: ${ability.stat} check${bonus ? ` + ${bonus}` : ''}, one charge; no automatic advantage or on-hit ailments`
+      ? ` · Noncombat obstacle: ${ability.stat} check${bonus ? ` + ${bonus}` : ''}`
       : '';
   return `${effect}${ailmentEffect}${obstacle}${['mend', 'cleanse'].includes(ability.effect) ? ' · In or out of combat' : ''} · Main action`;
 }
@@ -1886,6 +1886,7 @@ export function runCombat(
       actorId = null;
       const enemy = encounter.enemies.find((e) => e.id === initiative.id);
       if (!enemy || enemy.hp <= 0 || enemy.withdrawn) continue;
+      if (enemy.readyRound && encounter.round < enemy.readyRound) continue;
       if (enemy.stunned || incapacitatingCondition(enemy as ConditionState)) {
         enemy.stunned = false;
         record(`${enemy.name} is unable to attack this round.`);

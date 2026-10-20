@@ -1,3 +1,4 @@
+import { interruptNarration } from './narration-interruption';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -356,7 +357,7 @@ it('initializes six requested factions in one response and reuses them after an 
   f.provider.generateFactions = gm.generateFactions.bind(gm);
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Interrupted opening narration');
+    interruptNarration(f.db, 'Interrupted opening narration');
   };
   await f.start();
   expect(f.snapshot().turn?.phase).toBe('failed');
@@ -525,7 +526,7 @@ it('reuses faction generation and connection rolls after failed initialization, 
     ];
   });
   f.provider.narrate = vi.fn(async () => {
-    throw new Error('Narration interrupted.');
+    interruptNarration(f.db, 'Narration interrupted.');
   });
   await f.next();
   expect(f.snapshot().turn?.phase).toBe('failed');

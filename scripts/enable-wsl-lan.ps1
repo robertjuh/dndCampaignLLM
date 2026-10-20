@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][ipaddress]$ListenAddress,
     [Parameter(Mandatory = $true)][ipaddress]$WslAddress,
-    [ValidateRange(1, 65535)][int]$Port = 3000
+    [ValidateRange(1, 65535)][int]$Port = 3000,
+    [ValidateRange(1, 65535)][int]$ConnectPort = $Port
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,12 +17,13 @@ if ($profile.NetworkCategory -ne 'Private') {
 }
 
 # Forward only this laptop address/port. Leave localhost available for host sign-in.
-& netsh interface portproxy add v4tov4 listenaddress=$ListenAddress listenport=$Port connectaddress=$WslAddress connectport=$Port
+& netsh interface portproxy add v4tov4 listenaddress=$ListenAddress listenport=$Port connectaddress=$WslAddress connectport=$ConnectPort
 if ($LASTEXITCODE -ne 0) { throw 'Windows could not create the port forwarding rule.' }
 $ruleName = "GatherRPG-LAN-$Port"
 if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) {
     Remove-NetFirewallRule -Name $ruleName
 }
 New-NetFirewallRule -Name $ruleName -DisplayName "Gather RPG local network ($Port)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port -LocalAddress $ListenAddress.IPAddressToString -RemoteAddress LocalSubnet -Profile Private | Out-Null
-Write-Host "Phones on the same network can open http://${ListenAddress}:$Port"
+$address = if ($Port -eq 80) { "http://$ListenAddress/" } else { "http://${ListenAddress}:$Port" }
+Write-Host "Phones on the same network can open $address"
 Write-Host 'If the laptop or WSL address changes after restarting, rerun with the new addresses.'

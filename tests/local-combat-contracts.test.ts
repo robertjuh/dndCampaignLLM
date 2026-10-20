@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { expect, it } from 'vitest';
-import type { CombatReceipt, GMContext } from '../server/game';
+import { expect, it, vi } from 'vitest';
+import type { CombatReceipt, GMContext, GameTools, StageBudget } from '../server/game';
+import type { ChatGPTAuth } from '../server/auth';
+import { ChatGPTGM, adjudicationInput } from '../server/providers';
+import { prepareEncounterChecks } from '../server/encounters';
 import { combatFact, narrationBeats } from '../server/narration';
 import { repairTurnCheckpoints } from '../server/turn-recovery';
 import { applyAdjudicationRepair, retainAdjudicationProgress } from '../server/adjudication-recovery';
@@ -160,6 +163,129 @@ function splitCombat() {
   };
   return { context, proposal, ravine, tower };
 }
+
+it.each(['valid', 'omitted', 'invalid'] as const)(
+  'finishes a remote victory with an empty screen focus and %s danger assessment',
+  async (assessment) => {
+    const { context, ravine } = splitCombat();
+    context.members.forEach((member, index) => (member.active = index === 0));
+    context.turn.actions = context.turn.actions.slice(0, 1);
+    context.turn.roster = ['actor-0'];
+    const combat = (context.receipts!.combatByLocation as Record<string, CombatReceipt>)[ravine];
+    combat.events![0].status = 'failure';
+    combat.events![0].fact = 'Amon misses Road guard.';
+    context.combatResult = { ...combat, encounters: { [ravine]: combat.encounter } };
+    context.receipts = { combat: context.combatResult, combatByLocation: { [ravine]: combat } };
+    const place = context.scene.places![ravine];
+    place.location.hazard = 'The guard threatens intruders; distant patrols watch the ravine.';
+    place.encounterRisk = { danger: 'dangerous', reason: 'The guard and patrols threaten intruders.' };
+    const input = adjudicationInput(context).schemaExample;
+    expect(input.sceneFocus).toBe(ravine);
+    // These incidental omissions/defaults appeared together in the real playtest.
+    const output = {
+      ...input,
+      sceneFocus: 'current',
+      events: [
+        {
+          id: 'victory',
+          sequence: 1,
+          kind: 'world',
+          actionId: null,
+          phase: 'aftermath',
+          result: null,
+          locationRef: ravine,
+          fact: 'The guard dies from his earlier wounds. Distant patrols still watch the ravine.',
+          dependsOn: [{ eventId: 'combat:0', requires: 'occurrence' }],
+        },
+      ],
+      placeUpdates: [
+        {
+          ref: ravine,
+          location: {
+            name: place.location.name,
+            atmosphere: 'The fallen guard lies in the ravine.',
+            hazard: 'Distant patrols watch the ravine.',
+          },
+        },
+      ],
+      worldProgress: [
+        {
+          locationId: ravine,
+          eventId: 'victory',
+          kind: 'resolution',
+          thread: 'premise',
+          journal: { kind: 'location', name: 'Ravine' },
+        },
+      ],
+      encounterRisks:
+        assessment !== 'omitted'
+          ? [
+              {
+                locationId: ravine,
+                eventId: assessment === 'valid' ? 'victory' : 'missing',
+                danger: 'dangerous',
+                reason: 'The distant patrols still watch the ravine.',
+              },
+            ]
+          : [],
+    };
+    const budget: StageBudget = { used: 0, limit: 8 };
+    context.requestBudget = budget;
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              status: 'completed',
+              output: [
+                {
+                  type: 'message',
+                  content: [
+                    {
+                      type: 'output_text',
+                      text: JSON.stringify(fetcher.mock.calls.length === 1 ? output : {}),
+                    },
+                  ],
+                },
+              ],
+            },
+          })}\n\n`,
+        ),
+    );
+    const draw = vi.fn(() => 1);
+    const tools = Object.assign(vi.fn(), {
+      validateAdjudication: (value: unknown) => validateAdjudication(context, value),
+      prepareEncounters: (value: TurnAdjudication) =>
+        prepareEncounterChecks(context, value, {}, draw).required,
+    }) as unknown as GameTools;
+    const before = structuredClone(context.scene);
+    const gm = new ChatGPTGM(
+      { accessToken: async () => 'test' } as unknown as ChatGPTAuth,
+      'owner',
+      'test',
+      fetcher,
+    );
+    const accepted = await gm.adjudicate(context, tools);
+    expect(fetcher.mock.calls.length, JSON.stringify(budget.corrections)).toBe(1);
+    expect(draw).not.toHaveBeenCalled();
+    expect(context.scene).toEqual(before);
+    expect(accepted.sceneFocus).toBe(ravine);
+    expect(accepted.actions[0].components.main).toMatchObject({ status: 'failure', basis: 'engine' });
+    expect(accepted.events[0]).toEqual(engineEvents(context)[0]);
+    expect(accepted.rewards.xp).toBe(0);
+    expect(() => validateAdjudication(context, accepted)).not.toThrow();
+    if (assessment !== 'invalid') {
+      expect(budget.corrections ?? []).toEqual([]);
+      expect(accepted.events.find((event) => event.id === 'victory')?.memberId).toBeNull();
+    } else {
+      expect(budget.corrections?.[0].feedback).toContain(
+        'Encounter danger needs public local world evidence',
+      );
+      expect(accepted.encounterRisks ?? []).toEqual([]);
+    }
+  },
+);
 
 it('scopes simultaneous combat facts to their own place, including enemies with the same name', () => {
   const { context, proposal, ravine, tower } = splitCombat();

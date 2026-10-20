@@ -276,6 +276,7 @@ test('mobile equipment previews swaps, equips nearby loot, and records free chan
     .getByRole('button', { name: 'Take & equip', exact: true })
     .click();
   await expect(loot).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open action input', exact: true }).click();
   await page.getByLabel('Your action').fill('Inspect the tower.');
   await page.getByRole('button', { name: 'Submit action', exact: true }).click();
   await expect(page.locator('.recap')).toContainText('Equipment changes:');

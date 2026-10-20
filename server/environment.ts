@@ -1,6 +1,8 @@
 import { environmentalActionSchema, type EnvironmentalAction } from '../shared/schema';
 import type { GMContext } from './game';
 import { createHash } from 'node:crypto';
+import { findNPC, npcPublicFact } from '../shared/npcs';
+import { featurePublicFact } from '../shared/scene-state';
 
 /** Stable public references ground proposals without a catalog of environmental weapons. */
 export function environmentalFacts(context: Pick<GMContext, 'journal' | 'scene'>) {
@@ -9,10 +11,12 @@ export function environmentalFacts(context: Pick<GMContext, 'journal' | 'scene'>
     place.location.name.toLowerCase(),
   );
   const localJournal = context.journal.filter((entry) =>
-    entry.kind === 'location'
-      ? entry.name.toLowerCase() === here
-      : entry.detail.toLowerCase().includes(here) ||
-        !elsewhere.some((name) => entry.detail.toLowerCase().includes(name)),
+    entry.kind === 'npc' && findNPC(context.scene, entry.name)
+      ? findNPC(context.scene, entry.name)!.locationId === context.scene.location.id
+      : entry.kind === 'location'
+        ? entry.name.toLowerCase() === here
+        : entry.detail.toLowerCase().includes(here) ||
+          !elsewhere.some((name) => entry.detail.toLowerCase().includes(name)),
   );
   // ponytail: one source per fact; split facts if distinct objects need separate readiness.
   return Object.fromEntries(
@@ -20,6 +24,12 @@ export function environmentalFacts(context: Pick<GMContext, 'journal' | 'scene'>
       [`scene:${context.scene.location.name}:atmosphere`, context.scene.location.atmosphere],
       [`scene:${context.scene.location.name}:hazard`, context.scene.location.hazard],
       ...localJournal.map((entry) => [`journal:${entry.kind}:${entry.name}`, entry.detail]),
+      ...Object.values(context.scene.npcs ?? {})
+        .filter((npc) => npc.locationId === context.scene.location.id)
+        .map((npc) => [`npc:${npc.id}`, npcPublicFact(npc)]),
+      ...Object.values(context.scene.features ?? {})
+        .filter((feature) => feature.locationId === context.scene.location.id)
+        .map((feature) => [`feature:${feature.id}`, featurePublicFact(feature, context.scene)]),
     ].filter(([, fact]) => fact.trim()),
   );
 }

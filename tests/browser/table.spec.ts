@@ -1,14 +1,19 @@
 import { templateCharacter } from '../../shared/schema';
 import { test, expect, type Browser, type Page } from '@playwright/test';
 
-async function join(browser: Browser, code: string, name: string, origin: string) {
+async function join(browser: Browser, code: string, name: string, origin: string, entry = 'link') {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
   });
   const page = await context.newPage();
-  await page.goto(`${origin}/join/${code}`);
+  await page.goto(entry === 'code' ? origin : `${origin}/${code}`);
+  if (entry === 'code') {
+    await page.getByRole('textbox', { name: 'Session code', exact: true }).fill(code.toLowerCase());
+    await page.getByRole('button', { name: 'Join session', exact: true }).click();
+    await expect(page).toHaveURL(`${origin}/${code}`);
+  }
   await page.getByLabel('Your player name').fill(name + ' player');
   await page.getByRole('button', { name: 'Create a new character' }).click();
   await page.route('**/api/characters/generate', (route) =>
@@ -32,6 +37,78 @@ async function join(browser: Browser, code: string, name: string, origin: string
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   return { context, page };
 }
+
+test('a phone can join from the lobby QR link or a four-character code', async ({ page, browser }) => {
+  const headers = { 'x-gather-request': '1' };
+  const created = await page.request.post('/api/campaigns', {
+    headers,
+    data: {
+      name: 'Easy to join',
+      setting: 'A lantern-lit harbor',
+      premise: '',
+      tone: '',
+      language: 'English',
+      instructions: '',
+      custom: [],
+      provider: 'practice',
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const campaign = await created.json();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/campaign/${campaign.id}`);
+  const invite = page.getByRole('region', { name: 'Join this session', exact: true });
+  await expect(invite.locator('b')).toHaveText(/^[A-HJ-NP-Z2-9]{4}$/);
+  await expect(invite.getByRole('img', { name: 'Scan to join this session' })).toBeVisible();
+  const joinLink = (await invite.getByRole('link', { name: 'Open join page' }).getAttribute('href'))!;
+  const origin = new URL(joinLink).origin;
+  expect(new URL(joinLink).pathname).toBe(`/${campaign.inviteCode}`);
+  expect(new URL(joinLink).hostname).not.toBe('localhost');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await invite.screenshot({ path: 'test-results/invite-qr-mobile.png' });
+
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
+  try {
+    const player = await context.newPage();
+    const character = templateCharacter('QR traveler');
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+    const saved = await player.request.post(`${origin}/api/characters`, { headers, data: character });
+    expect(saved.ok()).toBe(true);
+    await player.goto(joinLink);
+    await expect(player.getByRole('heading', { name: 'Easy to join', exact: true })).toBeVisible();
+    await player.goto(origin);
+    await expect(player.getByRole('heading', { name: 'Join a session', exact: true })).toBeVisible();
+    await expect(player.getByRole('textbox', { name: 'Session code', exact: true })).toBeInViewport();
+    await player.screenshot({ path: 'test-results/join-entry-mobile.png' });
+    await player
+      .getByRole('textbox', { name: 'Session code', exact: true })
+      .fill(campaign.inviteCode.toLowerCase());
+    await player.getByRole('button', { name: 'Join session', exact: true }).click();
+    await expect(player).toHaveURL(joinLink);
+    await expect(player.getByRole('heading', { name: 'Easy to join', exact: true })).toBeVisible();
+    await player.getByLabel('Your player name').fill('QR player');
+    await player.getByRole('button', { name: 'Join the party', exact: true }).click();
+    await expect(player).toHaveURL(new RegExp(`/campaign/${campaign.id}$`));
+    await expect(page.locator('.member-card')).toContainText('QR traveler');
+  } finally {
+    await context.close();
+  }
+});
+
+test('the dedicated join page keeps the four-character field above the fold', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/join');
+  await expect(page.getByRole('heading', { name: 'Join a session', exact: true })).toBeVisible();
+  const code = page.getByRole('textbox', { name: 'Session code', exact: true });
+  await expect(code).toBeInViewport();
+  await code.fill('ABC');
+  await page.getByRole('button', { name: 'Join session', exact: true }).click();
+  await expect(page).toHaveURL(/\/join$/);
+  expect(await code.evaluate((element: HTMLInputElement) => element.validity.patternMismatch)).toBe(true);
+  await page.getByRole('link', { name: 'Your campaigns', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your campaigns', exact: true })).toBeVisible();
+});
+
 test('a shared screen follows two players and advances only after both submit', async ({ page, browser }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -46,15 +123,21 @@ test('a shared screen follows two players and advances only after both submit', 
   await expect(page).toHaveURL(/\/campaign\//);
   const id = new URL(page.url()).pathname.split('/')[2];
   const snapshot = await page.evaluate(async (id) => (await fetch(`/api/campaigns/${id}`)).json(), id);
+  expect(snapshot.inviteCode).toMatch(/^[A-HJ-NP-Z2-9]{4}$/);
+  await expect(page.getByRole('img', { name: 'Scan to join this session', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open join page', exact: true })).toHaveAttribute(
+    'href',
+    `${snapshot.partyOrigins[0]}/${snapshot.inviteCode}`,
+  );
   await expect(page.locator('.lobby-invite')).toContainText(
-    `${snapshot.partyOrigins[0]}/join/${snapshot.inviteCode}`,
+    `${snapshot.partyOrigins[0]}/${snapshot.inviteCode}`,
   );
   const first = await join(browser, snapshot.inviteCode, 'Mira', snapshot.partyOrigins[0]);
-  const second = await join(browser, snapshot.inviteCode, 'Rowan', snapshot.partyOrigins[0]);
+  const second = await join(browser, snapshot.inviteCode, 'Rowan', snapshot.partyOrigins[0], 'code');
   const displayContext = await browser.newContext();
   const display = await displayContext.newPage();
   await display.goto(`/screen/${id}#${snapshot.displayToken}`);
-  await expect(display.getByRole('heading', { name: 'The Lantern Road', exact: true })).toBeVisible();
+  await expect(display.getByRole('heading', { name: 'The party', exact: true })).toBeVisible();
   await expect(display.getByText('Shared screen · viewing only', { exact: true })).toBeVisible();
   await expect(display.getByRole('link', { name: 'Open player / leader controls' })).toBeVisible();
   await expect(display.getByRole('button', { name: 'Begin the story' })).toHaveCount(0);
@@ -65,6 +148,7 @@ test('a shared screen follows two players and advances only after both submit', 
   const observation = first.page
     .locator('.character-controls .ability-card')
     .filter({ hasText: 'Keen observation' });
+  await first.page.getByRole('button', { name: 'Open abilities', exact: true }).click();
   await expect(observation.locator('.ability-mechanics')).toContainText('Advantage');
   await observation.getByRole('button', { name: 'Use ability', exact: true }).click();
   await expect(first.page.locator('.selected-ability')).toContainText('Keen observation');
@@ -76,6 +160,7 @@ test('a shared screen follows two players and advances only after both submit', 
   await expect(display.getByText('0 / 2 ready', { exact: true })).toBeVisible();
   await expect(first.page.getByLabel('Your action')).toHaveValue('Mira examines the brass key.');
   await expect(second.page.getByLabel('Your action')).toBeEnabled();
+  await second.page.getByRole('button', { name: 'Open action input', exact: true }).click();
   await second.page.getByLabel('Your action').fill('Rowan watches the doorway.');
   await second.page.getByRole('button', { name: 'Submit action' }).click();
   await expect(display.getByText('1 / 2 ready', { exact: true })).toBeVisible();
@@ -97,6 +182,8 @@ test('a shared screen follows two players and advances only after both submit', 
     }),
   ).toBe(true);
   await expect(first.page.getByText('1 encounters completed', { exact: true })).toBeVisible();
+  await first.page.getByRole('button', { name: 'Collapse action input', exact: true }).click();
+  await first.page.getByRole('button', { name: 'Open abilities', exact: true }).click();
   await expect(observation.locator('.ability-uses')).toContainText('1/1 uses remaining');
   await expect(observation.getByRole('button', { name: 'Use ability', exact: true })).toBeEnabled();
   await first.page.reload();
@@ -113,6 +200,7 @@ test('a shared screen follows two players and advances only after both submit', 
   expect(await first.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.reload();
   await expect(page.getByText('Turn 2', { exact: true })).toBeVisible();
+  await first.page.getByRole('button', { name: 'Open action input', exact: true }).click();
   for (let round = 2; round <= 5; round++) {
     for (const player of [first, second]) {
       await expect(player.page.getByLabel('Your action')).toBeEnabled();
@@ -125,12 +213,14 @@ test('a shared screen follows two players and advances only after both submit', 
   await expect(first.page.getByLabel('Your action')).toBeDisabled();
   await first.page.screenshot({ path: 'test-results/level-up-mobile.png', fullPage: true });
   await first.page.getByRole('button', { name: 'Gain a new in-combat ability', exact: true }).click();
-  await expect(first.page.locator('.reward-result')).toContainText('Practice combat ability 3');
+  await expect(first.page.locator('.character-controls')).toContainText('Practice combat ability 3');
+  await expect(first.page.locator('.reward-result')).toHaveCount(0);
   await first.page.reload();
   await expect(first.page.locator('.character-controls .ability-card')).toHaveCount(3);
   await expect(first.page.getByLabel('Your action')).toBeEnabled();
   await second.page.getByRole('button', { name: 'Gain 2 random attribute points', exact: true }).click();
-  await expect(second.page.locator('.reward-result')).toContainText('+1');
+  await expect(second.page.locator('.level-up-choices')).toHaveCount(0);
+  await expect(second.page.locator('.reward-result')).toHaveCount(0);
   await expect(second.page.getByLabel('Your action')).toBeEnabled();
   expect(errors).toEqual([]);
   await first.context.close();

@@ -1,3 +1,4 @@
+import { interruptNarration } from './narration-interruption';
 import { afterEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -291,7 +292,9 @@ it('retries narration from the saved arrival without travelling, rolling or rewa
   f.call();
   f.join();
   const adjudicate = vi.spyOn(f.provider, 'adjudicate');
-  const narrate = vi.spyOn(f.provider, 'narrate').mockRejectedValueOnce(new Error('Narration interrupted.'));
+  const narrate = vi
+    .spyOn(f.provider, 'narrate')
+    .mockImplementationOnce(async () => interruptNarration(f.db, 'Narration interrupted.'));
   const turnId = f.snapshot().turn!.id;
   for (const player of [f.players[0], f.players[2]])
     f.game.submit(f.campaign.id, player.id, turnId, '', true);

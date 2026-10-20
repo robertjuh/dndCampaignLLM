@@ -220,6 +220,8 @@ export function validateFactionEffects(context: GMContext, value: TurnAdjudicati
       events: value.events,
       actions: value.actions,
       journal: value.journal,
+      npcUpdates: value.npcUpdates,
+      featureUpdates: value.featureUpdates,
       location: value.location,
       placeUpdates: value.placeUpdates,
       mapUpdates: value.mapUpdates,

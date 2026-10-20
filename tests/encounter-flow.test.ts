@@ -1,3 +1,4 @@
+import { interruptNarration } from './narration-interruption';
 import { afterEach, expect, it, vi } from 'vitest';
 import { openDatabase } from '../server/db';
 import { Game, type GameMaster, type GMContext, type GameTools } from '../server/game';
@@ -261,7 +262,7 @@ it.each(['check', 'start', 'finalization'] as const)(
     f.provider.narrate = async (resolution, config) => {
       if (pause === 'finalization' && !interrupted) {
         interrupted = true;
-        throw new Error('Interrupted after finalization.');
+        interruptNarration(f.db, 'Interrupted after finalization.');
       }
       return factualNarration(resolution, config.language);
     };
@@ -371,7 +372,7 @@ it('places a new-arrival trigger and initiative at the resulting place while the
   expect(f.draft(turnId).scene.worldProgression.places[locationId].lastTurnId).toBe(turnId);
 });
 
-it('saves an unadvanced local counter once at finalization and rejects a second stalled turn', async () => {
+it('saves an unadvanced local counter once and publishes later turns while pacing remains due', async () => {
   const f = await table();
   const scene = f.snapshot().scene;
   scene.places![road].encounterRisk = { danger: 'safe', reason: 'The secured road is guarded.' };
@@ -379,7 +380,7 @@ it('saves an unadvanced local counter once at finalization and rejects a second 
   f.setHandle((context) => base(context));
   let interrupt = true;
   f.provider.narrate = async (resolution, config) => {
-    if (interrupt) throw new Error('Interrupted after counter finalization.');
+    if (interrupt) interruptNarration(f.db, 'Interrupted after counter finalization.');
     return factualNarration(resolution, config.language);
   };
   const turnId = await f.submit();
@@ -400,6 +401,6 @@ it('saves an unadvanced local counter once at finalization and rejects a second 
   expect(draw).not.toHaveBeenCalled();
   expect(f.snapshot().scene.worldProgression!.places[road].stalledTurns).toBe(1);
   await f.submit();
-  expect(f.snapshot().turn!.phase).toBe('failed');
-  expect(f.snapshot().turn!.error).toContain('World progression is due');
+  expect(f.snapshot().turn!.phase, f.snapshot().turn!.error ?? '').toBe('collecting');
+  expect(f.snapshot().scene.worldProgression!.places[road].stalledTurns).toBe(2);
 });

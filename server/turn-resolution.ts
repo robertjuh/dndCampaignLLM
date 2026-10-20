@@ -1,4 +1,6 @@
 import { validateFactionEffects } from './factions';
+import { validateNPCUpdates } from './npcs';
+import { validateFeatureUpdates } from './scene-state';
 import { isDeepStrictEqual } from 'node:util';
 import {
   actionId,
@@ -17,9 +19,12 @@ import { outcomeSchema, type ResourceUse, type CombatInput } from '../shared/sch
 import type { CombatReceipt, GMContext, ResourceReceipt } from './game';
 import { combatFact } from './narration';
 import { memberScene, knownLocations, occupiedPlaces } from '../shared/locations';
-import { validateWorldMap } from './world-map';
+import { orderRouteOpenings, validateWorldMap } from './world-map';
 import { validateExploration } from './exploration';
 import { validateWorldProgression } from './world-progression';
+import { resolvePickups } from './turn-pickups';
+import { prepareEncounterChecks, type EncounterChecks } from './encounters';
+import type { NPCReactionReceipt } from './npc-reactions';
 
 export function receiptReferences(context: GMContext) {
   return new Set([
@@ -118,6 +123,26 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
           [],
         );
     }
+  for (const [locationId, saved] of Object.entries(
+    (context.receipts?.npcReactionsByLocation ?? {}) as Record<string, NPCReactionReceipt>,
+  ))
+    for (const [index, reaction] of saved.reactions.entries())
+      add(
+        `npc:${locationId}:${index}`,
+        reaction.fact +
+          (reaction.enemy
+            ? context.config.language === 'Nederlands'
+              ? ' De versterking kan pas vanaf de volgende beurt aanvallen.'
+              : ' The reinforcement can attack starting next turn.'
+            : ''),
+        null,
+        ['tool:npcReactionsByLocation'],
+        'world',
+        null,
+        null,
+        undefined,
+        locationId,
+      );
   if (context.combatResult) {
     if (!context.combatResult.events)
       throw new Error('This legacy combat receipt lacks typed outcomes; finish it through the legacy route.');
@@ -410,19 +435,122 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
     !!value && typeof value === 'object' && !Array.isArray(value);
   if (!record(input) || !Array.isArray(input.actions) || !Array.isArray(input.events)) return input;
   const output = structuredClone(input);
+  // This stage saves outcomes; prose is generated separately from the accepted resolution.
+  delete output.narration;
   const events: Record<string, any>[] = output.events.filter(record);
   const proposedPositions: Record<string, any>[] = Array.isArray(output.memberLocations)
     ? output.memberLocations.filter(record)
     : [];
   const engine = engineEvents(context);
   const resolve = adjudicationPlaceRef(context, output);
+  for (const submitted of context.turn.actions.filter((action) => action.passed)) {
+    const id = actionId(context.turn.id, submitted.memberId);
+    if (!output.actions.some((action: any) => action?.actionId === id))
+      output.actions.push({
+        actionId: id,
+        memberId: submitted.memberId,
+        components: { main: null, minor: null },
+      });
+    if (![...engine, ...events].some((event) => event.actionId === id)) {
+      const name = context.members.find((member) => member.id === submitted.memberId)!.character.name;
+      const event = {
+        id: `pass:${submitted.memberId}`,
+        sequence:
+          output.events.length +
+          (output.events.some((event: any) => engine.some((saved) => saved.id === event?.id))
+            ? 0
+            : engine.length),
+        kind: 'action',
+        actionId: id,
+        memberId: submitted.memberId,
+        phase: null,
+        result: null,
+        fact: context.config.language === 'Nederlands' ? `${name} slaat over.` : `${name} passes.`,
+        receiptRefs: [],
+        dependsOn: [],
+      };
+      output.events.push(event);
+      events.push(event);
+    }
+  }
+  for (const event of events) {
+    if (engine.some((saved) => saved.id === event.id) || !['world', 'action'].includes(event.kind)) continue;
+    if (event.kind === 'action' && event.memberId === undefined) {
+      const owner = context.turn.actions.find(
+        (action) => actionId(context.turn.id, action.memberId) === event.actionId,
+      );
+      if (owner) event.memberId = owner.memberId;
+    }
+    if (event.kind === 'world' && event.actionId === null && event.memberId === undefined)
+      event.memberId = null;
+    // An interaction has no movement/search proof; these markers are optional, not new mechanics.
+    if (event.effect === 'interact') delete event.effect;
+    if (event.dependsOn === undefined) event.dependsOn = [];
+    if (event.receiptRefs === undefined) {
+      const owner = output.actions.find(
+        (action: any) => action.actionId === event.actionId && action.memberId === event.memberId,
+      );
+      const part = owner?.components?.[event.phase];
+      if (event.kind === 'world') event.receiptRefs = [];
+      else if (Array.isArray(part?.receiptRefs)) event.receiptRefs = [...part.receiptRefs];
+      else if (part?.basis === 'routine') event.receiptRefs = [];
+    }
+  }
   for (const action of output.actions.filter(record)) {
     const submitted = context.turn.actions.find(
       (a) => action.actionId === actionId(context.turn.id, a.memberId) && a.memberId === action.memberId,
     );
     if (!submitted) continue;
+    if (submitted.passed && action.components === undefined) action.components = { main: null, minor: null };
     if (!record(action.components)) continue;
+    const parts = Object.values(action.components).filter(record);
+    const own = [
+      ...new Map(
+        [...engine, ...events]
+          .filter((event) => event.actionId === action.actionId)
+          .map((event) => [event.id, event]),
+      ).values(),
+    ];
+    for (const [phase, part] of Object.entries(action.components)) {
+      if (!record(part)) continue;
+      const phased = own.filter((event) => event.phase === phase);
+      if (part.eventIds === undefined) part.eventIds = phased.map((event) => event.id);
+      if (part.receiptRefs === undefined)
+        part.receiptRefs = [...new Set(phased.flatMap((event) => event.receiptRefs))];
+      if (part.fact === undefined)
+        part.fact = phased
+          .filter((event) => part.eventIds.includes(event.id))
+          .map((event) => event.fact)
+          .join(' ')
+          .slice(0, 2500);
+    }
+    // Compact provider output expands to the same complete saved contract.
+    if (action.status === undefined)
+      Object.assign(action, aggregateComponents(action.components, submitted.passed));
+    for (const field of ['fact', 'reason'] as const)
+      if (action[field] === undefined)
+        action[field] = (
+          parts
+            .map((part) => part[field])
+            .filter(Boolean)
+            .join(' ') || own.map((event) => event.fact).join(' ')
+        ).slice(0, 2500);
+    for (const field of ['eventIds', 'receiptRefs'] as const)
+      if (
+        action[field] === undefined ||
+        (submitted.passed && Array.isArray(action[field]) && !action[field].length)
+      )
+        action[field] = [
+          ...new Set(
+            parts.length
+              ? parts.flatMap((part) => (Array.isArray(part[field]) ? part[field] : []))
+              : own.flatMap((event) => (field === 'eventIds' ? [event.id] : event.receiptRefs)),
+          ),
+        ];
     const mainComponent = action.components.main;
+    const movementRoll = context.turn.rolls.find(
+      (roll) => roll.memberId === action.memberId && !roll.notation,
+    );
     // ponytail: recognize direct English/Dutch journeys, not arbitrary natural-language intent.
     if (
       !submitted.passed &&
@@ -436,9 +564,11 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
       action.intent !== 'search' &&
       record(mainComponent) &&
       mainComponent.status === 'success' &&
-      mainComponent.basis === 'routine' &&
       Array.isArray(mainComponent.receiptRefs) &&
-      !mainComponent.receiptRefs.length &&
+      ((mainComponent.basis === 'routine' && !mainComponent.receiptRefs.length) ||
+        (mainComponent.basis === 'check' &&
+          movementRoll?.success &&
+          mainComponent.receiptRefs.includes(`roll:${movementRoll.id}`))) &&
       Array.isArray(mainComponent.eventIds) &&
       Array.isArray(output.memberLocations)
     ) {
@@ -452,6 +582,11 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
         proof.kind === 'action' &&
         proof.phase === 'main' &&
         proof.result === 'success' &&
+        (mainComponent.basis === 'routine' ||
+          proof.dependsOn?.some(
+            (dependency: any) =>
+              dependency.eventId === `check:${movementRoll?.id}` && dependency.requires === 'success',
+          )) &&
         proof.effect === undefined &&
         typeof proof.locationRef === 'string' &&
         resolve(proof.locationRef) === resolve(positions[0].locationId) &&
@@ -532,6 +667,32 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
       if (ids.length) owner.eventIds = ids;
     }
   }
+  // World events own the facts; journal persistence is server bookkeeping.
+  for (const progress of Array.isArray(output.worldProgress) ? output.worldProgress : []) {
+    if (!record(progress?.journal)) continue;
+    const event = events.find(
+      (event) =>
+        event.id === progress.eventId &&
+        event.kind === 'world' &&
+        event.actionId === null &&
+        !event.presentation,
+    );
+    if (!event) continue;
+    if (!Array.isArray(output.journal)) output.journal = [];
+    const entries = output.journal.filter(
+      (entry: any) => entry?.kind === progress.journal.kind && entry?.name === progress.journal.name,
+    );
+    const previous = context.journal.find(
+      (entry) => entry.kind === progress.journal.kind && entry.name === progress.journal.name,
+    );
+    const combined = previous ? `${previous.detail}\n${event.fact}` : event.fact;
+    const detail =
+      combined.length <= (progress.journal.kind === 'faction' ? 6000 : 1500)
+        ? combined
+        : (previous?.detail ?? event.fact);
+    if (!entries.length) output.journal.push({ ...progress.journal, detail });
+    else if (entries.length === 1 && entries[0].detail === undefined) entries[0].detail = detail;
+  }
   // A separation is a projection of positions, not another fictional outcome to ask the model for.
   let positionEventId: string | undefined;
   const resultingPositions = context.members
@@ -544,6 +705,15 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
         proof: position?.movementEventId,
       };
     });
+  // Screen focus is bookkeeping; an empty default must not block actors at another saved place.
+  if (
+    !context.receipts?.encounterProposal &&
+    output.sceneFocus === 'current' &&
+    output.location == null &&
+    resultingPositions.length &&
+    !resultingPositions.some((position) => position.ref === context.scene.location.id)
+  )
+    output.sceneFocus = resultingPositions[0].ref;
   for (const separation of Array.isArray(output.separations) ? output.separations : []) {
     if (!record(separation) || !Array.isArray(separation.memberIds) || separation.memberIds.length !== 2)
       continue;
@@ -601,9 +771,10 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
 }
 
 export function validateAdjudication(context: GMContext, input: unknown): TurnAdjudication {
-  const value = orderRoutineMovement(
+  const parsed = orderRoutineMovement(
     turnAdjudicationSchema.parse(normalizeAdjudicationStructure(context, input)),
   );
+  const value = parsed.pickups?.length ? resolvePickups(context, parsed).value : parsed;
   const updates = value.placeUpdates ?? [];
   const refs = new Set(updates.map((update) => update.ref));
   if (refs.size !== updates.length) throw new Error('Place update references must be unique.');
@@ -619,6 +790,9 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
   if (focus && !known(focus) && !refs.has(focus))
     throw new Error('Scene focus must be an established or declared place.');
   const resultingRef = adjudicationPlaceRef(context, value);
+  validateFeatureUpdates(context, value, resultingRef);
+  orderRouteOpenings(context, value, resultingRef);
+  validateNPCUpdates(context, value, resultingRef);
   const destination = resultingRef('destination');
   const combatScene = { ...context.scene, places: { ...context.scene.places } };
   const encounters =
@@ -839,6 +1013,16 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
     )
       throw new Error(`Preserve engine event ${event.id} and its execution order exactly.`);
   const fictional = value.events.filter((event) => !engineIds.has(event.id));
+  const blockedByPickup = new Set(
+    (value.pickups ?? [])
+      .filter((pickup) =>
+        value.events.some((event) => event.id === pickup.eventId && event.result === 'blocked'),
+      )
+      .map((pickup) => pickup.eventId),
+  );
+  for (const event of value.events)
+    if (event.result === 'blocked' && event.dependsOn.some((dep) => blockedByPickup.has(dep.eventId)))
+      blockedByPickup.add(event.id);
   if (fictional.some((event) => !['action', 'world'].includes(event.kind)))
     throw new Error(
       'New adjudicated events must be action outcomes or world consequences; mechanics come from the server.',
@@ -883,6 +1067,10 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
     }
     const movement = result.components.movement;
     if (movement) {
+      const unperformed =
+        movement.status === 'blocked' &&
+        movement.basis === 'none' &&
+        movement.eventIds.every((id) => blockedByPickup.has(id));
       const starter = (context.startingMembers ?? context.members).find(
         (member) => member.id === result.memberId,
       )!;
@@ -891,8 +1079,7 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
         starter.state.hp <= 0 ||
         incapacitatingCondition(starter.state) ||
         submitted.passed ||
-        movement.basis !== 'routine' ||
-        movement.status !== 'success' ||
+        (!unperformed && (movement.basis !== 'routine' || movement.status !== 'success')) ||
         movement.receiptRefs.length
       )
         throw new Error('Separate movement must be ordinary conscious noncombat movement without resources.');
@@ -901,6 +1088,7 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
       );
       if (
         mainExecution &&
+        !unperformed &&
         movement.eventIds.some(
           (id) =>
             value.events.findIndex((event) => event.id === id) >
@@ -998,5 +1186,11 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
     )
   )
     throw new Error('Combat rewards come from the engine.');
+  if (value.encounterRisks !== undefined || context.receipts?.encounterChecks)
+    prepareEncounterChecks(
+      context,
+      value,
+      (context.receipts?.encounterChecks as EncounterChecks | undefined) ?? {},
+    );
   return value;
 }

@@ -1,8 +1,10 @@
+import { interruptNarration } from './narration-interruption';
 import { afterEach, expect, it, vi } from 'vitest';
 import { openDatabase } from '../server/db';
-import { Game, type GameMaster, type GMContext } from '../server/game';
+import { Game, type GameMaster, type GMContext, type GameTools } from '../server/game';
 import { engineEvents, validateAdjudication } from '../server/turn-resolution';
-import { migrateWorldMaps } from '../server/location-migration';
+import { migrateWorldMaps, migrateWorldMapPositions } from '../server/location-migration';
+import { ensureWorldMapPositions } from '../shared/world-map-layout';
 import {
   actionId,
   factualNarration,
@@ -15,7 +17,8 @@ import { templateCharacter, type Scene } from '../shared/schema';
 import savedKraterwereld from './fixtures/kraterwereld-exploration.json';
 import { travelNextHop, locationReferences, normalizeAdjudicationReferences } from '../server/world-map';
 import { validateExploration } from '../server/exploration';
-import { adjudicationInput } from '../server/providers';
+import { adjudicationInput, ChatGPTGM } from '../server/providers';
+import type { ChatGPTAuth } from '../server/auth';
 
 const close: (() => void)[] = [];
 afterEach(() => close.splice(0).forEach((fn) => fn()));
@@ -184,7 +187,7 @@ it('saves three observable adjacent previews once through a narration restart wi
   f.provider.adjudicate = adjudicate;
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Interrupted narration');
+    interruptNarration(f.db, 'Interrupted narration');
   };
   const turnId = await f.turn(['', '']);
   expect(f.snapshot().turn?.phase, f.snapshot().turn?.error ?? '').toBe('failed');
@@ -201,6 +204,7 @@ it('saves three observable adjacent previews once through a narration restart wi
   expect(f.snapshot().history.at(-1)?.id, f.snapshot().turn?.error ?? '').toBe(turnId);
   expect(adjudicate).toHaveBeenCalledTimes(1);
   const scene = f.snapshot().scene;
+  expect(scene.worldMap!.positions).toEqual(draft.scene.worldMap.positions);
   expect(Object.keys(scene.worldMap!.nodes)).toHaveLength(4);
   expect(scene.worldMap!.nodes[origin].visited).toBe(true);
   for (const ref of ['tower', 'market', 'drain']) {
@@ -597,13 +601,14 @@ it('migrates only travelled legs, deduplicates history and preserves a pending a
   expect(readPending().resolution).toEqual(accepted);
 });
 
-it('requires first-arrival scene evidence for every occupied branch and saves a shared arrival only once', async () => {
+it('accepts first-arrival scene evidence without thread progress on shared and separate branches', async () => {
   const f = await table(exits);
   const c = f.context();
   const destinations = Object.values(c.scene.worldMap!.nodes).filter(
     (node) => !node.visited && node.name !== 'Drain entrance',
   );
   const value = arrival(c, destinations[0].id, destinations[0].name);
+  value.worldProgress = [];
   value.arrivals = [];
   expect(() => validateAdjudication(c, value)).toThrow('Every first arrival');
   value.events.push({
@@ -838,6 +843,52 @@ it('regresses Kraterwereld turns 7, 9 and 10 locally without changing their comp
   expect(JSON.stringify(savedKraterwereld)).toBe(untouched);
 });
 
+it('allows a local control action to change a known remote route without discovering new remote routes', async () => {
+  const f = await table();
+  const c = f.context();
+  c.members[1].active = false;
+  c.turn.actions = c.turn.actions.slice(0, 1);
+  c.turn.roster = c.turn.roster.slice(0, 1);
+  const deck = crypto.randomUUID(),
+    dock = crypto.randomUUID();
+  for (const [id, name] of [
+    [deck, 'Ship deck'],
+    [dock, 'Dock'],
+  ]) {
+    c.scene.places![id] = {
+      location: { id, name, atmosphere: 'A known place.', hazard: '' },
+      encounter: null,
+      loot: [],
+    };
+    c.scene.worldMap!.nodes[id] = { id, name, visited: true };
+  }
+  c.scene.memberLocations![c.members[1].id] = deck;
+  const gangway = { from: deck, to: dock, label: 'Gangway', blocked: false, bidirectional: true };
+  c.scene.worldMap!.connections.push(gangway);
+  const value = routine(c);
+  const action = value.actions[0],
+    source = value.events[0],
+    evidence = value.events.at(-1)!;
+  delete source.effect;
+  source.locationRef = c.scene.location.id;
+  action.fact =
+    action.components.main!.fact =
+    source.fact =
+      'The pilot releases the ship from the wheelhouse controls.';
+  evidence.locationRef = deck;
+  evidence.fact = 'The gangway separates from the dock as the ship departs.';
+  evidence.dependsOn = [{ eventId: source.id, requires: 'success' }];
+  value.mapUpdates = { locations: [], connections: [{ ...gangway, blocked: true, eventId: evidence.id }] };
+  expect(() => validateAdjudication(c, value)).not.toThrow();
+  expect(value.memberLocations).toEqual([]);
+  expect(c.scene.memberLocations![c.members[1].id]).toBe(deck);
+  evidence.dependsOn = [];
+  expect(() => validateAdjudication(c, value)).toThrow('Discover routes');
+  evidence.dependsOn = [{ eventId: source.id, requires: 'success' }];
+  c.scene.worldMap!.connections = c.scene.worldMap!.connections.filter((edge) => edge !== gangway);
+  expect(() => validateAdjudication(c, value)).toThrow('Discover routes');
+});
+
 it('respects an evidenced travel-method obstacle without turning an open path into a global blocker', async () => {
   const f = await table(exits);
   const c = f.context();
@@ -928,6 +979,70 @@ it('reports unknown location references together and refuses ambiguous place nam
   expect(() => normalizeAdjudicationReferences(c, value)).toThrow('Unknown location references');
 });
 
+it('repairs a mistyped location ID only when its declared name identifies one existing place', async () => {
+  const f = await table(exits);
+  const c = f.context();
+  const tower = Object.values(c.scene.worldMap!.nodes).find((node) => node.name === 'Watchtower')!;
+  const value = arrival(c, tower.id, tower.name);
+  const typo = '0a2b90dc-ec4c-4277-87e5-0a17671cb5bd';
+  value.placeUpdates![0].ref = typo;
+  value.sceneFocus = typo;
+  value.memberLocations!.forEach((position) => {
+    position.locationId = typo;
+  });
+  value.events.forEach((event) => {
+    if (event.locationRef === tower.id) event.locationRef = typo;
+  });
+  value.arrivals?.forEach((arrival) => {
+    arrival.locationId = typo;
+  });
+  const before = structuredClone(value);
+  const normalized = normalizeAdjudicationReferences(c, value) as TurnAdjudication;
+  expect(normalized.sceneFocus).toBe(tower.id);
+  expect(() => validateAdjudication(c, normalized)).not.toThrow();
+  expect(value).toEqual(before);
+  c.scene.worldMap!.nodes['another-tower'] = { id: 'another-tower', name: tower.name, visited: false };
+  expect(() => normalizeAdjudicationReferences(c, value)).toThrow('Unknown location references');
+});
+
+it('sends short location references to the GM and resolves them in gameplay tool calls', async () => {
+  const f = await table(exits);
+  const c = f.context();
+  const tower = Object.values(c.scene.worldMap!.nodes).find((node) => node.name === 'Watchtower')!;
+  const alias = Object.entries(locationReferences(c)).find(([, place]) => place.id === tower.id)![0];
+  let requests = 0;
+  const fetcher = vi.fn(async (_url, init) => {
+    const input = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+    expect(input.scene.worldMap.nodes[alias].id).toBe(alias);
+    expect(input.locationRefs[alias]).toEqual({ id: alias, name: tower.name });
+    const output =
+      ++requests === 1
+        ? [
+            {
+              type: 'function_call',
+              name: 'start_combat',
+              call_id: 'start',
+              arguments: JSON.stringify({ locationId: alias, enemies: [] }),
+            },
+          ]
+        : [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(routine(c)) }] }];
+    return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { output } })}\n\n`);
+  }) as unknown as typeof fetch;
+  const startCombat = vi.fn(() => ({}));
+  const tools = Object.assign(vi.fn(), {
+    startCombat,
+    validateAdjudication: (input: unknown) => validateAdjudication(c, input),
+  }) as unknown as GameTools;
+  await new ChatGPTGM(
+    { accessToken: async () => 'test' } as unknown as ChatGPTAuth,
+    'owner',
+    'test',
+    fetcher,
+  ).adjudicate(c, tools);
+  expect(startCombat).toHaveBeenCalledExactlyOnceWith([], tower.id);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
 it('never invents a movement effect or converts an unrelated successful action into travel during reference repair', async () => {
   const f = await table(exits);
   const c = f.context();
@@ -940,4 +1055,109 @@ it('never invents a movement effect or converts an unrelated successful action i
   const normalized = turnAdjudicationSchema.parse(normalizeAdjudicationReferences(c, value));
   expect(normalized.events.find((item) => item.id === event.id)!.effect).toBeUndefined();
   expect(() => validateAdjudication(c, normalized)).toThrow('explicit movement effect');
+});
+
+it('migrates map positions without rewriting checkpoints and preserves them when a legacy resolution publishes', async () => {
+  const f = await table(exits);
+  const narrate = f.provider.narrate!;
+  const adjudicate = vi.fn(async (context: GMContext) => routine(context));
+  f.provider.adjudicate = adjudicate;
+  f.provider.narrate = async () => {
+    interruptNarration(f.db, 'Interrupted narration');
+  };
+  const turnId = await f.turn(['', '']);
+  expect(f.snapshot().turn?.phase).toBe('failed');
+  const readDraft = () =>
+    (f.db.prepare('SELECT draft FROM turns WHERE id = ?').get(turnId) as { draft: string }).draft;
+  const draft = JSON.parse(readDraft());
+  delete draft.scene.worldMap.positions;
+  delete draft.context.scene.worldMap.positions;
+  delete draft.resolution.worldMap.positions;
+  f.db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(JSON.stringify(draft), turnId);
+  const checkpoint = readDraft();
+  const history = f.db
+    .prepare("SELECT id, draft, result FROM turns WHERE campaign_id = ? AND phase = 'complete'")
+    .all(f.campaign.id);
+  const oldScene = f.snapshot().scene;
+  delete oldScene.worldMap!.positions;
+  f.saveScene(oldScene);
+  migrateWorldMapPositions(f.db);
+  const positions = f.snapshot().scene.worldMap!.positions!;
+  expect(Object.keys(positions).sort()).toEqual(Object.keys(oldScene.worldMap!.nodes).sort());
+  expect(readDraft()).toBe(checkpoint);
+  const migratedScene = f.snapshot().scene;
+  // A checkpoint without metadata must preserve coordinates already shown to viewers.
+  migratedScene.worldMap!.positions = Object.fromEntries(
+    Object.entries(positions).map(([id, point]) => [id, { x: point.x + 1234, y: point.y - 300 }]),
+  );
+  f.saveScene(migratedScene);
+  const version = f.snapshot().version;
+  migrateWorldMapPositions(f.db);
+  expect(f.snapshot().version).toBe(version);
+  f.provider.narrate = narrate;
+  const restarted = new Game(f.db, () => f.provider);
+  restarted.retry(f.campaign.id, f.host.id);
+  await restarted.idle();
+  expect(f.snapshot().history.at(-1)?.id, f.snapshot().turn?.error ?? '').toBe(turnId);
+  expect(f.snapshot().scene.worldMap!.positions).toEqual(migratedScene.worldMap!.positions);
+  expect(adjudicate).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(readDraft()).resolution).toEqual(draft.resolution);
+  for (const entry of history as { id: string; draft: string; result: string }[])
+    expect(f.db.prepare('SELECT id, draft, result FROM turns WHERE id = ?').get(entry.id)).toEqual(entry);
+});
+
+it('saves an evidenced shortcut closing a cycle without moving characters or places', async () => {
+  const f = await table();
+  const scene = f.snapshot().scene;
+  const a = scene.location.id!,
+    b = crypto.randomUUID(),
+    c = crypto.randomUUID();
+  for (const [id, name] of [
+    [b, 'Woods'],
+    [c, 'Mill'],
+  ]) {
+    scene.places![id] = {
+      location: { id, name, atmosphere: 'A known place.', hazard: '' },
+      encounter: null,
+      loot: [],
+    };
+    scene.worldMap!.nodes[id] = { id, name, visited: true };
+  }
+  scene.worldMap!.connections = [
+    [a, b],
+    [b, c],
+  ].map(([from, to]) => ({ from, to, label: 'Trail', blocked: false, bidirectional: true }));
+  for (const member of f.snapshot().members) scene.memberLocations![member.id] = c;
+  ensureWorldMapPositions(scene);
+  f.saveScene(scene);
+  expect(travelNextHop(scene, c, a)).toBe(b);
+  expect(adjudicationInput(f.context()).scene.worldMap).not.toHaveProperty('positions');
+  f.provider.adjudicate = async (context) => {
+    const value = routine(context);
+    const evidence = value.events.find((event) => event.id === 'world:routes')!;
+    evidence.locationRef = c;
+    evidence.fact = 'A visible service trail at the mill returns to the known courtyard.';
+    value.mapUpdates = {
+      locations: [],
+      connections: [
+        { from: c, to: a, label: 'Service trail', blocked: false, bidirectional: true, eventId: evidence.id },
+      ],
+    };
+    const unsupported = structuredClone(value);
+    unsupported.mapUpdates!.connections[0].eventId = 'missing';
+    expect(() => validateAdjudication(context, unsupported)).toThrow('public world or action event');
+    return value;
+  };
+  const turn = await f.turn(['', '']);
+  const after = f.snapshot().scene;
+  expect(f.snapshot().history.at(-1)?.id, f.snapshot().turn?.error ?? '').toBe(turn);
+  expect(after.worldMap!.positions).toEqual(scene.worldMap!.positions);
+  expect(after.memberLocations).toEqual(scene.memberLocations);
+  expect(after.worldMap!.connections).toHaveLength(3);
+  expect(travelNextHop(after, c, a)).toBe(a);
+  const shortcut = after.worldMap!.connections.find((route) => route.label === 'Service trail')!;
+  shortcut.bidirectional = false;
+  expect(travelNextHop(after, a, c)).toBe(b);
+  shortcut.blocked = true;
+  expect(travelNextHop(after, c, a)).toBe(b);
 });

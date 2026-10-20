@@ -1,3 +1,4 @@
+import { interruptNarration } from './narration-interruption';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -147,7 +148,7 @@ it.each([
     };
     const narrate = f.provider.narrate!;
     f.provider.narrate = async (resolution, config, budget) => {
-      if (resolution.turnId === turnId) throw new Error('Interrupted narration');
+      if (resolution.turnId === turnId) interruptNarration(f.db, 'Interrupted narration');
       return narrate(resolution, config, budget);
     };
     const turn = f.game.snapshot(f.campaign.id, f.host.id).turn!;
@@ -586,7 +587,7 @@ it('resumes an older finalized challenge without changing its saved presentation
   f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(f.helper.state), f.helper.id);
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Controlled narration interruption');
+    interruptNarration(f.db, 'Controlled narration interruption');
   };
   const id = f.submit();
   await f.game.idle();

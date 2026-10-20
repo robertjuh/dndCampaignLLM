@@ -1,5 +1,11 @@
 # Separate turn resolution from narration
 
+18 October follow-up: [fluent turn resolution](FLUENT_TURN_RESOLUTION_PLAN_2026-10-18.md)
+extends the same pipeline with generous intent defaults, typed explicit pickup,
+server-derived summaries and pass outcomes, canonical journal persistence,
+receipt-derived encounter continuation and visible processing stages. Existing
+request limits, engine authority, checkpoint integrity and narration review remain.
+
 Status: implemented, 5 October 2026. New turns use the separated pipeline with version-2 action components and event dependencies. Existing started legacy drafts keep their compatibility route; completed saves are preserved. The five review findings, checkpoint recovery and live acceptance results are documented in [TURN_RESOLUTION_REPAIR_PLAN.md](TURN_RESOLUTION_REPAIR_PLAN.md). All four user-approved isolated live ChatGPT scenarios passed, using 21 model requests in total.
 
 Implementation: `shared/turn-resolution.ts` defines strict contracts and reference/coverage validation; `server/turn-resolution.ts` adapts authoritative receipts; `server/turn-recovery.ts` repairs provable saved facts; `Game.finalize()` saves consequences and rewards; `Game.publish()` atomically publishes saved state. ChatGPT adjudication has tools, narration and fidelity review do not. Combat emits typed metadata alongside existing logs. The existing SQLite draft stores all checkpoints, without a database schema migration. Finalized character HP, conditions, ability uses and progression are included in resolution for review.

@@ -2,6 +2,68 @@ import { test, expect } from '@playwright/test';
 import { initialState } from '../../shared/rules';
 import { campaignSchema, templateCharacter, outcomeSchema, type Snapshot } from '../../shared/schema';
 
+test('processing stages and elapsed time survive a shared-screen reload', async ({ page }) => {
+  const response = await page.request.post('/api/campaigns', {
+    headers: { 'x-gather-request': '1' },
+    data: campaignSchema.parse({
+      name: 'Progress',
+      setting: 'Dock',
+      provider: 'practice',
+      premise: '',
+      tone: '',
+      language: 'English',
+      instructions: '',
+      custom: [],
+    }),
+  });
+  expect(response.ok()).toBe(true);
+  const snapshot: Snapshot = await response.json();
+  const character = templateCharacter('Traveller');
+  const member = {
+    id: 'traveller',
+    playerId: 'player',
+    characterId: 'character',
+    playerName: 'Player',
+    character,
+    state: { ...initialState(character, 'traveller'), equipmentChosen: true },
+    active: true,
+  };
+  snapshot.status = 'active';
+  snapshot.members = [member];
+  const now = new Date('2026-10-18T10:00:00Z');
+  await page.clock.install({ time: now });
+  snapshot.turn = {
+    id: 'working',
+    number: 1,
+    phase: 'resolving',
+    roster: [member.id],
+    actions: [],
+    rolls: [],
+    result: null,
+    error: null,
+    progress: {
+      stage: 'review',
+      startedAt: new Date(+now - 5000).toISOString(),
+      stageStartedAt: now.toISOString(),
+    },
+  };
+  await page.addInitScript(() =>
+    Object.defineProperty(window, 'EventSource', {
+      value: class {
+        close() {}
+      },
+    }),
+  );
+  await page.route(`**/api/campaigns/${snapshot.id}`, (route) => route.fulfill({ json: snapshot }));
+  await page.goto(`/screen/${snapshot.id}`);
+  await expect(page.locator('.thinking')).toContainText('Checking the story · 5s elapsed');
+  await page.clock.fastForward(2000);
+  await expect(page.locator('.thinking')).toContainText('7s elapsed');
+  snapshot.turn.progress!.stage = 'narration';
+  await page.reload();
+  await expect(page.locator('.thinking')).toContainText('Writing the story');
+});
+
 for (const view of ['leader', 'player', 'screen'] as const) {
   test(`${view} can find failed-turn recovery above the dice and while browsing history`, async ({
     page,
@@ -122,7 +184,9 @@ for (const view of ['leader', 'player', 'screen'] as const) {
   });
 }
 
-test('a recovered turn shows debugging feedback while the next action stays available', async ({ page }) => {
+test('a recovered turn keeps technical details collapsed while the next action stays available', async ({
+  page,
+}) => {
   const response = await page.request.post('/api/campaigns', {
     headers: { 'x-gather-request': '1' },
     data: campaignSchema.parse({
@@ -192,6 +256,9 @@ test('a recovered turn shows debugging feedback while the next action stays avai
   await page.route(`**/api/campaigns/${snapshot.id}`, (route) => route.fulfill({ json: snapshot }));
   await page.goto(`/campaign/${snapshot.id}`);
   await expect(page.locator('.gm-diagnostics')).toContainText('The GM recovered this turn.');
+  await expect(page.locator('.gm-diagnostics summary')).toHaveText('GM recovery details (1)');
+  await expect(page.locator('.gm-diagnostics').getByRole('alert')).toHaveCount(0);
+  await page.locator('.gm-diagnostics summary').click();
   await expect(page.locator('.gm-diagnostics').getByRole('alert')).toHaveText(feedback);
   await expect(page.locator('.narration')).toContainText('signals Davyjaws');
   await expect(page.getByRole('textbox', { name: 'Your action' })).toBeEnabled();

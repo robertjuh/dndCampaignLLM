@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { openDatabase } from '../server/db';
 import { Game, type GameMaster, type GMContext, type GameTools } from '../server/game';
-import { PracticeGM } from '../server/providers';
+import { PracticeGM, ChatGPTGM } from '../server/providers';
+import type { ChatGPTAuth } from '../server/auth';
 import { applyCondition, baseItem } from '../shared/rules';
 import { templateCharacter, type CampaignConfig } from '../shared/schema';
-import { actionId, type TurnAdjudication } from '../shared/turn-resolution';
+import { actionId, factualNarration, type TurnAdjudication } from '../shared/turn-resolution';
 
 const cleanup: (() => void)[] = [];
 afterEach(() =>
@@ -120,6 +121,76 @@ async function fixture() {
   };
 }
 
+function pauseNarration(f: Awaited<ReturnType<typeof fixture>>) {
+  f.db.exec(
+    `CREATE TRIGGER interrupt_narration BEFORE UPDATE OF draft ON turns WHEN NEW.draft LIKE '%"narration":%' BEGIN SELECT RAISE(ABORT, 'narration checkpoint interrupted'); END;`,
+  );
+}
+
+it.each(['writing-timeout', 'writing-disconnect', 'review-timeout', 'review-http'])(
+  'publishes finalized gameplay once after a %s failure',
+  async (failure) => {
+    const f = await fixture();
+    const callsBefore = f.adjudicate.mock.calls.length;
+    let requests = 0;
+    const fetcher = vi.fn(async () => {
+      if (failure.startsWith('writing') || ++requests > 1) {
+        if (failure.endsWith('timeout'))
+          throw new DOMException('Provider deadline exceeded.', 'TimeoutError');
+        if (failure.endsWith('http')) return new Response('Service unavailable', { status: 503 });
+        throw new TypeError('fetch failed');
+      }
+      const saved = f.draft();
+      const candidate = factualNarration(saved.resolution, 'English');
+      return new Response(
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: {
+            status: 'completed',
+            output: [
+              { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(candidate) }] },
+            ],
+          },
+        })}\n\n`,
+      );
+    }) as unknown as typeof fetch;
+    const gm = new ChatGPTGM(
+      { accessToken: async () => 'test' } as unknown as ChatGPTAuth,
+      'owner',
+      'test',
+      fetcher,
+    );
+    f.provider.narrate = gm.narrate.bind(gm);
+    f.submit();
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.campaign.id, f.host.id),
+      done = snapshot.history.at(-1)!;
+    expect(snapshot.turn!.phase, snapshot.turn!.error ?? '').toBe('collecting');
+    expect(done.id).toBe(f.turnId);
+    expect(done.result!.narration).toContain('Zafir');
+    expect(done.result!.narration).not.toContain('Provider deadline');
+    expect(f.adjudicate).toHaveBeenCalledTimes(callsBefore + 1);
+    expect(fetcher).toHaveBeenCalledTimes(failure.startsWith('writing') ? 1 : 2);
+    expect(snapshot.members.find((member) => member.id === f.target.id)!.state.hp).toBe(4);
+    expect(
+      snapshot.members
+        .find((member) => member.id === f.actor.id)!
+        .state.inventory.some((item) => item.id === f.potion.id),
+    ).toBe(false);
+    expect(f.draw).not.toHaveBeenCalled();
+    const stage = f.db
+      .prepare("SELECT payload FROM events WHERE turn_id=? AND kind='stage:narration'")
+      .all(f.turnId) as { payload: string }[];
+    expect(stage).toHaveLength(1);
+    expect(JSON.parse(stage[0].payload).fallback).toContain('Narration unavailable');
+    expect(
+      f.db
+        .prepare("SELECT COUNT(*) AS total FROM events WHERE turn_id=? AND kind='turn_auto_retry'")
+        .get(f.turnId),
+    ).toEqual({ total: 0 });
+  },
+);
+
 function asV1(draft: any) {
   const legacyEvents = (events: any[]) =>
     events.map(({ phase: _phase, result: _result, ...event }) => ({
@@ -210,10 +281,7 @@ it.each(['adjudication', 'resolution', 'narration'] as const)(
       f.db.exec(
         `CREATE TRIGGER interrupt_checkpoint BEFORE UPDATE OF draft ON turns WHEN NEW.draft LIKE '%"resolution":%' BEGIN SELECT RAISE(ABORT, 'finalization interrupted'); END;`,
       );
-    else if (checkpoint === 'resolution')
-      f.provider.narrate = vi.fn(async () => {
-        throw new Error('Narrator unavailable');
-      });
+    else if (checkpoint === 'resolution') pauseNarration(f);
     else
       f.db.exec(
         `CREATE TRIGGER interrupt_checkpoint BEFORE UPDATE OF phase ON turns WHEN NEW.phase = 'complete' BEGIN SELECT RAISE(ABORT, 'publication interrupted'); END;`,
@@ -229,6 +297,7 @@ it.each(['adjudication', 'resolution', 'narration'] as const)(
     f.save(saved);
     if (checkpoint !== 'resolution') f.db.exec('DROP TRIGGER interrupt_checkpoint');
     const calls = f.adjudicate.mock.calls.length;
+    f.db.exec('DROP TRIGGER IF EXISTS interrupt_narration');
     f.provider.narrate = f.narrate;
     const narrations = f.narrate.mock.calls.length;
     const restarted = f.restart();
@@ -326,9 +395,7 @@ it('regenerates narration bound to an older revision while preserving finalized 
 
 it('preserves ambiguous accepted claims and their mechanics through repeated failed recovery', async () => {
   const f = await fixture();
-  f.provider.narrate = async () => {
-    throw new Error('Narration interrupted');
-  };
+  pauseNarration(f);
   f.submit();
   await f.game.idle();
   const saved = asV1(f.draft());
@@ -337,6 +404,7 @@ it('preserves ambiguous accepted claims and their mechanics through repeated fai
   saved.resolution.actions[0].fact = saved.adjudication.actions[0].fact;
   f.save(saved);
   const calls = f.adjudicate.mock.calls.length;
+  f.db.exec('DROP TRIGGER IF EXISTS interrupt_narration');
   f.provider.narrate = f.narrate;
   const narrations = f.narrate.mock.calls.length;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -354,9 +422,7 @@ it('preserves ambiguous accepted claims and their mechanics through repeated fai
 
 it('rolls back a fact repair and its audit event together if saving the repaired draft fails', async () => {
   const f = await fixture();
-  f.provider.narrate = async () => {
-    throw new Error('Narration interrupted');
-  };
+  pauseNarration(f);
   f.submit();
   await f.game.idle();
   const saved = asV1(f.draft());
@@ -365,6 +431,7 @@ it('rolls back a fact repair and its audit event together if saving the repaired
   f.db.exec(
     `CREATE TRIGGER interrupt_repair BEFORE UPDATE OF draft ON turns WHEN NEW.draft LIKE '%"resolutionRevision":1%' BEGIN SELECT RAISE(ABORT, 'repair interrupted'); END;`,
   );
+  f.db.exec('DROP TRIGGER IF EXISTS interrupt_narration');
   f.provider.narrate = f.narrate;
   f.game.retry(f.campaign.id, f.host.id);
   await f.game.idle();
@@ -431,14 +498,13 @@ it('retains an accepted routine success when finalization later incapacitates th
       rewards: { xp: 0, gold: 0, reason: 'No discovery.' },
     };
   });
-  f.provider.narrate = async () => {
-    throw new Error('Narration interrupted');
-  };
+  pauseNarration(f);
   f.game.submit(f.campaign.id, f.actor.playerId, f.turnId, 'Open the unlocked shutter', false);
   await f.game.idle();
   const saved = f.draft();
   expect(saved.resolution.actions[0].status).toBe('success');
   expect(saved.members.find((member: any) => member.id === f.actor.id).state.conditions).toContain('Downed');
+  f.db.exec('DROP TRIGGER IF EXISTS interrupt_narration');
   f.provider.narrate = f.narrate;
   f.game.retry(f.campaign.id, f.host.id);
   await f.game.idle();
@@ -454,9 +520,7 @@ it('rejects an old minor-only receipt used as proof of an unrecorded main succes
   const f = await fixture();
   f.actor.state.hp -= 4;
   f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(f.actor.state), f.actor.id);
-  f.provider.narrate = async () => {
-    throw new Error('Narration interrupted');
-  };
+  pauseNarration(f);
   f.game.submit(f.campaign.id, f.actor.playerId, f.turnId, 'Drink Red Potion', false);
   await f.game.idle();
   const saved = asV1(f.draft());
@@ -464,6 +528,7 @@ it('rejects an old minor-only receipt used as proof of an unrecorded main succes
     value.actions[0].fact = 'Amon drinks the potion and opens the sealed gate.';
   f.save(saved);
   const calls = f.adjudicate.mock.calls.length;
+  f.db.exec('DROP TRIGGER IF EXISTS interrupt_narration');
   f.provider.narrate = f.narrate;
   f.game.retry(f.campaign.id, f.host.id);
   await f.game.idle();

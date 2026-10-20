@@ -102,7 +102,7 @@ it('freezes the whole projected encounter group, including later arrivals', () =
   expect(() => prepareEncounterChecks(context, value, saved, () => 6)).toThrow(/group|destination/i);
 });
 
-it('requires a fresh assessment when established danger changes at a saved safe place', () => {
+it('uses grounded danger state rather than hazard string differences at a saved safe place', () => {
   const { context, value } = fixture();
   context.scene.memberLocations!.scout = 'inn';
   value.placeUpdates = [
@@ -111,7 +111,7 @@ it('requires a fresh assessment when established danger changes at a saved safe 
       location: { name: 'Inn', atmosphere: '', hazard: 'Raiders have seized the unguarded courtyard.' },
     },
   ];
-  expect(() => prepareEncounterChecks(context, value, {}, () => 6)).toThrow(/assess|encounterRisks|danger/i);
+  expect(prepareEncounterChecks(context, value, {}, () => 6).checks.inn.danger).toBe('safe');
   const eventId = 'world:new-danger';
   value.events.push({
     id: eventId,

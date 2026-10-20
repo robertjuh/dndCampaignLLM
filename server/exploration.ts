@@ -50,7 +50,8 @@ export function validateExploration(
         (combatActive(memberScene(context.scene, member.id)) &&
           !(context.receipts?.startCombatByLocation as Record<string, unknown> | undefined)?.[
             memberScene(context.scene, member.id).location.id!
-          ] && !context.receipts?.startCombat)
+          ] &&
+          !context.receipts?.startCombat)
       )
         throw new Error('Exploration search evidence needs a resolved noncombat main search action.');
       const placeId = resolve(search.locationId);
@@ -105,7 +106,12 @@ export function validateExploration(
         ...context.scene,
         worldMap: {
           nodes: context.scene.worldMap?.nodes ?? {},
-          connections: turnConnections(context.scene, value, resolve),
+          connections: turnConnections(
+            context.scene,
+            value,
+            resolve,
+            value.memberLocations?.find((position) => position.memberId === member.id)?.movementEventId,
+          ),
         },
       };
       const next =

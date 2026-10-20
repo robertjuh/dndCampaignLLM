@@ -340,7 +340,7 @@ export function EquipmentPanel({
     return updated;
   };
   return (
-    <div className="equipment-manager">
+    <div className={`equipment-manager ${open ? 'is-open' : ''}`}>
       <button
         className="equipment-toggle"
         aria-label="Equipment & backpack"
@@ -360,92 +360,90 @@ export function EquipmentPanel({
           {feedback}
         </p>
       )}
-      {lockReason && (open || (!combatActive && snapshot.scene.loot.length > 0)) && (
+      {lockReason && (
         <p className="gear-lock" role="status">
           {lockReason}
         </p>
       )}
-      {open && (
-        <section className="gear-panel" id={panelId} aria-label="Equipment and backpack">
-          <h3>Equipped</h3>
-          <div className="equipment-slots">
-            {slots
-              .filter((slot) => !(slot === 'left' && state.equipment.left?.hands === 2))
-              .map((slot) => {
-                const item = state.equipment[slot];
-                const bothHands = (slot === 'left' || slot === 'right') && item?.hands === 2;
-                let stowReason = '';
-                if (item) {
-                  try {
-                    unequip(character, structuredClone(state), slot);
-                  } catch (error) {
-                    stowReason = (error as Error).message;
-                    if (stowReason.includes('Backpack full'))
-                      stowReason = 'Backpack full. Drop or equip an item before stowing this one.';
-                  }
+      <section className="gear-panel" id={panelId} aria-label="Equipment and backpack">
+        <h3>Equipped</h3>
+        <div className="equipment-slots">
+          {slots
+            .filter((slot) => !(slot === 'left' && state.equipment.left?.hands === 2))
+            .map((slot) => {
+              const item = state.equipment[slot];
+              const bothHands = (slot === 'left' || slot === 'right') && item?.hands === 2;
+              let stowReason = '';
+              if (item) {
+                try {
+                  unequip(character, structuredClone(state), slot);
+                } catch (error) {
+                  stowReason = (error as Error).message;
+                  if (stowReason.includes('Backpack full'))
+                    stowReason = 'Backpack full. Drop or equip an item before stowing this one.';
                 }
-                return (
-                  <article
-                    key={slot}
-                    className={`equipment-slot ${bothHands ? 'both-hands' : ''}`}
-                    aria-label={bothHands ? 'Both hands' : slotLabels[slot]}
-                  >
-                    <span className="eyebrow">{bothHands ? 'Both hands' : slotLabels[slot]}</span>
-                    {item ? (
-                      <>
-                        <b>
-                          <ItemIcon kind={item.kind} />
-                          {item.name}
-                        </b>
-                        <ItemDetails item={item} compact />
-                        {stowReason && <p className="gear-reason">{stowReason}</p>}
-                        <button
-                          className="button secondary"
-                          disabled={!!lockReason || !!stowReason}
-                          title={stowReason || undefined}
-                          onClick={() => manage({ type: 'unequip', slot })}
-                        >
-                          Stow item
-                        </button>
-                      </>
-                    ) : (
-                      <p className="muted">
-                        {character.traits.some((trait) => trait.blocked.includes(slot))
-                          ? 'Unavailable for this character'
-                          : 'Empty'}
-                      </p>
-                    )}
-                  </article>
-                );
-              })}
-          </div>
-          <div className="backpack-heading">
-            <h3>Backpack</h3>
-            <span>
-              {occupiedSlots(state)}/{capacity(character)} slots
-            </span>
-          </div>
-          <p className="muted small">
-            Equipped gear uses no backpack space. Consumables stack three per slot. Self healing is instant;
-            healing a party member uses your turn.
-          </p>
-          {state.inventory.length ? (
-            state.inventory.map((item) => (
-              <EquipmentItem
-                key={item.id}
-                item={item}
-                member={member}
-                snapshot={snapshot}
-                lockReason={lockReason}
-                healingLockReason={healingLockReason}
-                manage={manage}
-              />
-            ))
-          ) : (
-            <p className="muted">Your backpack is empty.</p>
-          )}
-        </section>
-      )}
+              }
+              return (
+                <article
+                  key={slot}
+                  className={`equipment-slot ${bothHands ? 'both-hands' : ''}`}
+                  aria-label={bothHands ? 'Both hands' : slotLabels[slot]}
+                >
+                  <span className="eyebrow">{bothHands ? 'Both hands' : slotLabels[slot]}</span>
+                  {item ? (
+                    <>
+                      <b>
+                        <ItemIcon kind={item.kind} />
+                        {item.name}
+                      </b>
+                      <ItemDetails item={item} compact />
+                      {stowReason && <p className="gear-reason">{stowReason}</p>}
+                      <button
+                        className="button secondary"
+                        disabled={!!lockReason || !!stowReason}
+                        title={stowReason || undefined}
+                        onClick={() => manage({ type: 'unequip', slot })}
+                      >
+                        Stow item
+                      </button>
+                    </>
+                  ) : (
+                    <p className="muted">
+                      {character.traits.some((trait) => trait.blocked.includes(slot))
+                        ? 'Unavailable for this character'
+                        : 'Empty'}
+                    </p>
+                  )}
+                </article>
+              );
+            })}
+        </div>
+        <div className="backpack-heading">
+          <h3>Backpack</h3>
+          <span>
+            {occupiedSlots(state)}/{capacity(character)} slots
+          </span>
+        </div>
+        <p className="muted small">
+          Equipped gear uses no backpack space. Consumables stack three per slot. Self healing is instant;
+          healing a party member uses your turn.
+        </p>
+        {state.inventory.length ? (
+          state.inventory.map((item) => (
+            <EquipmentItem
+              key={item.id}
+              item={item}
+              member={member}
+              snapshot={snapshot}
+              lockReason={lockReason}
+              healingLockReason={healingLockReason}
+              manage={manage}
+            />
+          ))
+        ) : (
+          <p className="muted">Your backpack is empty.</p>
+        )}
+      </section>
       {!combatActive && snapshot.scene.loot.length > 0 && (
         <section className="ground-loot" aria-label="Nearby loot">
           <div className="backpack-heading">

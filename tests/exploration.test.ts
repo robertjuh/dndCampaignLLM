@@ -1,3 +1,4 @@
+import { interruptNarration } from './narration-interruption';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -465,7 +466,7 @@ it('resumes saved search rewards after a narration interruption without rerollin
   const f = await table();
   const narrate = f.provider.narrate!;
   f.provider.narrate = async () => {
-    throw new Error('Controlled interruption');
+    interruptNarration(f.db, 'Controlled interruption');
   };
   const id = await f.submit();
   const saved = JSON.parse(

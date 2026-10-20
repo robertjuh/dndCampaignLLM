@@ -11,6 +11,9 @@ import { campaignLanguageSchema, characterSchema, levelUpChoiceSchema, slots } f
 import type { GoogleAuth } from './google';
 import { tokenHash } from './game';
 import type { ModelTraceSink } from './model-log';
+import { randomUUID } from 'node:crypto';
+import { generatePortrait, PortraitError } from './portraits';
+import type { CampaignConfig } from '../shared/schema';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -18,6 +21,11 @@ declare module 'fastify' {
   }
 }
 const idParams = z.object({ id: z.string().uuid() });
+const inviteCodeInput = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(/^(?:[A-Z0-9]{4}|[A-F0-9]{12})$/);
 const actionInput = z
   .object({
     turnId: z.string().uuid(),
@@ -109,6 +117,7 @@ export async function createApp(options: {
     ...request.player,
     characters: game.characters(request.player.id),
     campaigns: game.list(request.player.id),
+    joinAtRoot: (options.partyOrigins ?? []).some((origin) => new URL(origin).host === request.headers.host),
   }));
   app.post('/api/profile', async (request) => {
     const { name } = z
@@ -134,7 +143,9 @@ export async function createApp(options: {
         returnTo: z
           .string()
           .max(300)
-          .regex(/^\/(?:settings|characters|join\/[a-fA-F0-9]{12}|campaign\/[a-f0-9-]{36})?$/)
+          .regex(
+            /^\/(?:settings|characters|(?:join\/)?(?:[a-zA-Z0-9]{4}|[a-fA-F0-9]{12})|campaign\/[a-f0-9-]{36})?$/,
+          )
           .default('/settings'),
       })
       .strict()
@@ -187,6 +198,17 @@ export async function createApp(options: {
     return reply.redirect(result.url);
   });
   app.post('/api/characters', async (request) => game.saveCharacter(request.player.id, request.body));
+  app.get('/api/portraits/:id', async (request, reply) => {
+    const portrait = options.db
+      .prepare('SELECT image FROM character_portraits WHERE id = ?')
+      .get(campaignId(request)) as { image: Buffer } | undefined;
+    if (!portrait) throw new GameError('Portrait not found.', 404);
+    // The random image ID is a shareable capability, including for the shared display.
+    return reply
+      .header('Cache-Control', 'private, max-age=31536000, immutable')
+      .type('image/jpeg')
+      .send(portrait.image);
+  });
   app.get('/api/characters/ability-stats', async (request) => {
     if (!loopback(request.ip))
       throw new GameError('Ability choice statistics are available on the host computer at 127.0.0.1.', 403);
@@ -205,23 +227,22 @@ export async function createApp(options: {
         name: characterSchema.shape.name.optional(),
         model: z.string().max(100).default(''),
         campaignId: z.string().uuid().optional(),
-        code: z
-          .string()
-          .regex(/^[a-fA-F0-9]{12}$/)
-          .optional(),
+        code: inviteCodeInput.optional(),
       })
       .strict()
       .parse(request.body);
     let provider = new ChatGPTGM(options.auth, request.player.id, model) as import('./game').GameMaster;
     let context = concept || 'Surprise me with a completely randomized protagonist.';
+    let portraitCampaign: CampaignConfig | undefined;
     if (code || campaignId) {
       if (campaignId) game.canRead(campaignId, request.player.id);
       const campaign = game.campaign(campaignId ?? game.invite(code!).id);
-      provider = providers(campaign.owner_id, JSON.parse(campaign.config));
+      portraitCampaign = JSON.parse(campaign.config) as CampaignConfig;
+      provider = providers(campaign.owner_id, portraitCampaign);
       context = JSON.stringify({
         playerConcept: context,
         ...(name ? { characterName: name } : {}),
-        campaign: JSON.parse(campaign.config),
+        campaign: portraitCampaign,
       });
     } else if (name) context = JSON.stringify({ playerConcept: context, characterName: name });
     if (!provider.generate) throw new GameError('Character generation is not available.');
@@ -231,20 +252,42 @@ export async function createApp(options: {
     };
     reply.raw.on('close', cancel);
     try {
-      const character = await provider.generate(context, controller.signal);
-      return characterSchema.parse({ ...character, ...(name ? { name } : {}) });
+      const character = characterSchema.parse({
+        ...(await provider.generate(context, controller.signal)),
+        ...(name ? { name } : {}),
+        portraitId: undefined,
+        portraitError: undefined,
+      });
+      if (portraitCampaign?.provider !== 'practice') {
+        try {
+          const image = await generatePortrait(character, portraitCampaign, controller.signal);
+          const portraitId = randomUUID();
+          options.db.prepare('INSERT INTO character_portraits(id, image) VALUES(?, ?)').run(portraitId, image);
+          character.portraitId = portraitId;
+        } catch (error) {
+          if (controller.signal.aborted) throw new GameError('Generation was cancelled.', 499);
+          character.portraitError =
+            error instanceof PortraitError
+              ? error.message
+              : error instanceof Error && error.name === 'TimeoutError'
+                ? 'Portrait generation timed out. Your character is ready to save.'
+                : 'The portrait could not be created. Your character is ready to save.';
+        }
+      }
+      controller.signal.throwIfAborted();
+      return character;
     } finally {
       reply.raw.off('close', cancel);
     }
   });
   app.post('/api/campaigns', async (request) => game.create(request.player.id, request.body));
   app.get('/api/invites/:code', async (request) =>
-    game.invite(z.object({ code: z.string().regex(/^[a-fA-F0-9]{12}$/) }).parse(request.params).code),
+    game.invite(z.object({ code: inviteCodeInput }).parse(request.params).code),
   );
   app.post('/api/join', async (request) => {
     const input = z
       .object({
-        code: z.string().regex(/^[a-fA-F0-9]{12}$/),
+        code: inviteCodeInput,
         playerName: z.string().trim().min(1).max(60),
         characterId: z.string().uuid(),
       })

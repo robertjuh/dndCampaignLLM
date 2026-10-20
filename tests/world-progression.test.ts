@@ -5,6 +5,8 @@ import {
   advanceWorldProgression,
   validateWorldProgression,
   worldProgressionContext,
+  JournalCapacityError,
+  worldProgressDue,
 } from '../server/world-progression';
 import { initialScene, initialState } from '../shared/rules';
 import { updateLocation } from '../shared/locations';
@@ -132,7 +134,7 @@ function progress(value: TurnAdjudication, locationId = 'road') {
   return value.events.at(-1)!;
 }
 
-it('counts once per occupied location, preserves separate counters across focus changes and requires progress when due', () => {
+it('counts once per occupied location and keeps pacing due without blocking a valid outcome', () => {
   const c = context();
   c.scene.memberLocations!['member-b'] = 'road';
   c.scene.worldProgression = advanceWorldProgression(c, proposal(c), resolve);
@@ -143,8 +145,11 @@ it('counts once per occupied location, preserves separate counters across focus 
   c.turn.number = 2;
   c.turn.actions[1].passed = true;
   const value = proposal(c);
-  expect(() => validateWorldProgression(c, value, resolve)).toThrow('World progression is due at road');
+  expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
+  expect(worldProgressDue(c, value, resolve)).toEqual(['road']);
+  expect(advanceWorldProgression(c, value, resolve)!.places.road.stalledTurns).toBe(2);
   progress(value);
+  expect(worldProgressDue(c, value, resolve)).toEqual([]);
   expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
   const state = advanceWorldProgression(c, value, resolve)!;
   expect(state.places.road.stalledTurns).toBe(0);
@@ -175,18 +180,34 @@ it('does not advance or force pacing for passes, orientation, blocked actions or
   }
 });
 
-it('requires first arrivals to have meaningful grounded evidence even outside shared focus', () => {
+it('accepts first arrivals without thread progress even outside shared focus', () => {
   const c = context();
   const value = proposal(c);
-  value.memberLocations = [{ memberId: 'member-b', locationId: 'new:workshop' }];
+  const action = value.actions.find((action) => action.memberId === 'member-b')!;
+  value.events.push({
+    id: 'move:b',
+    sequence: 0,
+    kind: 'action',
+    actionId: action.actionId,
+    memberId: 'member-b',
+    phase: 'main',
+    effect: 'movement',
+    result: 'success',
+    locationRef: 'new:workshop',
+    fact: 'The traveller reaches the workshop.',
+    receiptRefs: [],
+    dependsOn: [],
+  });
+  value.memberLocations = [{ memberId: 'member-b', locationId: 'new:workshop', movementEventId: 'move:b' }];
   value.arrivals = [{ locationId: 'new:workshop', eventId: 'world:arrival' }];
-  expect(() => validateWorldProgression(c, value, resolve)).toThrow('first arrival');
+  expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
+  expect(advanceWorldProgression(c, value, resolve)!.places.workshop.stalledTurns).toBe(1);
   progress(value, 'new:workshop');
   expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
   expect(advanceWorldProgression(c, value, resolve)!.places.workshop.stalledTurns).toBe(0);
 });
 
-it('rejects unknown threads, remote or bookkeeping events, and unchanged journal facts', () => {
+it('rejects unknown threads and remote/bookkeeping events, and persists missing journal increments locally', () => {
   const c = context();
   const value = proposal(c);
   const event = progress(value);
@@ -203,7 +224,9 @@ it('rejects unknown threads, remote or bookkeeping events, and unchanged journal
   expect(() => validateWorldProgression(c, value, resolve)).toThrow('one canonical journal update');
   value.journal.pop();
   value.journal[0].detail = c.journal[0].detail;
-  expect(() => validateWorldProgression(c, value, resolve)).toThrow('changed public journal');
+  expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
+  expect(value.journal[0].detail).toContain(event.fact);
+  expect(value.journal[0].detail).toContain(c.journal[0].detail);
 });
 
 it('rejects recycled world or search facts even when a new event ID and journal text are supplied', () => {
@@ -220,14 +243,45 @@ it('rejects recycled world or search facts even when a new event ID and journal 
   expect(() => validateWorldProgression(c, value, resolve)).toThrow('Repeated facts');
 });
 
-it('requires the cited journal entry to retain the actual progress fact and permits consolidating prior knowledge', () => {
+it('persists canonical progress instead of unsupported journal prose, preserving history and remaining idempotent', () => {
   const c = context();
   const value = proposal(c);
   const event = progress(value);
   value.journal[0].detail = 'An unrelated change claims the captives’ exact hiding place is now known.';
-  expect(() => validateWorldProgression(c, value, resolve)).toThrow('exact concise event fact');
+  expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
+  expect(value.journal[0].detail).not.toContain('exact hiding place');
+  expect(value.journal[0].detail).toContain(event.fact);
+  expect(value.journal[0].detail).toContain(c.journal[0].detail);
+  const saved = value.journal[0].detail;
+  validateWorldProgression(c, value, resolve);
+  expect(value.journal[0].detail).toBe(saved);
   value.journal[0].detail = `${c.journal[0].detail} ${event.fact.toUpperCase()}`;
   expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
+});
+
+it('preserves an already validated encounter checkpoint journal exactly when resuming older saves', () => {
+  const c = context();
+  const value = proposal(c);
+  progress(value);
+  c.receipts = { encounterProposal: structuredClone(value) };
+  c.journal[0].detail = 'Earlier knowledge in different wording.';
+  const frozen = structuredClone(value.journal);
+  validateWorldProgression(c, value, resolve);
+  expect(value.journal).toEqual(frozen);
+});
+
+it('accepts a supplied consolidation at the journal limit and requests bounded repair when canonical append cannot fit', () => {
+  const c = context();
+  const value = proposal(c);
+  const event = progress(value);
+  c.journal[0].detail = 'Earlier observation. '.repeat(70);
+  const consolidated = `Earlier observations are retained. ${event.fact}`;
+  value.journal[0].detail = consolidated;
+  validateWorldProgression(c, value, resolve);
+  expect(value.journal[0].detail).toBe(consolidated);
+  expect(c.journal[0].detail).toHaveLength(1470);
+  value.journal[0].detail = 'A paraphrase of the new observation.';
+  expect(() => validateWorldProgression(c, value, resolve)).toThrow(JournalCapacityError);
 });
 
 it('keeps failed searches failed while accepting a distinct opportunity dependent on the failed attempt occurring', () => {

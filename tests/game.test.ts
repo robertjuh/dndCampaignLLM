@@ -335,7 +335,7 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
   cleanup.unshift(() => db.close());
   const game = new Game(db, () => ({ resolve: async () => outcome() }));
   const restored = game.snapshot(f.c.id, f.host.id);
-  expect(db.pragma('user_version', { simple: true })).toBe(17);
+  expect(db.pragma('user_version', { simple: true })).toBe(20);
   expect(restored.members[0].state).toMatchObject({
     hp: 7,
     level: 3,
@@ -372,6 +372,9 @@ it('removes obsolete rest state from existing saves and resumes finalized turns 
   const f = fixture(provider, filename);
   const turn = await start(f);
   interrupt = true;
+  f.db.exec(
+    `CREATE TRIGGER interrupt_narration BEFORE UPDATE OF draft ON turns WHEN NEW.draft LIKE '%"narration":%' BEGIN SELECT RAISE(ABORT, 'narration checkpoint interrupted'); END;`,
+  );
   f.game.submit(f.c.id, f.p1.id, turn.id, '', true);
   f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
   await f.game.idle();
@@ -409,6 +412,7 @@ it('removes obsolete rest state from existing saves and resumes finalized turns 
   expect(game.snapshot(f.c.id, f.host.id).scene).toEqual(scene);
   expect(db.prepare("SELECT result,draft FROM turns WHERE phase = 'complete'").all()).toEqual(history);
   interrupt = false;
+  db.exec('DROP TRIGGER interrupt_narration');
   game.retry(f.c.id, f.host.id);
   await game.idle();
   expect(game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
@@ -3235,5 +3239,5 @@ it('removes saved healing types from templates, gear, replacements and pending t
     (db.prepare('SELECT draft FROM turns WHERE id = ?').get('old-healing-history') as { draft: string })
       .draft,
   ).toBe(draft);
-  expect(db.pragma('user_version', { simple: true })).toBe(17);
+  expect(db.pragma('user_version', { simple: true })).toBe(20);
 });

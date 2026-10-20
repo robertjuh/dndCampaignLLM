@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { interruptNarration } from './narration-interruption';
 import { openDatabase } from '../server/db';
 import { Game, type CombatReceipt, type GameMaster, type GMContext } from '../server/game';
 import { adjudicationInput } from '../server/providers';
@@ -181,7 +182,7 @@ it.each([false, true])(
       if (!started) {
         tools.startCombat([enemy('ravine-raider')], ravine);
         expect(() => tools.startCombat([enemy('ravine-raider')], cave)).toThrow(
-          'unique across active encounters',
+          /unique across active encounters|not at the encounter's origin/,
         );
         tools.startCombat([enemy('cave-raider')], cave);
         expect(() => tools.combat(normalizeCombatInput(context), ravine)).toThrow('just begun');
@@ -244,7 +245,7 @@ it.each([false, true])(
         return routine(context);
       };
       f.provider.narrate = async (resolution, config) => {
-        if (interrupt) throw new Error('Interrupted after local combat receipts.');
+        if (interrupt) interruptNarration(f.db, 'Interrupted after local combat receipts.');
         return factualNarration(resolution, config.language);
       };
     }

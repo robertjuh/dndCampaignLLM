@@ -133,6 +133,7 @@ it('repairs an unresolved move with its actor and omitted event sequence, preser
   }) as unknown as typeof fetch;
   const result = await new ChatGPTGM(auth, 'owner', 'model', fetcher).adjudicate(context, tools);
   expect(fetcher).toHaveBeenCalledTimes(2); // The existing single repair, never a new retry.
+  expect(result.encounterRisks).toBeUndefined(); // Legacy repairs do not activate a newer protocol.
   expect(result.memberLocations).toEqual(expect.arrayContaining(corrected.memberLocations!));
   expect(result.events.map((event) => event.sequence)).toEqual(result.events.map((_, index) => index));
   expect(() =>

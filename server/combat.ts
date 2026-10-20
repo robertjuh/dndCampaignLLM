@@ -4,6 +4,8 @@ import { isDowned, naturalWeapon } from '../shared/rules';
 import type { GMContext } from './game';
 import { requestedAbility, requestedConsumable } from './action-resources';
 import { validateEnvironmentalAction } from './environment';
+import { validateNPCReactions } from './npc-reactions';
+import { findNPC, npcNames } from '../shared/npcs';
 
 type CombatAction = CombatInput['actions'][number];
 const fields = combatSchema.shape.actions.element.shape;
@@ -27,7 +29,7 @@ function submittedIntent(text: string, proposed: unknown): CombatAction['main'] 
   // ponytail: guard clear English/Dutch intent; the model handles idioms, not a full language parser.
   const primary = text.split(/\b(?:before|after|while|voordat|nadat|terwijl)\b/)[0];
   const refusal =
-    /\b(?:do not|don't|won't|will not|refuse to)\s+(?:attack|fight|shoot|strike|hit)\b|\b(?:niet aanvallen|niet vechten|geen aanval)\b/g;
+    /\b(?:do not|don't|won't|will not|refuse to)\s+(?:attack|fight|shoot|strike|hit)\b|\b(?:niet aanvallen|niet vechten|geen aanval)\b|\bval(?:len)?\b[^.!?;]*\bniet\b[^.!?;]*\baan\b/g;
   const refusesAttack = refusal.test(primary);
   const intent = primary.replace(refusal, '');
   const choices: CombatAction['main'][] = [];
@@ -40,7 +42,8 @@ function submittedIntent(text: string, proposed: unknown): CombatAction['main'] 
   if (
     /(?:^|[;:,.!?]|\b(?:and|then|en|dan|to|om)\b)\s*(?:(?:i|ik)\s+(?:(?:will|want to|try to|attempt to|wil|probeer te)\s+)?)?(?:attack|strike|hit|shoot|stab|punch|kick|bite|slash|blast|fire(?!\s+up)|aanval|aanvallen|schiet|sla|steek|schop|bijt)\b/.test(
       intent,
-    )
+    ) ||
+    (!refusesAttack && /\b(?:val|vallen)\b[^.!?;]*\baan\b/.test(intent))
   )
     choices.push('attack');
   if (/\b(?:defend|guard|protect|take cover|verdedig\w*|bescherm\w*|bewaak)\b/.test(intent))
@@ -89,8 +92,30 @@ function chooseWeapon(member: Member, text: string, action: CombatAction) {
 /** Turn model suggestions into one executable action per actual submission. */
 export function normalizeCombatInput(context: GMContext, input?: unknown): CombatInput {
   const proposal = object(input);
+  const npcReactions = validateNPCReactions(context, proposal.npcReactions);
+  const encounterEnemies = [
+    ...(context.scene.encounter?.enemies ?? []),
+    ...npcReactions.flatMap((reaction) =>
+      reaction.enemy && !context.scene.encounter?.enemies.some((enemy) => enemy.id === reaction.npcId)
+        ? [{ ...reaction.enemy, maxHp: reaction.enemy.hp, initiative: 0 }]
+        : [],
+    ),
+  ];
   const suggested = Array.isArray(proposal.actions) ? proposal.actions.map(object) : [];
-  const enemies = context.scene.encounter?.enemies.filter((enemy) => enemy.hp > 0 && !enemy.withdrawn) ?? [];
+  const targetId = (ref: unknown) => {
+    if (typeof ref !== 'string') return ref;
+    const reactionIndex = Array.isArray(proposal.npcReactions)
+      ? proposal.npcReactions.findIndex((reaction) => object(reaction).npcId === ref)
+      : -1;
+    return (
+      (reactionIndex >= 0 ? npcReactions[reactionIndex]?.npcId : undefined) ??
+      findNPC(context.scene, ref)?.id ??
+      ref
+    );
+  };
+  const enemies = encounterEnemies.filter(
+    (enemy) => enemy.hp > 0 && !('withdrawn' in enemy && enemy.withdrawn),
+  );
   const allies = context.members.filter(
     (member) =>
       context.turn.roster.includes(member.id) &&
@@ -102,7 +127,12 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
     .filter((action) => !action.passed)
     .map((submitted): CombatAction => {
       const member = context.members.find((member) => member.id === submitted.memberId)!;
-      const chosen = suggested.find((action) => action.memberId === submitted.memberId) ?? {};
+      const suggestion = suggested.find((action) => action.memberId === submitted.memberId) ?? {};
+      const chosen: Record<string, unknown> = {
+        ...suggestion,
+        targetId: targetId(suggestion.targetId),
+        backupTargetId: targetId(suggestion.backupTargetId),
+      };
       const text = submitted.text.toLowerCase();
       if (submitted.supportAction) {
         const support = submitted.supportAction;
@@ -228,10 +258,13 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         : neutral
           ? [...enemies, ...allyTargets]
           : main === 'attack' || ability?.effect === 'strike'
-            ? (context.scene.encounter?.enemies ?? [])
+            ? encounterEnemies
             : enemies;
       const namedTargets = targets
-        .filter((target) => mentions(text, target.name))
+        .filter((target) => {
+          const npc = findNPC(context.scene, target.id);
+          return (npc ? npcNames(npc) : [target.name]).some((name) => mentions(text, name));
+        })
         .sort((a, b) => text.indexOf(a.name.toLowerCase()) - text.indexOf(b.name.toLowerCase()));
       const vagueAttack =
         /^(?:(?:i|ik)\s+)?(?:attack|strike|hit|aanvallen|aanval)(?:\s+(?:(?:the|an|a|de|een)\s+)?(?:enemy|opponent|foe|vijand))?\s*[.!?]?\s*$/.test(
@@ -383,6 +416,21 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       if (action.main === 'attack') action.stat = chooseWeapon(member, text, action).scaling[0] ?? 'STR';
       // Target availability and strike eligibility come from the engine, including retargeting.
       if (action.main === 'attack' || ability?.effect === 'strike') delete action.blockedReason;
+      if (
+        !support &&
+        (action.main === 'attack' || ability?.effect === 'strike') &&
+        typeof chosen.targetId === 'string' &&
+        !encounterEnemies.some((enemy) => enemy.id === chosen.targetId)
+      ) {
+        const external = npcReactions.find((reaction) => reaction.npcId === chosen.targetId);
+        action.targetId = null;
+        action.allowRetarget = false;
+        action.blockedReason =
+          external?.fact ??
+          (context.config.language === 'Nederlands'
+            ? 'Het gevraagde doelwit is hier niet bereikbaar; de aanval wordt niet op een ander gericht.'
+            : 'The requested target cannot be reached here; the attack is not redirected to someone else.');
+      }
       return action;
     });
   const targets = Array.isArray(proposal.enemyTargets) ? proposal.enemyTargets.map(object) : [];
@@ -397,6 +445,7 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
     )
     .map(({ enemyId, memberId }) => ({ enemyId, memberId }));
   return combatSchema.parse({
+    ...(npcReactions.length ? { npcReactions } : {}),
     actions,
     enemyTargets,
     loot: parse(lootSchema, proposal.loot, {

@@ -60,7 +60,7 @@ export function CharacterEditor({
     generation.current = controller;
     const timeout = window.setTimeout(
       () => controller.abort(new DOMException('Generation timed out', 'TimeoutError')),
-      125_000,
+      245_000,
     );
     setBusy(true);
     setElapsed(0);
@@ -198,7 +198,8 @@ export function CharacterEditor({
         {generationStarted !== null && (
           <>
             <p className="muted small" role="status">
-              ChatGPT is creating your character · {elapsed}s elapsed. This can take up to two minutes.
+              ChatGPT is creating your character and portrait · {elapsed}s elapsed. This can take up to four
+              minutes.
             </p>
             <button type="button" className="text-link" onClick={() => generation.current?.abort()}>
               Cancel generation

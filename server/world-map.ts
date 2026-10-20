@@ -84,17 +84,138 @@ export function travelOptions(context: GMContext) {
   );
 }
 
+/** Witnesses use the character's position at the event, not both ends of a later move. */
+export function memberLocationAtEvent(
+  context: GMContext,
+  value: TurnAdjudication,
+  memberId: string,
+  eventId: string,
+  resolve: (ref: string) => string,
+) {
+  const origin = memberScene(context.scene, memberId).location.id!;
+  const position = value.memberLocations?.find((position) => position.memberId === memberId);
+  if (!position) return origin;
+  if (context.turn.number === 0) return resolve(position.locationId);
+  const movements = value.events.filter((event) =>
+    position.movementEventId
+      ? event.id === position.movementEventId
+      : event.memberId === memberId &&
+        event.result === 'success' &&
+        (event.phase === 'movement' || event.effect === 'movement'),
+  );
+  const event = value.events.find((event) => event.id === eventId);
+  return movements.length === 1 && event && movements[0].sequence <= event.sequence
+    ? resolve(position.locationId)
+    : origin;
+}
+
 /** Include evidenced route changes in this turn's movement and path validation. */
-export function turnConnections(scene: Scene, value: TurnAdjudication, resolve: (ref: string) => string) {
-  const updates = (value.mapUpdates?.connections ?? []).map(({ eventId: _eventId, ...edge }) => ({
-    ...edge,
-    from: resolve(edge.from),
-    to: resolve(edge.to),
-  }));
+export function turnConnections(
+  scene: Scene,
+  value: TurnAdjudication,
+  resolve: (ref: string) => string,
+  untilEventId?: string,
+) {
+  const cutoff = untilEventId
+    ? (value.events.find((event) => event.id === untilEventId)?.sequence ?? Infinity)
+    : Infinity;
+  const updates = (value.mapUpdates?.connections ?? [])
+    .filter((edge) => {
+      const sequence = value.events.find((event) => event.id === edge.eventId)?.sequence ?? Infinity;
+      // A closure recorded with an arrival takes effect after that crossing.
+      return sequence < cutoff || (sequence === cutoff && !edge.blocked);
+    })
+    .map(({ eventId: _eventId, ...edge }) => ({
+      ...edge,
+      from: resolve(edge.from),
+      to: resolve(edge.to),
+    }));
   const pairs = new Set(updates.map((edge) => [edge.from, edge.to].sort().join('|')));
   return (scene.worldMap?.connections ?? [])
     .filter((edge) => !pairs.has([edge.from, edge.to].sort().join('|')))
     .concat(updates);
+}
+
+/** An uncaused local opening can precede its crossing without another model repair. */
+export function orderRouteOpenings(
+  context: GMContext,
+  value: TurnAdjudication,
+  resolve: (ref: string) => string,
+) {
+  for (const edge of value.mapUpdates?.connections ?? []) {
+    if (edge.blocked) continue;
+    const opening = value.events.find((event) => event.id === edge.eventId);
+    if (
+      !opening ||
+      opening.kind !== 'world' ||
+      opening.dependsOn.length ||
+      opening.presentation ||
+      !opening.locationRef
+    )
+      continue;
+    const from = resolve(edge.from),
+      to = resolve(edge.to);
+    if (
+      !context.scene.worldMap?.connections.some(
+        (old) =>
+          old.blocked && ((old.from === from && old.to === to) || (old.from === to && old.to === from)),
+      )
+    )
+      continue;
+    const crossing = value.events.find((event) => {
+      const member = context.members.find((member) => member.id === event.memberId);
+      const origin = member && memberScene(context.scene, member.id).location.id;
+      const target =
+        event.locationRef ??
+        value.memberLocations?.find(
+          (position) => position.memberId === event.memberId && position.movementEventId === event.id,
+        )?.locationId;
+      return (
+        origin &&
+        resolve(opening.locationRef!) === origin &&
+        event.result === 'success' &&
+        (event.phase === 'movement' || event.effect === 'movement') &&
+        target &&
+        ((origin === from && resolve(target) === to) || (origin === to && resolve(target) === from))
+      );
+    });
+    if (!crossing || value.events.indexOf(opening) < value.events.indexOf(crossing)) continue;
+    value.events.splice(value.events.indexOf(opening), 1);
+    value.events.splice(value.events.indexOf(crossing), 0, opening);
+    value.events.forEach((event, sequence) => (event.sequence = sequence));
+  }
+  return value;
+}
+
+/** Public remote changes must trace back to an actual local submitted action. */
+export function eventCausedLocally(
+  context: GMContext,
+  value: TurnAdjudication,
+  eventId: string,
+  resolve: (ref: string) => string,
+  seen = new Set<string>(),
+): boolean {
+  if (seen.has(eventId)) return false;
+  seen.add(eventId);
+  const event = value.events.find((event) => event.id === eventId);
+  if (!event) return false;
+  const actor = context.members.find((member) => member.active && member.id === event.memberId);
+  const position = value.memberLocations?.find((position) => position.memberId === actor?.id);
+  if (
+    event.kind === 'action' &&
+    actor &&
+    event.result !== 'blocked' &&
+    context.turn.actions.some((action) => action.memberId === actor.id && !action.passed) &&
+    event.locationRef &&
+    [
+      memberScene(context.scene, actor.id).location.id,
+      ...(position ? [resolve(position.locationId)] : []),
+    ].includes(resolve(event.locationRef))
+  )
+    return true;
+  return event.dependsOn.some((dependency) =>
+    eventCausedLocally(context, value, dependency.eventId, resolve, seen),
+  );
 }
 
 /** Only observable, immediately adjacent routes become public map commitments. */
@@ -129,6 +250,7 @@ export function validateWorldMap(
   }
   if (context.turn.number === 0 && !value.memberLocations?.length) occupied.add(context.scene.location.id!);
   const updates = value.mapUpdates?.connections ?? [];
+  const causedLocally = (eventId: string) => eventCausedLocally(context, value, eventId, resultingRef);
   const pairs = new Set<string>();
   for (const connection of updates) {
     if ([connection.from, connection.to].includes('destination'))
@@ -140,21 +262,35 @@ export function validateWorldMap(
     const pair = [from, to].sort().join('|');
     if (pairs.has(pair)) throw new Error('Update each map connection only once per turn.');
     pairs.add(pair);
-    if (!occupied.has(from) && !occupied.has(to))
-      throw new Error(
-        'Discover routes from a character’s occupied location, not beyond an unvisited preview.',
-      );
     const event = value.events.find((event) => event.id === connection.eventId);
     if (!event || !['world', 'action'].includes(event.kind) || event.presentation === 'log')
       throw new Error('Map connections need a public world or action event establishing the route.');
+    const previous = context.scene.worldMap?.connections.find(
+      (edge) => (edge.from === from && edge.to === to) || (edge.from === to && edge.to === from),
+    );
+    // Remote controls can change a known route; they cannot discover routes beyond a preview.
+    const remoteChange =
+      !!previous &&
+      event.kind === 'world' &&
+      !!event.locationRef &&
+      [from, to].includes(resultingRef(event.locationRef)) &&
+      causedLocally(event.id);
+    const witnessed =
+      context.turn.number === 0
+        ? occupied
+        : new Set(
+            context.members
+              .filter((member) => member.active)
+              .map((member) => memberLocationAtEvent(context, value, member.id, event.id, resultingRef)),
+          );
+    if (!witnessed.has(from) && !witnessed.has(to) && !remoteChange)
+      throw new Error(
+        'Discover routes from a character’s occupied location, not beyond an unvisited preview.',
+      );
     if (event.kind === 'action') {
       const actor = context.members.find((member) => member.id === event.memberId);
-      const position = value.memberLocations?.find((position) => position.memberId === event.memberId);
       const actorPlaces = actor
-        ? [
-            memberScene(context.scene, actor.id).location.id!,
-            ...(position ? [resultingRef(position.locationId)] : []),
-          ]
+        ? [memberLocationAtEvent(context, value, actor.id, event.id, resultingRef)]
         : [];
       if (
         ![from, to].some((ref) => actorPlaces.includes(ref)) ||
@@ -164,13 +300,11 @@ export function validateWorldMap(
     }
     if (
       event.locationRef &&
-      (!occupied.has(resultingRef(event.locationRef)) ||
+      !remoteChange &&
+      (!witnessed.has(resultingRef(event.locationRef)) ||
         ![from, to].includes(resultingRef(event.locationRef)))
     )
       throw new Error('Route evidence must belong to its observable occupied endpoint.');
-    const previous = context.scene.worldMap?.connections.find(
-      (edge) => (edge.from === from && edge.to === to) || (edge.from === to && edge.to === from),
-    );
     if (previous?.blocked && !connection.blocked && event.kind === 'action' && event.result !== 'success')
       throw new Error('Opening a blocked route requires a successful action or an established world change.');
   }
@@ -184,12 +318,6 @@ export function validateWorldMap(
     )
       throw new Error('Every new map preview must connect directly to an occupied location.');
 
-  const connections = turnConnections(context.scene, value, resultingRef);
-  const gatheringScene = {
-    ...context.scene,
-    worldMap: { nodes: context.scene.worldMap?.nodes ?? {}, connections },
-  };
-  const gatherings = gatheringOptions({ ...context, scene: gatheringScene });
   for (const action of value.actions) {
     const submitted = context.turn.actions.find((entry) => entry.memberId === action.memberId);
     if (!submitted?.gathering) continue;
@@ -209,7 +337,14 @@ export function validateWorldMap(
     const from = memberScene(context.scene, member.id).location.id!;
     const position = value.memberLocations?.find((entry) => entry.memberId === member.id);
     const to = position ? resultingRef(position.locationId) : from;
-    const progress = gatherings[member.id];
+    const gatheringScene = {
+      ...context.scene,
+      worldMap: {
+        nodes: context.scene.worldMap?.nodes ?? {},
+        connections: turnConnections(context.scene, value, resultingRef, position?.movementEventId),
+      },
+    };
+    const progress = gatheringOptions({ ...context, scene: gatheringScene })[member.id];
     if (
       submitted.gathering.route[0] !== from ||
       submitted.gathering.route.at(-1) !== submitted.gathering.locationId ||
@@ -265,9 +400,22 @@ export function validateWorldMap(
       throw new Error('Entering an unvisited map location requires its arriving scene.');
     if (context.turn.actions.some((action) => action.memberId === position.memberId && action.gathering))
       continue;
-    const pair = connections.find(
+    let pair = turnConnections(context.scene, value, resultingRef, position.movementEventId).find(
       (edge) => (edge.from === from && edge.to === to) || (edge.from === to && edge.to === from),
     );
+    // A first arrival can describe the new leg just traversed; it does not reopen a known route.
+    if (!pair && !nodes.has(to) && arrivals.has(to)) {
+      const discovered = value.mapUpdates?.connections.find(
+        (edge) =>
+          ((resultingRef(edge.from) === from && resultingRef(edge.to) === to) ||
+            (resultingRef(edge.to) === from && resultingRef(edge.from) === to)) &&
+          value.arrivals?.some(
+            (arrival) => resultingRef(arrival.locationId) === to && arrival.eventId === edge.eventId,
+          ),
+      );
+      if (discovered)
+        pair = { ...discovered, from: resultingRef(discovered.from), to: resultingRef(discovered.to) };
+    }
     // Legacy/genuinely new arrivals establish their traversed leg during finalization.
     if (!pair && !nodes.has(to) && !previews.some((preview) => preview.ref === to)) continue;
     if (!pair) throw new Error('Movement can cross only one adjacent location per turn.');
@@ -297,6 +445,7 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
   const key = (value: string) => value.normalize('NFKC').trim().toLowerCase();
   for (const [id, name] of Object.entries(known)) names.set(key(name), [...(names.get(key(name)) ?? []), id]);
   const declared = new Set<string>();
+  const namedReferences = new Map<string, string>();
   for (const list of [input.placeUpdates, record(input.mapUpdates) ? input.mapUpdates.locations : []])
     if (Array.isArray(list))
       for (const place of list)
@@ -309,14 +458,35 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
                 ? place.location.name
                 : undefined;
           if (typeof name === 'string') names.set(key(name), [...(names.get(key(name)) ?? []), place.ref]);
+        } else if (
+          record(place) &&
+          typeof place.ref === 'string' &&
+          /^[0-9a-f-]{30,36}$/i.test(place.ref) &&
+          !Object.hasOwn(known, place.ref)
+        ) {
+          const name =
+            typeof place.name === 'string'
+              ? place.name
+              : record(place.location)
+                ? place.location.name
+                : undefined;
+          const matches = typeof name === 'string' ? names.get(key(name)) : undefined;
+          if (matches?.length === 1 && Object.hasOwn(known, matches[0])) {
+            const previous = namedReferences.get(place.ref);
+            if (previous && previous !== matches[0])
+              throw new Error('Conflicting named location references.');
+            namedReferences.set(place.ref, matches[0]);
+          }
         }
   const problems: string[] = [];
   const resolve = (value: unknown, path: string): unknown => {
     if (typeof value !== 'string') return value;
     if (['current', 'destination'].includes(value) || Object.hasOwn(known, value) || declared.has(value))
       return value;
-    const alias = references[value];
+    const alias = Object.hasOwn(references, value) ? references[value] : undefined;
     if (alias) return alias.id;
+    const named = namedReferences.get(value);
+    if (named && names.get(key(known[named]))?.length === 1) return named;
     const matches = names.get(key(value));
     if (matches?.length === 1) return matches[0];
     problems.push(`${path}=${JSON.stringify(value)}`);
@@ -341,9 +511,17 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     arrivals: ['locationId'],
     encounterRisks: ['locationId'],
     worldProgress: ['locationId'],
+    npcUpdates: ['locationId'],
+    featureUpdates: ['locationId'],
   }))
     if (name in output) output[name] = list(output[name], keys, name);
   if ('sceneFocus' in output) output.sceneFocus = resolve(output.sceneFocus, 'sceneFocus');
+  if (Array.isArray(output.featureUpdates))
+    output.featureUpdates = output.featureUpdates.map((update, index) =>
+      record(update) && record(update.route)
+        ? { ...update, route: fields(update.route, ['from', 'to'], `featureUpdates[${index}].route`) }
+        : update,
+    );
   if (record(output.location)) output.location = fields(output.location, ['id'], 'location');
   if (record(output.mapUpdates))
     output.mapUpdates = {

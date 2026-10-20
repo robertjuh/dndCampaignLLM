@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
-import { migrateLocations, migrateWorldMaps } from './location-migration';
+import { randomInt } from 'node:crypto';
+import { migrateLocations, migrateWorldMaps, migrateWorldMapPositions } from './location-migration';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { rollStartingEquipment, grantEquipmentPowers } from '../shared/rules';
@@ -21,7 +22,7 @@ export function openDatabase(filename: string) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 17) throw new Error('This database was created by a newer Gather version.');
+  if (version > 20) throw new Error('This database was created by a newer Gather version.');
   if (version === 0)
     db.transaction(() => {
       db.exec(`
@@ -461,6 +462,33 @@ export function openDatabase(filename: string) {
         db.exec('ALTER TABLE actions ADD COLUMN gathering TEXT;');
       db.pragma('user_version = 17');
     })();
+  if (version < 18)
+    db.transaction(() => {
+      const columns = db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[];
+      if (!columns.some((column) => column.name === 'legacy_code'))
+        db.exec('ALTER TABLE campaigns ADD COLUMN legacy_code TEXT;');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS campaign_legacy_code ON campaigns(legacy_code);');
+      for (const campaign of db.prepare('SELECT id, code FROM campaigns WHERE length(code) > 4').all() as {
+        id: string;
+        code: string;
+      }[])
+        db.prepare('UPDATE campaigns SET legacy_code = ?, code = ? WHERE id = ?').run(
+          campaign.code,
+          createInviteCode(db),
+          campaign.id,
+        );
+      db.pragma('user_version = 18');
+    })();
+  if (version < 19)
+    db.transaction(() => {
+      migrateWorldMapPositions(db);
+      db.pragma('user_version = 19');
+    })();
+  if (version < 20)
+    db.transaction(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS character_portraits (id TEXT PRIMARY KEY, image BLOB NOT NULL);
+      PRAGMA user_version = 20;`);
+    })();
   // A model may have been interrupted after a roll. Keep its receipts and require a deliberate retry.
   db.prepare(
     "UPDATE turns SET phase = 'failed', error = 'The host restarted during this turn. Retry to continue with the saved dice results.' WHERE phase = 'resolving'",
@@ -468,3 +496,12 @@ export function openDatabase(filename: string) {
   return db;
 }
 export type DB = ReturnType<typeof openDatabase>;
+
+export function createInviteCode(db: Database.Database) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const code = Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join('');
+    if (!db.prepare('SELECT 1 FROM campaigns WHERE code = ?').get(code)) return code;
+  }
+  throw new Error('Could not allocate a session code. Please try again.');
+}

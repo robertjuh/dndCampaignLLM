@@ -150,9 +150,7 @@ it('continues the same adjudication stage to create a mandatory local encounter 
   expect(f.startCombat).toHaveBeenCalledTimes(1);
   expect(f.requests).toHaveLength(3);
   expect(f.requests[0].instructions.length).toBeLessThan(36_000);
-  expect(
-    JSON.parse(f.requests[1].input[0].content).encounterChecks.checks[f.context.scene.location.id!].triggered,
-  ).toBe(true);
+  expect(JSON.parse(f.requests[1].input[0].content).encounterChecks.checks['place:1'].triggered).toBe(true);
   expect(value.events.some((event) => event.id === 'world:raider')).toBe(true);
   expect(f.context.scene.encounter?.round).toBe(1);
   expect(f.tools.combat).not.toHaveBeenCalled();

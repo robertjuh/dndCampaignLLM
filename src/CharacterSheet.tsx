@@ -308,6 +308,30 @@ export function AbilityChoices({
   );
 }
 
+export function CharacterPortrait({
+  character,
+  size = '',
+}: {
+  character: Pick<Character, 'name' | 'portraitId'>;
+  size?: '' | 'mini' | 'large';
+}) {
+  return (
+    <span className={`avatar ${size}`} title={character.name}>
+      {character.portraitId ? (
+        <img
+          src={`/api/portraits/${character.portraitId}`}
+          alt={`${character.name} portrait`}
+          width={96}
+          height={96}
+          loading="lazy"
+        />
+      ) : (
+        character.name[0]
+      )}
+    </span>
+  );
+}
+
 export function CharacterSheet({
   character,
   showAbilities = true,
@@ -318,10 +342,16 @@ export function CharacterSheet({
   return (
     <article className="character-sheet">
       <header>
+        {character.portraitId && <CharacterPortrait character={character} size="large" />}
         <span className="eyebrow">{character.species}</span>
         <h2>{character.name}</h2>
         <p>{character.appearance}</p>
       </header>
+      {character.portraitError && (
+        <p className="small muted" role="status">
+          {character.portraitError}
+        </p>
+      )}
       <div className="small-stats">
         {stats.map((stat) => (
           <div key={stat}>

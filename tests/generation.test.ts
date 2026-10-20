@@ -65,6 +65,61 @@ it('never accepts finished items when inference subsequently fails', async () =>
   );
   await expect(readResponseStream(response)).rejects.toThrow('could not complete');
 });
+it('accepts a small answer when SSE metadata exceeds two megabytes', async () => {
+  const output = [{ type: 'message', content: [{ type: 'output_text', text: '{}' }] }];
+  const response = new Response(
+    new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < 24; i++)
+          controller.enqueue(frame({ type: 'response.in_progress', metadata: 'x'.repeat(100_000) }));
+        controller.enqueue(frame({ type: 'response.completed', response: { output } }));
+        controller.close();
+      },
+    }),
+  );
+  expect((await readResponseStream(response)).output).toEqual(output);
+});
+it.each(['item', 'completion'] as const)(
+  'still rejects oversized model output in a finished %s',
+  async (kind) => {
+    const output = [{ type: 'message', content: [{ type: 'output_text', text: 'x'.repeat(2_000_001) }] }];
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            frame(
+              kind === 'item'
+                ? { type: 'response.output_item.done', output_index: 0, item: output[0] }
+                : { type: 'response.completed', response: { output } },
+            ),
+          );
+        },
+        cancel,
+      }),
+    );
+    await expect(readResponseStream(response)).rejects.toThrow('response exceeded the turn size limit');
+    expect(cancel).toHaveBeenCalledOnce();
+  },
+);
+it.each(['frame', 'stream'] as const)('bounds an unfinished %s and cancels it', async (kind) => {
+  const cancel = vi.fn();
+  const response = new Response(
+    new ReadableStream({
+      start(controller) {
+        if (kind === 'frame') controller.enqueue(new TextEncoder().encode('x'.repeat(2_000_001)));
+        else
+          for (let i = 0; i < 17; i++)
+            controller.enqueue(frame({ type: 'response.in_progress', metadata: 'x'.repeat(1_000_000) }));
+      },
+      cancel,
+    }),
+  );
+  await expect(readResponseStream(response)).rejects.toThrow(
+    `ChatGPT stream${kind === 'frame' ? ' frame' : ''} exceeded the size limit`,
+  );
+  expect(cancel).toHaveBeenCalledOnce();
+});
 it.each(['assist', 'mend'] as const)(
   'generates a character with utility %s, then names five server-rolled equippable items',
   async (utilityEffect) => {
