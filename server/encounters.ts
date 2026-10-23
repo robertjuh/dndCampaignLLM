@@ -6,6 +6,7 @@ import { incapacitatingCondition } from '../shared/rules';
 import { isDeepStrictEqual } from 'node:util';
 import { adjudicationPlaceRef } from './turn-resolution';
 import { memberLocationAtEvent } from './world-map';
+import { randomEncounterBalance } from './encounter-balance';
 
 export type EncounterCheck = {
   locationId: string;
@@ -29,6 +30,9 @@ export function completedEncounterProposal(context: GMContext): TurnAdjudication
   for (const check of triggered) {
     const encounter = starts![check.locationId];
     const names = encounter.enemies.map((enemy) => enemy.name).join(', ');
+    const introduction = (
+      context.receipts?.combatIntroductionsByLocation as Record<string, string> | undefined
+    )?.[check.locationId];
     const id = `encounter:introduction:${check.locationId}`;
     if (value.events.some((event) => event.id === id)) continue;
     value.events.push({
@@ -41,9 +45,16 @@ export function completedEncounterProposal(context: GMContext): TurnAdjudication
       result: null,
       locationRef: check.locationId,
       fact:
-        context.config.language === 'Nederlands'
-          ? `Een confrontatie begint met ${names}. De eerste combat-ronde wacht op de volgende acties.`
-          : `A confrontation begins with ${names}. The first combat round waits for the next actions.`,
+        introduction ??
+        [
+          check.reason,
+          ...encounter.enemies.map((enemy) => `${enemy.name}: ${enemy.description}`),
+          context.config.language === 'Nederlands'
+            ? `Een confrontatie begint met ${names}.`
+            : `A confrontation begins with ${names}.`,
+        ]
+          .join(' ')
+          .slice(0, 2500),
       receiptRefs: ['tool:startCombatByLocation'],
       dependsOn: baseline.events
         .filter((event) => event.kind === 'world' && event.locationRef === check.locationId)
@@ -88,6 +99,8 @@ export function assertEncounterProposal(
     'pickups',
     'npcUpdates',
     'featureUpdates',
+    'sceneDraft',
+    'gmNotes',
   ] as const)
     if (!isDeepStrictEqual(value[field], baseline[field]))
       throw new Error(
@@ -171,6 +184,9 @@ export function prepareEncounterChecks(
   saved: EncounterChecks,
   draw?: (locationId: string) => number,
 ) {
+  const complete = !value.actions.some((action) =>
+    Object.values(action.components).some((part) => part?.processingFailure),
+  );
   const resolve = encounterPlaceRef(context, value);
   const position = (memberId: string) => {
     const update = value.memberLocations?.find((entry) => entry.memberId === memberId);
@@ -233,14 +249,38 @@ export function prepareEncounterChecks(
       throw new Error('A failed check cannot establish that a location is safe.');
     assessments.set(locationId, risk);
   }
+  const updatedGroups = new Map<EncounterCheck, string[]>();
   // A continuation cannot escape a saved trigger by changing a destination or renaming an arrival.
   for (const check of Object.values(saved)) {
     const group = context.members
       .filter((m) => m.active && position(m.id) === check.locationId)
       .map((m) => m.id)
       .sort();
-    if (group.join(',') !== [...check.memberIds].sort().join(','))
-      throw new Error('Encounter checks preserve the checked group and its validated destination.');
+    if (group.join(',') !== [...check.memberIds].sort().join(',')) {
+      const changed = [...new Set([...group, ...check.memberIds])].filter(
+        (id) => group.includes(id) !== check.memberIds.includes(id),
+      );
+      const risk =
+        assessments.get(check.locationId) ?? placeScene(context.scene, check.locationId).encounterRisk;
+      // Older partial checkpoints could freeze a safe group before a companion's arrival resolved.
+      // With no die or encounter to preserve, validated moves may update that safe group.
+      if (
+        !complete ||
+        check.danger !== 'safe' ||
+        check.die !== null ||
+        check.triggered ||
+        context.receipts?.encounterProposal ||
+        started(context, check.locationId) ||
+        risk?.danger !== 'safe' ||
+        !changed.every(
+          (id) =>
+            context.members.some((member) => member.id === id && member.active) &&
+            value.memberLocations?.some((position) => position.memberId === id),
+        )
+      )
+        throw new Error('Encounter checks preserve the checked group and its validated destination.');
+      updatedGroups.set(check, group);
+    }
   }
   const candidates = new Map<string, string[]>();
   if (context.turn.number > 0)
@@ -288,7 +328,9 @@ export function prepareEncounterChecks(
       reason: risk.reason,
     });
   }
-  for (const plan of draw ? planned : []) {
+  // Technical recovery is not a finished exploration: wait for all destinations before freezing groups or dice.
+  for (const [check, group] of draw && complete ? updatedGroups : []) check.memberIds = group;
+  for (const plan of draw && complete ? planned : []) {
     const die = plan.danger === 'dangerous' ? draw!(plan.locationId) : null;
     if (die !== null && (!Number.isInteger(die) || die < 1 || die > 6))
       throw new Error('Encounter checks require a valid d6 result.');
@@ -313,8 +355,16 @@ export function encounterContext(context: GMContext) {
     chance:
       'One d6 per dangerous occupied location per meaningful exploration turn; 1 starts an encounter. Together shares one check. Safe places, passes, orientation, opening and existing fights do not roll.',
     checks: context.receipts?.encounterChecks ?? {},
+    balance: Object.fromEntries(
+      Object.values((context.receipts?.encounterChecks ?? {}) as EncounterChecks)
+        .filter((check) => check.triggered)
+        .map((check) => [
+          check.locationId,
+          randomEncounterBalance(context, check.locationId, check.memberIds),
+        ]),
+    ),
     preservedAdjudication: context.receipts?.encounterProposal,
     instruction:
-      'Saved triggered checks require start_combat at that location. Choose scene-appropriate opponents for the present group; do not move other characters or resolve a first combat round now.',
+      'Saved triggered checks require start_combat at that location. Vary groups from 1 to 4 enemies as the local fiction supports, within the supplied threat budget and individual tier stat ceilings. The budget has a floor of 8: even one ready character can encounter four normal enemies, two elites or one boss. Encounters need not be winnable by the present group; some should make retreat a sensible player choice. Do not always choose one enemy or automatically fill the budget. Establish visible numbers, equipment and signs of danger, and describe actual available routes without prescribing fight/escape choices. Bosses need a fitting established story context. Inactive, distant, downed and incapacitated characters do not affect encounter level. Fresh routine minor/normal enemies have a 25% innate ailment chance (100% on criticals), at most one ailment per hit including equipment. Saved NPC profiles retain their mechanics; explicit story fights keep their established stakes. Do not move other characters or resolve a first combat round now.',
   };
 }

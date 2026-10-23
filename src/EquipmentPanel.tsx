@@ -45,6 +45,8 @@ function EquipmentItem({
   const [healingTargetId, setHealingTargetId] = useState(member.id);
   const reasonId = useId();
   const { character, state } = member;
+  const currencyName = snapshot.scene.currencyName ?? 'currency';
+  const itemName = item.currencyValue ? currencyName : item.name;
   const valid = usableSlots(character, state.stats, item);
   const destinations = item.hands === 2 ? valid.slice(0, 1) : valid;
   const fallback: Slot =
@@ -86,7 +88,7 @@ function EquipmentItem({
     )
       healingReason = 'Healing an ally requires your action in an active turn.';
   }
-  const dropIds = drops.filter((id) => state.inventory.some((item) => item.id === id));
+  const dropIds = item.currencyValue ? [] : drops.filter((id) => state.inventory.some((item) => item.id === id));
   const next = structuredClone(state);
   let equipReason = '';
   if (equippable) {
@@ -150,18 +152,17 @@ function EquipmentItem({
     }
   }
   return (
-    <article className="gear-item" aria-label={item.name}>
+    <article className="gear-item" aria-label={itemName}>
       <div className="gear-item-info">
         <b>
           <ItemIcon kind={item.kind} />
-          {item.name} {item.quantity > 1 && <span>×{item.quantity}</span>}
+          {itemName} {item.quantity > 1 && <span>×{item.quantity}</span>}
         </b>
-        <ItemDetails item={item} compact />
+        <ItemDetails item={item} compact currencyName={currencyName} />
         {comparison.length > 0 && <p className="gear-preview">{comparison.join(' · ')}</p>}
         {ground && !takeReason && (
           <p className="gear-preview">
-            Take into backpack: {occupiedSlots(state)}/{capacity(character)} → {occupiedSlots(taken)}/
-            {capacity(character)}
+            {item.currencyValue ? `${currencyName}: ${state.currency} → ${taken.currency}` : `Take into backpack: ${occupiedSlots(state)}/${capacity(character)} → ${occupiedSlots(taken)}/${capacity(character)}`}
           </p>
         )}
         {ground && dropIds.length > 0 && (
@@ -254,7 +255,7 @@ function EquipmentItem({
               manage({ type: 'take', itemId: item.id, ...(dropIds.length ? { dropItemIds: dropIds } : {}) })
             }
           >
-            Take item
+            {item.currencyValue ? `Collect ${currencyName}` : 'Take item'}
           </button>
         ) : (
           <>

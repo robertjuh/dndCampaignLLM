@@ -4,15 +4,18 @@ import {
   characterHandicaps,
   characterDrawbacks,
   abilityPowerSummary,
+  abilityBonus,
   initialState,
   modifier,
   chooseStartingAbilities,
   normalizeCharacter,
   rollCharacterCreation,
   startingStats,
+  validateAbilityTheme,
+  strikeAilments,
 } from '../shared/rules';
 import { openDatabase } from '../server/db';
-import { Game } from '../server/game';
+import { Game, validateLevelUpReward, type LevelUpContext } from '../server/game';
 import { PracticeGM } from '../server/providers';
 
 function offers() {
@@ -24,8 +27,131 @@ function offers() {
   return sheet;
 }
 
+it.each([
+  ['Explosive crossbow shot', 'Burning', 'Weakened'],
+  ['Ontploffende kruisboogpijl', 'Bleeding', 'Weakened'],
+  ['Fire bolt', 'Burning', 'Frozen'],
+  ['Frost lance', 'Frozen', 'Burning'],
+  ['Chilling arrow', 'Chilled', 'Burning'],
+  ['Lightning arc', 'Electrocuted', 'Poisoned'],
+  ['Venom arrow', 'Poisoned', 'Weakened'],
+  ['Crippling crossbow shot', 'Weakened', 'Burning'],
+] as const)('keeps %s ailments consistent with the delivery', (name, fitting, wrong) => {
+  const ability = { ...templateCharacter().abilities[0], name, description: 'A precise attack.' };
+  expect(() => validateAbilityTheme({ ...ability, inflicts: fitting })).not.toThrow();
+  expect(() => validateAbilityTheme({ ...ability, inflicts: wrong })).toThrow('damage theme');
+});
+
+it('rolls an explosive character’s starting strike ailment from a fitting pool and rejects expanded starting offers', () => {
+  expect(strikeAilments('A gifted crossbow engineer')).toEqual(['Bleeding']);
+  const sheet = offers();
+  sheet.concept = 'An explosive crossbow specialist';
+  const created = rollCharacterCreation(sheet, 'strike', 0, () => 1);
+  expect(created.abilityOptions![0].inflicts).toBe('Burning');
+  sheet.abilities[0].targeting = 'area';
+  expect(() => rollCharacterCreation(sheet, 'strike', 0, () => 1)).toThrow();
+  expect(() => normalizeCharacter(sheet)).toThrow('character level 2');
+});
+
+it.each([
+  ['strike', 'multiple', 'combat'],
+  ['strike', 'area', 'combat'],
+  ['mend', 'party', 'combat'],
+  ['restoration', 'party', 'utility'],
+] as const)(
+  'unlocks new %s/%s at character level 2 with matching ability power',
+  (effect, targeting, kind) => {
+    const character = templateCharacter();
+    const context: LevelUpContext = {
+      character,
+      state: initialState(character, 'test'),
+      config: {
+        ruleset: 'roguelike-v1',
+        name: 'Test',
+        setting: 'Forest',
+        premise: '',
+        tone: '',
+        language: 'English',
+        instructions: '',
+        custom: [],
+        provider: 'practice',
+        model: '',
+      },
+      choice: kind === 'combat' ? 'new-combat' : 'new-utility',
+      target: null,
+      attributes: [],
+    };
+    const ability = { ...character.abilities[0], name: 'New ability', effect, targeting, kind };
+    const reward = { ability, description: 'A new technique.' };
+    expect(() => validateLevelUpReward(context, reward)).toThrow('character level 2');
+    context.state.level = 2;
+    ability.level = 2;
+    expect(validateLevelUpReward(context, reward).ability).toMatchObject({ level: 2, targeting });
+    context.target = ability;
+    context.choice = kind === 'combat' ? 'upgrade-combat' : 'upgrade-utility';
+    expect(
+      validateLevelUpReward(context, { ...reward, ability: { ...ability, level: 3 } }).ability,
+    ).toMatchObject({ level: 3, targeting });
+    expect(() =>
+      validateLevelUpReward(context, { ...reward, ability: { ...ability, level: 3, targeting: 'single' } }),
+    ).toThrow('preserve');
+  },
+);
+
+it.each([
+  ['strike', 'combat', 1, '2–12 damage', 0],
+  ['strike', 'combat', 2, '4–14 damage', 2],
+  ['strike', 'combat', 5, '10–20 damage', 8],
+  ['strike', 'combat', 10, '20–30 damage', 18],
+  ['mend', 'utility', 5, '11–16 HP', 10],
+  ['restoration', 'combat', 5, '9–14 HP', 8],
+  ['barrier', 'combat', 5, '12–17 damage blocked', 11],
+  ['guard', 'combat', 5, null, 4],
+  ['rally', 'combat', 5, null, 6],
+  ['assist', 'utility', 5, null, 8],
+] as const)(
+  'new %s/%s at character level %i has matching power and engine results',
+  (effect, kind, level, range, bonus) => {
+    const character = templateCharacter();
+    const state = initialState(character, 'power-check');
+    state.level = level;
+    const context: LevelUpContext = {
+      character,
+      state,
+      config: {
+        ruleset: 'roguelike-v1',
+        name: 'Test',
+        setting: 'Forest',
+        premise: '',
+        tone: '',
+        language: 'English',
+        instructions: '',
+        custom: [],
+        provider: 'practice',
+        model: '',
+      },
+      choice: kind === 'combat' ? 'new-combat' : 'new-utility',
+      target: null,
+      attributes: [],
+    };
+    const reward = {
+      ability: { ...character.abilities[0], name: 'New technique', effect, kind, level },
+      description: 'A new technique.',
+    };
+    const ability = validateLevelUpReward(context, reward).ability!;
+    expect(ability.level).toBe(level);
+    expect(abilityPowerSummary(ability, state.stats)).toBe(range);
+    expect(abilityBonus(ability)).toBe(bonus);
+    for (const wrong of [1, level + 1])
+      if (wrong !== level)
+        expect(() =>
+          validateLevelUpReward(context, { ...reward, ability: { ...ability, level: wrong } }),
+        ).toThrow(`power level ${level}`);
+  },
+);
+
 it('weights the preferred combat effect five times as heavily and always offers two different effects', () => {
-  const outcomes = Array.from({ length: 9 }, (_, i) => {
+  const outcomes = Array.from({ length: 11 }, (_, i) => {
     let first = true;
     const character = rollCharacterCreation(offers(), 'mend', 0, () => {
       if (first) {
@@ -41,7 +167,7 @@ it('weights the preferred combat effect five times as heavily and always offers 
     return combat[0].effect;
   });
   expect(outcomes.filter((effect) => effect === 'mend')).toHaveLength(5);
-  for (const effect of ['strike', 'guard', 'assist', 'cleanse'])
+  for (const effect of ['strike', 'guard', 'rally', 'cleanse', 'restoration', 'barrier'])
     expect(outcomes.filter((candidate) => candidate === effect)).toHaveLength(1);
 });
 
@@ -57,7 +183,7 @@ it('rolls bounded dice variants for strikes and mends', () => {
     const character = rollCharacterCreation(offers(), 'mend', 0, (sides) => (sides === 3 ? variant : 2));
     expect(character.abilityOptions![0].dice).toBe(['1d4', '1d6', '1d8'][variant - 1]);
     expect(abilityPowerSummary(character.abilityOptions![0], character.stats)).toBe(
-      ['3–6 HP', '2–7 HP', '1–8 HP'][variant - 1],
+      ['5–8 HP', '4–9 HP', '3–10 HP'][variant - 1],
     );
   }
 });
@@ -68,7 +194,7 @@ it('rolls utility Mend healing power and a cure while keeping utility assist sco
   const created = rollCharacterCreation(draft, 'strike', 0, () => 1);
   const utilities = created.abilityOptions!.filter((ability) => ability.kind === 'utility');
   expect(utilities[0]).toMatchObject({ effect: 'mend', dice: '1d4', bonus: 2, cures: ['Bleeding'] });
-  expect(abilityPowerSummary(utilities[0], created.stats)).toBe('3–6 HP');
+  expect(abilityPowerSummary(utilities[0], created.stats)).toBe('5–8 HP');
   expect(utilities[1]).toMatchObject({ effect: 'assist' });
   expect(utilities[1].cures).toBeUndefined();
   expect(characterSchema.safeParse(created).success).toBe(true);
@@ -88,7 +214,7 @@ it('compensates each drawback with attributes or power that applies to either co
   expect(initialState(attributes, 'fresh').stats.STR).toBe(9);
   const power = rollCharacterCreation(sheet, 'strike', 2, (sides) => sides);
   expect(power.creationBonuses).toEqual({ attributes: [], abilityPower: 2, version: 2 });
-  expect(power.abilityOptions!.filter((a) => a.kind === 'combat').map((a) => a.bonus)).toEqual([3, 3]);
+  expect(power.abilityOptions!.filter((a) => a.kind === 'combat').map((a) => a.bonus)).toEqual([2, 2]);
   expect(characterSchema.parse(power).abilityOptions).toEqual(power.abilityOptions);
   expect(() =>
     normalizeCharacter({ ...power, creationBonuses: { attributes: [], abilityPower: 0 } }),
@@ -172,7 +298,7 @@ it('shows exact power ranges, including negative modifiers and the minimum one-p
   expect(abilityPowerSummary(ability, sheet.stats)).toBe('1–12 damage');
   expect(abilityPowerSummary({ ...ability, dice: '2d4', bonus: 2 }, sheet.stats)).toBe('4–10 damage');
   expect(abilityPowerSummary({ ...ability, effect: 'mend', dice: '1d4' }, { ...sheet.stats, STR: 0 })).toBe(
-    '1–1 HP',
+    '1–3 HP',
   );
   expect(abilityPowerSummary(sheet.abilities[1], sheet.stats)).toBeNull();
 });
@@ -257,7 +383,7 @@ it('rolls explicit inflict, healing-plus-cure and standalone cleanse mechanics w
     ).toBe(true);
     expect(characterSchema.safeParse(created).success).toBe(true);
   }
-  const mend = rollCharacterCreation(offers(), 'mend', 0, (sides) => (sides === 9 ? 2 : 1))
+  const mend = rollCharacterCreation(offers(), 'mend', 0, (sides) => (sides === 11 || sides === 9 ? 2 : 1))
     .abilityOptions![0];
   expect(mend).toMatchObject({ effect: 'mend', cures: ['Burning'] });
 });

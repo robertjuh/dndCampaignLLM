@@ -87,7 +87,7 @@ function fixture() {
     changes: [],
     journal: [],
     location: null,
-    rewards: { xp: 0, gold: 0, reason: 'No completed objective.' },
+    rewards: { xp: 0, currency: 0, reason: 'No completed objective.' },
   };
   return { context, value };
 }

@@ -81,7 +81,7 @@ function routine(context: GMContext): TurnAdjudication {
     journal: [],
     location: null,
     memberLocations: [],
-    rewards: { xp: 0, gold: 0, reason: 'No new achievement.' },
+    rewards: { xp: 0, currency: 0, reason: 'No new achievement.' },
   };
 }
 
@@ -388,7 +388,7 @@ it('rejects map proposals from the legacy provider without structured route evid
     changes: [],
     journal: [],
     xp: 0,
-    gold: 0,
+    currency: 0,
     lethalWarning: null,
     location: null,
     mapUpdates: { locations: [{ ref: 'new:remote', name: 'Remote room' }], connections: [] },
@@ -1010,6 +1010,7 @@ it('sends short location references to the GM and resolves them in gameplay tool
   const c = f.context();
   const tower = Object.values(c.scene.worldMap!.nodes).find((node) => node.name === 'Watchtower')!;
   const alias = Object.entries(locationReferences(c)).find(([, place]) => place.id === tower.id)![0];
+  const introduction = 'The tower sentries bar the gate, mistaking the travellers for the raiders they were warned about.';
   let requests = 0;
   const fetcher = vi.fn(async (_url, init) => {
     const input = JSON.parse(JSON.parse(init!.body as string).input[0].content);
@@ -1022,7 +1023,7 @@ it('sends short location references to the GM and resolves them in gameplay tool
               type: 'function_call',
               name: 'start_combat',
               call_id: 'start',
-              arguments: JSON.stringify({ locationId: alias, enemies: [] }),
+              arguments: JSON.stringify({ locationId: alias, enemies: [], introduction }),
             },
           ]
         : [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(routine(c)) }] }];
@@ -1039,7 +1040,7 @@ it('sends short location references to the GM and resolves them in gameplay tool
     'test',
     fetcher,
   ).adjudicate(c, tools);
-  expect(startCombat).toHaveBeenCalledExactlyOnceWith([], tower.id);
+  expect(startCombat).toHaveBeenCalledExactlyOnceWith([], tower.id, introduction);
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
 

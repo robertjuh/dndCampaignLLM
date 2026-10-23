@@ -49,6 +49,81 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     const generating =
       body.instructions.startsWith('Generate') || body.instructions.startsWith('Name and describe');
     const first = JSON.parse(body.input[0].content);
+    if (first.task === 'Resolve and narrate the scene using small domain operations.') {
+      const message = (value: unknown) =>
+        completed([{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] }]);
+      if (first.turn.number === 0)
+        return message({
+          version: 3,
+          opening: { npcs: [], features: ['harbor-gate'], quests: [], mysteries: [] },
+          currencyName: 'harbor marks',
+          summary: 'The party reaches a sheltered harbor.',
+          notes: [],
+          beats: [
+            {
+              kind: 'world',
+              at: 'current',
+              fact: 'A sheltered harbor has a sealed gate beside the water and an open quay path.',
+              features: [{ featureId: 'harbor-gate', name: 'Sealed gate', properties: { sealed: true } }],
+              text: 'Sheltered water laps beside the harbor’s sealed gate. An open path follows the quay.',
+              exits: [{ to: 'new:quay', name: 'Quay', label: 'Open path along the water' }],
+              place: {
+                name: 'Harbor',
+                atmosphere: 'Sheltered water and a sealed gate.',
+                hazard: '',
+                danger: 'safe',
+                riskReason: 'The harbor is sheltered and secured by its sealed gate.',
+              },
+            },
+          ],
+        });
+      if (!first.turn.rolls.length)
+        return completed(
+          first.turn.actions.map((action: { memberId: string; text: string }) => ({
+            type: 'function_call',
+            namespace: 'game',
+            name: 'roll_check',
+            call_id: `check-${action.memberId}`,
+            arguments: JSON.stringify({
+              memberId: action.memberId,
+              stat: 'INT',
+              dc: 10,
+              reason: action.text,
+              mode: 'normal',
+              lethal: false,
+            }),
+          })),
+        );
+      if (rejectAfterChecks) {
+        rejectAfterChecks = false;
+        return new Response(
+          `data: ${JSON.stringify({ type: 'response.failed', response: { error: { code: 'subscription_sharing_usage_limit_exceeded' } } })}\n\n`,
+        );
+      }
+      return message({
+        version: 3,
+        currencyName: 'harbor marks',
+        summary: 'The party finds the maintenance access.',
+        notes: [],
+        rewards: { xp: 20, reason: 'The inspection reveals a maintenance access.' },
+        beats: first.turn.actions.map((action: { memberId: string }) => {
+          const roll = first.turn.rolls.find(
+            (roll: { memberId: string }) => roll.memberId === action.memberId,
+          );
+          const fact = roll.success
+            ? 'The gate markings identify a maintenance access.'
+            : 'The scratched gate markings remain unreadable.';
+          return {
+            kind: 'act',
+            actor: action.memberId,
+            fact,
+            text: `${fact} A maintenance hatch is accessible beside the gate.`,
+            intent: 'search',
+            finding: { source: 'harbor:gate', fact: 'A maintenance hatch is accessible beside the gate.' },
+          };
+        }),
+      });
+    }
     if (
       first.task === 'Generate the campaign faction world.' ||
       first.task === 'Connect arriving characters to factions.'
@@ -173,14 +248,35 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
                   },
                 ],
                 arrivals: [{ locationId: context.scene.location.id, eventId: 'world:harbor' }],
-                encounterRisks: [{ locationId: context.scene.location.id, eventId: 'world:harbor', danger: 'safe', reason: 'The harbor is sheltered and secured by its sealed gate.' }],
-                journal: [{ kind: 'location', name: 'Harbor gate', detail: 'A sheltered harbor has a sealed gate beside the water.' }],
-                worldProgress: [{ locationId: context.scene.location.id, eventId: 'world:harbor', kind: 'discovery', thread: 'premise', journal: { kind: 'location', name: 'Harbor gate' } }],
+                encounterRisks: [
+                  {
+                    locationId: context.scene.location.id,
+                    eventId: 'world:harbor',
+                    danger: 'safe',
+                    reason: 'The harbor is sheltered and secured by its sealed gate.',
+                  },
+                ],
+                journal: [
+                  {
+                    kind: 'location',
+                    name: 'Harbor gate',
+                    detail: 'A sheltered harbor has a sealed gate beside the water.',
+                  },
+                ],
+                worldProgress: [
+                  {
+                    locationId: context.scene.location.id,
+                    eventId: 'world:harbor',
+                    kind: 'discovery',
+                    thread: 'premise',
+                    journal: { kind: 'location', name: 'Harbor gate' },
+                  },
+                ],
               }
             : {}),
           rewards: {
             xp: context.turn.number > 0 ? 20 : 0,
-            gold: 0,
+            currency: 0,
             reason: 'The gate inscriptions reveal a new route.',
           },
         };
@@ -267,7 +363,9 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     await game.idle();
     const finished = game.snapshot(campaign.id, owner);
     expect(finished.turn?.number).toBe(turn.number + 1);
-    expect(finished.history.find((t) => t.id === turn.id)?.rolls).toEqual(failed.rolls);
+    expect(finished.history.find((t) => t.id === turn.id)?.rolls.filter((roll) => !roll.notation)).toEqual(
+      failed.rolls,
+    );
     expect(finished.members.every((m) => m.state.xp === 20)).toBe(true);
     const disconnect = await app.inject({
       method: 'POST',

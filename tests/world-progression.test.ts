@@ -100,7 +100,7 @@ function proposal(context: GMContext): TurnAdjudication {
     journal: [],
     location: null,
     memberLocations: [],
-    rewards: { xp: 0, gold: 0, reason: 'No new achievement.' },
+    rewards: { xp: 0, currency: 0, reason: 'No new achievement.' },
     worldProgress: [],
   };
 }

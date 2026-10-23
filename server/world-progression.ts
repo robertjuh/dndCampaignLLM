@@ -71,7 +71,7 @@ export function worldProgressionContext(context: GMContext) {
   return {
     stalledTurnLimit,
     // Facts already travel in config, journal, motivations and history; send their identities once.
-    threads: threads(context).map(({ id }) => ({ id })),
+    threads: threads(context).map(({ id }) => ({ id, ...(state.threads?.[id] ?? {}) })),
     places: [...occupied].map((locationId) => ({
       locationId,
       stalledTurns: state.places[locationId]?.stalledTurns ?? 0,
@@ -162,6 +162,7 @@ export function validateWorldProgression(
           : undefined;
       const existing = [
         ...(prior?.recentFacts ?? []),
+        ...(state.threads?.[progress.thread]?.recentFacts ?? []),
         ...context.journal.map((entry) => entry.detail),
         ...context.history.slice(-6).flatMap((entry) => entry.summary.split('\n')),
         ...Object.values(place?.searches ?? {}).map((search) => search.information),
@@ -225,6 +226,26 @@ export function advanceWorldProgression(
   if (value.worldProgress === undefined) return context.scene.worldProgression;
   const state = structuredClone(savedState(context));
   const meaningful = meaningfulPlaces(context, value, resolve);
+  // Progress on one thread cannot reset another merely because the party changed places.
+  const stable = new Set(threads(context).map(({ id }) => id).filter((id) => !id.startsWith('history:')));
+  const tracked = new Set([
+    ...Object.keys(state.threads ?? {}),
+    ...(context.config.premise ? ['premise'] : []),
+    ...(context.config.partyGoal ? ['partyGoal'] : []),
+    ...value.worldProgress.map((progress) => progress.thread),
+  ]);
+  for (const thread of tracked) {
+    if (!stable.has(thread) || (!meaningful.size && !value.worldProgress.some((progress) => progress.thread === thread))) continue;
+    const previous = state.threads?.[thread];
+    if (previous?.lastTurnId === context.turn.id) continue;
+    const facts = value.worldProgress.filter((progress) => progress.thread === thread)
+      .map((progress) => normalize(value.events.find((event) => event.id === progress.eventId)!.fact));
+    (state.threads ??= {})[thread] = {
+      stalledTurns: facts.length ? 0 : (previous?.stalledTurns ?? 0) + 1,
+      lastTurnId: context.turn.id,
+      recentFacts: [...new Set([...(previous?.recentFacts ?? []), ...facts])].slice(-24),
+    };
+  }
   const progressed = new Set(value.worldProgress.map((progress) => resolve(progress.locationId)));
   for (const locationId of new Set([...meaningful, ...progressed])) {
     const prior = state.places[locationId];

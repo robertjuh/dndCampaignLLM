@@ -8,11 +8,20 @@ import {
   Sword,
   WandSparkles,
   Wrench,
+  Heart,
+  Sparkles,
+  Crosshair,
+  Users,
+  Clock3,
+  Zap,
+  RotateCcw,
+  ShieldPlus,
   type LucideIcon,
 } from 'lucide-react';
 import { type Ability, type Character, type CharacterState, type Item, stats, slots } from '../shared/schema';
 import {
   abilityMechanics,
+  abilityTargets,
   abilityPowerSummary,
   characterDrawbacks,
   chooseStartingEquipment,
@@ -21,7 +30,12 @@ import {
   availableAbilities,
   abilityUseKey,
   shieldBlockSides,
+  abilityBonus,
+  abilityDice,
+  isHealingAbility,
+  isRally,
 } from '../shared/rules';
+import { conditionDuration } from '../shared/ailments';
 
 export const slotLabels = {
   left: 'Left hand',
@@ -49,7 +63,7 @@ export function ItemIcon({ kind }: { kind: Item['kind'] }) {
   return <Icon className="item-icon" size={16} aria-hidden="true" focusable="false" />;
 }
 
-export function ItemDetails({ item, compact = false }: { item: Item; compact?: boolean }) {
+export function ItemDetails({ item, compact = false, currencyName = 'currency' }: { item: Item; compact?: boolean; currencyName?: string }) {
   const requirements = stats
     .filter((stat) => item.requirements[stat] > 0)
     .map((stat) => `${item.requirements[stat]} ${stat}`)
@@ -57,7 +71,7 @@ export function ItemDetails({ item, compact = false }: { item: Item; compact?: b
   const details = [
     item.rarity,
     item.kind,
-    item.kind === 'tool' && 'Story item · Carried in your backpack',
+    item.currencyValue ? `${item.currencyValue} ${currencyName} · Added to your balance when collected` : item.kind === 'tool' && 'Story item · Carried in your backpack',
     item.kind === 'weapon' &&
       `Innate dice + ${item.damage}${item.scaling.length ? ` + 2 × ${item.scaling.join('/')} modifier` : ''} damage (minimum 1)`,
     item.kind === 'armour' && item.scaling.length > 0 && `${item.scaling.join('/')} defense`,
@@ -83,7 +97,7 @@ export function ItemDetails({ item, compact = false }: { item: Item; compact?: b
   return (
     <>
       <small>{details}</small>
-      {item.description &&
+      {item.description && !item.currencyValue &&
         (compact ? (
           <details className="item-description">
             <summary>Description</summary>
@@ -92,6 +106,117 @@ export function ItemDetails({ item, compact = false }: { item: Item; compact?: b
         ) : (
           <small>{item.description}</small>
         ))}
+    </>
+  );
+}
+
+function AbilityDetails({ ability, scores }: { ability: Ability; scores: Character['stats'] }) {
+  const utility = ability.kind === 'utility' && ability.effect === 'assist';
+  const rally = isRally(ability);
+  const bonus = abilityBonus(ability);
+  const power = abilityPowerSummary(ability, scores);
+  const Icon =
+    ability.effect === 'strike'
+      ? Sword
+      : ability.effect === 'barrier' || ability.effect === 'guard'
+        ? ShieldPlus
+        : isHealingAbility(ability)
+          ? Heart
+          : Sparkles;
+  const headline =
+    power ??
+    (ability.effect === 'guard'
+      ? `+${3 + bonus} defense`
+      : ability.effect === 'cleanse'
+        ? 'Clear ailments'
+        : `Advantage +${bonus}`);
+  const flat = modifier(scores[ability.stat]) + bonus;
+  // Preserve utility scope even when an older description mixed it with check instructions.
+  const description = (
+    utility ? ability.description.replace(/\badvantage and \+\d+/gi, 'advantage') : ability.description
+  )
+    .split(/(?<=[.!?])\s+/)
+    .filter(
+      (sentence) =>
+        !/\b(?:noncombat obstacle|non-combat obstacle|main action|hoofdactie|uses? remaining|tracked charge)\b/i.test(
+          sentence,
+        ) &&
+        (utility ||
+          !/\b\d+d\d+\b|\b(?:attack roll|aanvalsrol)\b|\b(?:STR|DEX|INT|CHA|CON|WIS) (?:modifier|check)\b|\b(?:inflict|cure|restore|heal)\w*\b.*\b\d+\b/i.test(
+            sentence,
+          )),
+    )
+    .join(' ');
+  return (
+    <>
+      <div className="ability-effect">
+        <Icon size={21} aria-hidden="true" />
+        <div>
+          <strong>{headline}</strong>
+          {power && (
+            <small title={`${ability.stat} modifier included`}>
+              {abilityDice(ability)} {flat < 0 ? '−' : '+'} {Math.abs(flat)} · {ability.stat}
+            </small>
+          )}
+        </div>
+      </div>
+      <ul className="ability-tags" aria-label="Ability mechanics">
+        {ability.effect === 'strike' && (
+          <li>
+            <Crosshair size={14} aria-hidden="true" />
+            Roll to hit
+          </li>
+        )}
+        {utility && (
+          <li>
+            <Sparkles size={14} aria-hidden="true" />
+            {ability.stat} check
+          </li>
+        )}
+        <li>
+          <Users size={14} aria-hidden="true" />
+          {abilityTargets(ability)}
+        </li>
+        {ability.effect === 'guard' && (
+          <li>
+            <Shield size={14} aria-hidden="true" />
+            Until hit
+          </li>
+        )}
+        {ability.effect === 'barrier' && (
+          <li>
+            <Clock3 size={14} aria-hidden="true" />
+            Until your next turn
+          </li>
+        )}
+        {rally && (
+          <li>
+            <Crosshair size={14} aria-hidden="true" />
+            Each next attack
+          </li>
+        )}
+        {(utility || isHealingAbility(ability)) && <li>In / out of combat</li>}
+        <li>
+          <Zap size={14} aria-hidden="true" />
+          Main action
+        </li>
+      </ul>
+      {ability.inflicts && (
+        <p className="ability-ailment">
+          {ability.inflicts} on hit · {conditionDuration(ability.inflicts)} turns
+        </p>
+      )}
+      {ability.effect === 'restoration' ? (
+        <p className="ability-ailment">Clears all ailments</p>
+      ) : (
+        !!ability.cures?.length && <p className="ability-ailment">Clears {ability.cures.join(' / ')}</p>
+      )}
+      {utility && (
+        <p className="ability-help">
+          Helping an ally also grants this bonus to their check. Strongest bonus applies.
+        </p>
+      )}
+      {description && <p className="ability-description">{description}</p>}
     </>
   );
 }
@@ -120,17 +245,17 @@ export function Abilities({
           </span>
           <h4>{ability.name}</h4>
           {ability.equipmentId && <small>Granted by equipped Legendary gear</small>}
-          <p className="ability-mechanics">{abilityMechanics(ability)}</p>
-          {abilityPowerSummary(ability, state?.stats ?? character.stats) && (
-            <p className="small ability-power">
-              {abilityPowerSummary(ability, state?.stats ?? character.stats)}
-            </p>
-          )}
-          <p>{ability.description}</p>
+          <AbilityDetails ability={ability} scores={state?.stats ?? character.stats} />
           {state && (
             <small className="ability-uses">
-              {(state.abilityUses?.[abilityUseKey(ability)] ?? 0) >= 1 ? 0 : 1}/1 uses remaining · Regain one
-              after a successful encounter
+              <span>
+                <Zap size={14} aria-hidden="true" />
+                {(state.abilityUses?.[abilityUseKey(ability)] ?? 0) >= 1 ? 0 : 1}/1 available
+              </span>
+              <span title="One charge returns after a successful encounter">
+                <RotateCcw size={14} aria-hidden="true" />
+                Recharge on encounter success
+              </span>
             </small>
           )}
           {onSelect && (
@@ -143,7 +268,8 @@ export function Abilities({
                 (!inCombat &&
                   ability.kind === 'combat' &&
                   !state?.conditions.includes('Escaped') &&
-                  !['strike', 'mend', 'cleanse'].includes(ability.effect)) ||
+                  ability.effect !== 'strike' &&
+                  !isHealingAbility(ability)) ||
                 (state?.abilityUses?.[abilityUseKey(ability)] ?? 0) >= 1
               }
               onClick={() => onSelect(selected === ability.name ? null : ability.name)}
@@ -292,12 +418,8 @@ export function AbilityChoices({
                     }
                   >
                     <b>{ability.name}</b>
-                    <p className="ability-mechanics">{abilityMechanics(ability)}</p>
-                    {abilityPowerSummary(ability, character.stats) && (
-                      <p className="small ability-power">{abilityPowerSummary(ability, character.stats)}</p>
-                    )}
-                    <p>{ability.description}</p>
-                    <span>{selected ? 'Selected' : 'Choose ability'}</span>
+                    <AbilityDetails ability={ability} scores={character.stats} />
+                    <span className="ability-choice-label">{selected ? 'Selected' : 'Choose ability'}</span>
                   </button>
                 );
               })}

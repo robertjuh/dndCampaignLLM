@@ -299,7 +299,7 @@
       "separations": [],
       "rewards": {
         "xp": 0,
-        "gold": 0,
+        "currency": 0,
         "reason": "Geen nieuwe ontdekking of voltooide uitdaging."
       },
       "factionEffects": []
@@ -683,7 +683,7 @@
       ],
       "rewards": {
         "xp": 0,
-        "gold": 0,
+        "currency": 0,
         "reason": "Geen nieuwe ontdekking of uitdaging voltooid."
       },
       "factionEffects": []
@@ -1063,7 +1063,7 @@
       "separations": [],
       "rewards": {
         "xp": 15,
-        "gold": 0,
+        "currency": 0,
         "reason": "Thanquols nieuwe, samenhangende visioen levert bruikbare maar onvolledige richtinggevende informatie op over het kraterbinnenland."
       },
       "factionEffects": []

@@ -1,8 +1,9 @@
 import { FactionCard, CharacterFactions } from './Factions';
 import { Gathering } from './Gathering';
+import { QuestJournal } from './QuestJournal';
 import { TurnProgress } from './TurnProgress';
 import type { PublicFaction } from '../shared/factions';
-import { memberScene, placeScene, knownLocations, combatActive } from '../shared/locations';
+import { memberScene, placeScene, knownLocations, combatActive, locationHazard } from '../shared/locations';
 import React, { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QRCodeSVG } from 'qrcode.react';
@@ -1214,14 +1215,14 @@ const conditionDescriptions: Partial<Record<string, string>> = {
   Escaped: 'You have left the fight. Rejoining combat removes this condition.',
 };
 
-function ItemInspection({ item }: { item: Item }) {
+function ItemInspection({ item, currencyName }: { item: Item; currencyName?: string }) {
   return (
     <details className="item-inspection">
       <summary>
         <ItemIcon kind={item.kind} />
-        {item.name} <small>({item.kind})</small>
+        {item.currencyValue ? currencyName ?? 'currency' : item.name} <small>({item.kind})</small>
       </summary>
-      <ItemDetails item={item} />
+      <ItemDetails item={item} currencyName={currencyName} />
     </details>
   );
 }
@@ -1236,7 +1237,9 @@ function MemberCard({
   helpDisabled = false,
   factions = [],
   dutch = false,
+  currencyName = 'currency',
 }: {
+  currencyName?: string;
   factions?: PublicFaction[];
   dutch?: boolean;
   member: Member;
@@ -1298,7 +1301,7 @@ function MemberCard({
       <div className="hud-line">
         <span>XP {state.xp}/100</span>
         <span>DEF {defense(member.character, state)}</span>
-        <span>{state.gold} gold</span>
+        <span>{state.currency} {currencyName}</span>
       </div>
       {downed && (
         <>
@@ -1366,7 +1369,7 @@ function MemberCard({
             {slots.map((slot) => (
               <li key={slot}>
                 <b>{slotLabels[slot]}</b>
-                {state.equipment[slot] ? <ItemInspection item={state.equipment[slot]} /> : <span>None</span>}
+                {state.equipment[slot] ? <ItemInspection item={state.equipment[slot]} currencyName={currencyName} /> : <span>None</span>}
               </li>
             ))}
           </ul>
@@ -1376,7 +1379,7 @@ function MemberCard({
           <ul>
             {state.inventory.map((item) => (
               <li key={item.id}>
-                <ItemInspection item={item} />
+                <ItemInspection item={item} currencyName={currencyName} />
                 <span>×{item.quantity}</span>
               </li>
             ))}
@@ -1393,7 +1396,19 @@ function MemberCard({
         </div>
       )}
       {host && state.hp > 0 && (
-        <button className="sit-out" onClick={onActive}>
+        <button
+          className="sit-out"
+          onClick={onActive}
+          title={
+            member.active
+              ? dutch
+                ? 'Dit personage slaat beurten over. De overige spelers vechten verder tegen dezelfde tegenstanders.'
+                : 'This character stops taking turns. The remaining players keep fighting the same opponents.'
+              : dutch
+                ? 'Dit personage doet vanaf de volgende beurt weer mee.'
+                : 'This character rejoins from the next turn.'
+          }
+        >
           {member.active ? 'Sit out player' : 'Rejoin next turn'}
         </button>
       )}
@@ -1411,6 +1426,7 @@ function WorldStatus({
   memberId?: string;
 }) {
   const scene = memberId ? memberScene(s.scene, memberId) : s.scene;
+  const hazard = locationHazard(scene.location.hazard);
   const places = memberId
     ? [scene]
     : [
@@ -1437,7 +1453,7 @@ function WorldStatus({
         <p>{s.scene.location.atmosphere || s.config.premise}</p> */}
         <small>
           {s.scene.encounters} encounters completed
-          {scene.location.hazard && ` · ${scene.location.hazard}`}
+          {hazard && ` · ${hazard}`}
         </small>
         {split &&
           s.members
@@ -1882,6 +1898,12 @@ function RollReceipt({ roll, members, action }: { roll: Roll; members: Member[];
         <dd>{roll.reason}</dd>
         <dt>Roll mode</dt>
         <dd>{roll.mode}</dd>
+        {!!roll.assistanceBonus && (
+          <>
+            <dt>Ability assistance</dt>
+            <dd>+{roll.assistanceBonus} from successful help</dd>
+          </>
+        )}
         <dt>Dice source</dt>
         <dd>{roll.source}</dd>
       </dl>
@@ -2441,7 +2463,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
             </button>
             <button className={tab === 'journal' ? 'active' : ''} onClick={() => setTab('journal')}>
               <Feather size={16} />
-              World journal <span>{s.journal.length}</span>
+              World journal <span>{s.journal.length + Object.keys(s.scene.quests ?? {}).length}</span>
             </button>
             <span className="connection-status">
               {connected ? (
@@ -2456,6 +2478,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           </div>
           {tab === 'journal' ? (
             <div className="journal">
+              <QuestJournal snapshot={s} />
               {(s.factions ?? []).map((faction) => (
                 <FactionCard
                   key={faction.id}
@@ -2464,7 +2487,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   dutch={s.config.language === 'Nederlands'}
                 />
               ))}
-              {s.journal.length || s.factions?.length ? (
+              {s.journal.length || s.factions?.length || Object.keys(s.scene.quests ?? {}).length ? (
                 s.journal
                   .filter(
                     (entry) =>
@@ -2931,6 +2954,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
               key={m.id}
               member={m}
               factions={s.factions}
+              currencyName={s.scene.currencyName}
               dutch={s.config.language === 'Nederlands'}
               ready={!!turn?.actions.some((a) => a.memberId === m.id)}
               current={s.status === 'lobby' || !!turn?.roster.includes(m.id)}

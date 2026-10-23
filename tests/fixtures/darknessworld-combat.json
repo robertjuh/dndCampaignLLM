@@ -1,0 +1,280 @@
+[
+  {
+    "number": 24,
+    "turnId": "c5935d6a-1461-40ad-a062-f43908e01bb4",
+    "memberId": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+    "location": {
+      "name": "The Outer Ward",
+      "atmosphere": "A lightless district of ash-coated tenements and dead streetlamps. The Chorus Wight's remains lie among the drifting ash.",
+      "hazard": "The distant extraction station remains active and its equipment has produced unexplained voices; the cause and reach are unknown.",
+      "id": "22583870-73a0-46b5-9e43-f5400eade13a"
+    },
+    "encounterRisk": {
+      "danger": "dangerous",
+      "reason": "The extraction station still pulses and its machinery has produced unexplained voices; the Wight's death does not resolve that hazard."
+    },
+    "before": {
+      "hp": 22,
+      "maxHp": 22,
+      "conditions": [],
+      "conditionTurns": {}
+    },
+    "after": {
+      "hp": 13,
+      "maxHp": 22,
+      "conditions": ["Chilled"],
+      "conditionTurns": {
+        "Chilled": 1
+      }
+    },
+    "events": [
+      {
+        "actorId": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+        "phase": "main",
+        "status": "failure",
+        "fact": "Katooluman misses Shadow Wight with Station-Iron Cudgel.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      },
+      {
+        "actorId": null,
+        "phase": "main",
+        "status": null,
+        "fact": "Shadow Wight hits Katooluman for 9.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      },
+      {
+        "actorId": null,
+        "phase": "main",
+        "status": null,
+        "fact": "Katooluman becomes Chilled from Shadow Wight's attack.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      }
+    ],
+    "encounter": {
+      "enemies": [
+        {
+          "id": "outer-ward-shadow-wight",
+          "name": "Shadow Wight",
+          "tier": "normal",
+          "hp": 18,
+          "defense": 12,
+          "attack": 4,
+          "damage": "1d8",
+          "description": "A corpse-thin figure stitched from eclipse-darkness, its face flickering like a dead lantern.",
+          "tactic": "It lunges at the nearest living intruder, trying to drain warmth and retreat into the ward's shadows.",
+          "onHit": "Chilled",
+          "maxHp": 18,
+          "initiative": 12,
+          "conditions": [],
+          "conditionTurns": {}
+        }
+      ],
+      "round": 3,
+      "initiative": [
+        {
+          "id": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+          "total": 20
+        },
+        {
+          "id": "aa2bfd7e-1502-44dd-8351-c73535fb354b",
+          "total": 12
+        },
+        {
+          "id": "outer-ward-shadow-wight",
+          "total": 12
+        }
+      ],
+      "victory": false,
+      "escaped": false
+    }
+  },
+  {
+    "number": 25,
+    "turnId": "6d871921-c4b7-4b06-b9ec-96f6dd1e921e",
+    "memberId": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+    "location": {
+      "name": "The Outer Ward",
+      "atmosphere": "A lightless district of ash-coated tenements and dead streetlamps. The Chorus Wight's remains lie among the drifting ash.",
+      "hazard": "The distant extraction station remains active and its equipment has produced unexplained voices; the cause and reach are unknown.",
+      "id": "22583870-73a0-46b5-9e43-f5400eade13a"
+    },
+    "encounterRisk": {
+      "danger": "dangerous",
+      "reason": "The extraction station still pulses and its machinery has produced unexplained voices; the Wight's death does not resolve that hazard."
+    },
+    "before": {
+      "hp": 19,
+      "maxHp": 22,
+      "conditions": ["Chilled"],
+      "conditionTurns": {
+        "Chilled": 1
+      }
+    },
+    "after": {
+      "hp": 6,
+      "maxHp": 22,
+      "conditions": ["Chilled", "Burning"],
+      "conditionTurns": {
+        "Chilled": 1,
+        "Burning": 2
+      }
+    },
+    "events": [
+      {
+        "actorId": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+        "phase": "main",
+        "status": "failure",
+        "fact": "Katooluman misses Shadow Wight with Station-Iron Cudgel.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      },
+      {
+        "actorId": null,
+        "phase": "main",
+        "status": null,
+        "fact": "Shadow Wight hits Katooluman for 11.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      },
+      {
+        "actorId": null,
+        "phase": "main",
+        "status": null,
+        "fact": "Katooluman becomes Burning from Wight's Hooked Blade.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      },
+      {
+        "actorId": null,
+        "phase": "aftermath",
+        "status": null,
+        "fact": "Katooluman takes 2 Burning damage.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      }
+    ],
+    "encounter": {
+      "enemies": [
+        {
+          "id": "outer-ward-shadow-wight",
+          "name": "Shadow Wight",
+          "tier": "normal",
+          "hp": 18,
+          "defense": 12,
+          "attack": 4,
+          "damage": "1d8",
+          "description": "A corpse-thin figure stitched from eclipse-darkness, its face flickering like a dead lantern.",
+          "tactic": "It lunges at the nearest living intruder, trying to drain warmth and retreat into the ward's shadows.",
+          "onHit": "Chilled",
+          "maxHp": 18,
+          "initiative": 12,
+          "conditions": [],
+          "conditionTurns": {}
+        }
+      ],
+      "round": 4,
+      "initiative": [
+        {
+          "id": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+          "total": 20
+        },
+        {
+          "id": "aa2bfd7e-1502-44dd-8351-c73535fb354b",
+          "total": 12
+        },
+        {
+          "id": "outer-ward-shadow-wight",
+          "total": 12
+        }
+      ],
+      "victory": false,
+      "escaped": false
+    }
+  },
+  {
+    "number": 27,
+    "turnId": "7e9fb239-1a4e-49c7-9b4a-dd50f81720ea",
+    "memberId": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+    "location": {
+      "name": "The Outer Ward",
+      "atmosphere": "A lightless district of ash-coated tenements and dead streetlamps. The Chorus Wight's remains lie among the drifting ash.",
+      "hazard": "The distant extraction station remains active and its equipment has produced unexplained voices; the cause and reach are unknown.",
+      "id": "22583870-73a0-46b5-9e43-f5400eade13a"
+    },
+    "encounterRisk": {
+      "danger": "dangerous",
+      "reason": "The extraction station still pulses and its machinery has produced unexplained voices; the Wight's death does not resolve that hazard."
+    },
+    "before": {
+      "hp": 3,
+      "maxHp": 22,
+      "conditions": ["Chilled", "Burning"],
+      "conditionTurns": {
+        "Chilled": 1,
+        "Burning": 1
+      }
+    },
+    "after": {
+      "hp": 1,
+      "maxHp": 22,
+      "conditions": [],
+      "conditionTurns": {}
+    },
+    "events": [
+      {
+        "actorId": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+        "phase": "main",
+        "status": "failure",
+        "fact": "Katooluman misses Shadow Wight with Station-Iron Cudgel.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      },
+      {
+        "actorId": null,
+        "phase": "main",
+        "status": null,
+        "fact": "Shadow Wight misses Katooluman.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      },
+      {
+        "actorId": null,
+        "phase": "aftermath",
+        "status": null,
+        "fact": "Katooluman takes 2 Burning damage.",
+        "locationId": "22583870-73a0-46b5-9e43-f5400eade13a"
+      }
+    ],
+    "encounter": {
+      "enemies": [
+        {
+          "id": "outer-ward-shadow-wight",
+          "name": "Shadow Wight",
+          "tier": "normal",
+          "hp": 18,
+          "defense": 12,
+          "attack": 4,
+          "damage": "1d8",
+          "description": "A corpse-thin figure stitched from eclipse-darkness, its face flickering like a dead lantern.",
+          "tactic": "It lunges at the nearest living intruder, trying to drain warmth and retreat into the ward's shadows.",
+          "onHit": "Chilled",
+          "maxHp": 18,
+          "initiative": 12,
+          "conditions": [],
+          "conditionTurns": {}
+        }
+      ],
+      "round": 6,
+      "initiative": [
+        {
+          "id": "8c70dc78-10a5-40a3-8621-bd8282cab7bb",
+          "total": 20
+        },
+        {
+          "id": "aa2bfd7e-1502-44dd-8351-c73535fb354b",
+          "total": 12
+        },
+        {
+          "id": "outer-ward-shadow-wight",
+          "total": 12
+        }
+      ],
+      "victory": false,
+      "escaped": false
+    }
+  }
+]

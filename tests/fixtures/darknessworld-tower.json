@@ -1,0 +1,205 @@
+{
+  "source": "darknessworld, recorded turn 6; public scene/journal and submitted intents",
+  "scene": {
+    "location": {
+      "name": "Bell Tower Lane",
+      "atmosphere": "A soot-dark lane beneath the eclipsed sky, where the iron frames' thin hum threads through the still air.",
+      "hazard": "No immediate threat is evident; the cracked tower's lower door stands open.",
+      "id": "7f1593bc-4b9d-4eab-9429-0c32ed801568"
+    },
+    "encounters": 0,
+    "encounter": null,
+    "loot": [],
+    "lethalWarning": null,
+    "places": {
+      "d01b815f-e852-4dcb-9087-1a82ee4d86c2": {
+        "location": {
+          "name": "Southwest Dwellings",
+          "atmosphere": "A soot-streaked residential lane of low homes and patched shutters beneath the permanent eclipse.",
+          "hazard": "No immediate threat is evident; ash and clutter mark the thresholds.",
+          "id": "d01b815f-e852-4dcb-9087-1a82ee4d86c2"
+        },
+        "encounter": null,
+        "loot": [],
+        "searches": {
+          "southwest-dwellings:doorways": {
+            "information": "Among the soot and clutter, Katooluman finds a fresh chalk tally on one dwelling's doorframe: several household marks have been crossed out, while one remains. It is a usable sign that at least one household is still present, though it does not identify who made the marks or why.",
+            "rewardRolled": true
+          },
+          "southwest-dwellings:marked-household": {
+            "information": "Inside the marked dwelling, Katooluman finds a fresh household slate: the crossed-out marks denote households already collected, while the single uncrossed mark identifies Iven's family as still present. A faint tap answers from behind the shut inner door; the slate gives no collection time.",
+            "rewardRolled": true
+          }
+        },
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "This quiet residential lane shows no immediate hostile presence or other sign of danger."
+        }
+      },
+      "98091d38-7f88-465c-851c-1d728a7c7d1a": {
+        "location": {
+          "name": "Bellwether Square",
+          "atmosphere": "A soot-choked foundry district under a permanent eclipse; shared furnace heat, communal work, and empty bell frames shape daily life.",
+          "hazard": "No immediate threat is evident in the square; ash, abandoned carts, and eerie bell frames are observable conditions.",
+          "id": "98091d38-7f88-465c-851c-1d728a7c7d1a"
+        },
+        "encounter": null,
+        "loot": [],
+        "searches": {
+          "bellwether-square:iron-frames": {
+            "information": "The empty iron frames’ irregular hum resolves briefly into a thin answering note from the open north lane toward Bell Tower Lane, a distinct direction but no intelligible words.",
+            "rewardRolled": false
+          }
+        },
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "Residents are at work in the square; no immediate threat or violence is visible."
+        }
+      }
+    },
+    "worldMap": {
+      "nodes": {
+        "98091d38-7f88-465c-851c-1d728a7c7d1a": {
+          "id": "98091d38-7f88-465c-851c-1d728a7c7d1a",
+          "name": "Bellwether Square",
+          "visited": true
+        },
+        "8c0299df-c2b8-4eac-a113-de2840c3ed32": {
+          "id": "8c0299df-c2b8-4eac-a113-de2840c3ed32",
+          "name": "Bellwether Canal Locks",
+          "visited": false
+        },
+        "7f1593bc-4b9d-4eab-9429-0c32ed801568": {
+          "id": "7f1593bc-4b9d-4eab-9429-0c32ed801568",
+          "name": "Bell Tower Lane",
+          "visited": true
+        },
+        "d01b815f-e852-4dcb-9087-1a82ee4d86c2": {
+          "id": "d01b815f-e852-4dcb-9087-1a82ee4d86c2",
+          "name": "Southwest Dwellings",
+          "visited": true
+        }
+      },
+      "connections": [
+        {
+          "from": "98091d38-7f88-465c-851c-1d728a7c7d1a",
+          "to": "8c0299df-c2b8-4eac-a113-de2840c3ed32",
+          "label": "East street toward the canal locks",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "98091d38-7f88-465c-851c-1d728a7c7d1a",
+          "to": "7f1593bc-4b9d-4eab-9429-0c32ed801568",
+          "label": "Open north lane to Bell Tower Lane",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "98091d38-7f88-465c-851c-1d728a7c7d1a",
+          "to": "d01b815f-e852-4dcb-9087-1a82ee4d86c2",
+          "label": "Southwest road between the dwellings",
+          "blocked": false,
+          "bidirectional": true
+        }
+      ],
+      "positions": {
+        "98091d38-7f88-465c-851c-1d728a7c7d1a": {
+          "x": 0,
+          "y": 0
+        },
+        "8c0299df-c2b8-4eac-a113-de2840c3ed32": {
+          "x": 180,
+          "y": 0
+        },
+        "7f1593bc-4b9d-4eab-9429-0c32ed801568": {
+          "x": -89.99999999999996,
+          "y": 155.88457268119896
+        },
+        "d01b815f-e852-4dcb-9087-1a82ee4d86c2": {
+          "x": -180,
+          "y": 2.2043642384652358e-14
+        }
+      }
+    },
+    "memberLocations": {
+      "42f27fc7-bb83-4626-97ac-18831e6e5810": "7f1593bc-4b9d-4eab-9429-0c32ed801568",
+      "5eae577b-fc01-4628-8a43-752fda7d82ad": "d01b815f-e852-4dcb-9087-1a82ee4d86c2"
+    },
+    "encounterRisk": {
+      "danger": "safe",
+      "reason": "The lane and open tower door show no immediate threat; the unusual sound is a hum, not an observed hostile presence."
+    },
+    "npcs": {},
+    "worldProgression": {
+      "version": 1,
+      "places": {
+        "98091d38-7f88-465c-851c-1d728a7c7d1a": {
+          "stalledTurns": 2,
+          "lastTurnId": "b96fac7d-6b96-42f3-a01a-b5c35012bb08",
+          "recentFacts": []
+        },
+        "7f1593bc-4b9d-4eab-9429-0c32ed801568": {
+          "stalledTurns": 1,
+          "lastTurnId": "b20be78e-bf3c-478b-b533-065a2a9f3df7",
+          "recentFacts": [
+            "at the open tower door the answering hum settles into three uneven pulses a matching vibration travels through the iron frame above the lane then stops when the sound from the square fades the tower s stone threshold visibly trembles with each pulse",
+            "the three pulses produce no intelligible message their vibration shifts ash from the tower threshold exposing a narrow seam beneath the open door"
+          ]
+        },
+        "d01b815f-e852-4dcb-9087-1a82ee4d86c2": {
+          "stalledTurns": 1,
+          "lastTurnId": "b20be78e-bf3c-478b-b533-065a2a9f3df7",
+          "recentFacts": [
+            "inside the marked dwelling katooluman finds a fresh household slate the crossed out marks denote households already collected while the single uncrossed mark identifies iven s family as still present a faint tap answers from behind the shut inner door the slate gives no collection time"
+          ]
+        }
+      }
+    },
+    "searches": {
+      "bell-tower-lane:tower-threshold": {
+        "information": "The three pulses produce no intelligible message. Their vibration shifts ash from the tower threshold, exposing a narrow seam beneath the open door.",
+        "rewardRolled": false
+      }
+    }
+  },
+  "journal": [
+    {
+      "kind": "fact",
+      "name": "Bell Tower's Lower Chamber",
+      "detail": "Moryan entered the open tower. An iron stair descends around a hollow shaft to a dry lower chamber; the three-pulse vibration is strongest beneath its floor."
+    },
+    {
+      "kind": "fact",
+      "name": "Iron Frames’ Answer",
+      "detail": "Listening to the empty bell frames produced no intelligible message, but their irregular hum briefly answered from the open north lane toward Bell Tower Lane.\nAt the open tower door, the answering hum settles into three uneven pulses. A matching vibration travels through the iron frame above the lane, then stops when the sound from the square fades. The tower’s stone threshold visibly trembles with each pulse.\nThe three pulses produce no intelligible message. Their vibration shifts ash from the tower threshold, exposing a narrow seam beneath the open door."
+    },
+    {
+      "kind": "fact",
+      "name": "Iven's Family",
+      "detail": "Katooluman spoke with Iven at the inner doorway. The family remains present and fears collection; they made no request for immediate rescue and do not consent to leave. Iven reports a ration handcart went east toward the canal locks."
+    },
+    {
+      "kind": "fact",
+      "name": "Marked Household",
+      "detail": "Inside the marked dwelling, Katooluman finds a fresh household slate: the crossed-out marks denote households already collected, while the single uncrossed mark identifies Iven's family as still present. A faint tap answers from behind the shut inner door; the slate gives no collection time."
+    },
+    {
+      "kind": "location",
+      "name": "Bellwether Square",
+      "detail": "A soot-choked district square around the abandoned bell foundry. Residents share unreliable furnace heat and maintain communal kitchens and workshops. The old bell frames remain above the square and are rumored to hum at night. Visible open routes lead east to the canal locks, north toward the bell tower, and southwest between dwellings; the foundry side wicket is ajar. A public notice lists ration times and warns against tampering with levy registers."
+    }
+  ],
+  "members": [
+    {
+      "id": "42f27fc7-bb83-4626-97ac-18831e6e5810",
+      "name": "Moryan",
+      "action": "I take the stairs down"
+    },
+    {
+      "id": "5eae577b-fc01-4628-8a43-752fda7d82ad",
+      "name": "Katooluman",
+      "action": "\"taken by whom? What's going on?\""
+    }
+  ]
+}

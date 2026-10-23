@@ -1,0 +1,414 @@
+{
+  "source": "VAAL playtest turn 19, public scene/submissions and failed location references; 2026-10-21",
+  "scene": {
+    "location": {
+      "name": "The Sunward Steps of Aztlan",
+      "atmosphere": "A broad ceremonial terrace of polished black stone and gold, crowded with vendors, petitioners, porters, and the constant hum of Soul Core machinery.",
+      "hazard": "The terrace is orderly but not gentle: a raised blood-channel borders the avenue, and the imperial guards enforce public law with practiced speed.",
+      "id": "f87b1392-1bcd-45cb-9e38-c681c9632c9c"
+    },
+    "encounters": 0,
+    "encounter": null,
+    "loot": [],
+    "lethalWarning": null,
+    "places": {
+      "e4281aaf-22e7-4779-868b-f52c8f94adb5": {
+        "location": {
+          "name": "The Temple Ward",
+          "atmosphere": "An active precinct of stepped sanctuaries, painted workshops, incense braziers, and ritual courtyards, where priests and artisans move beneath vivid banners.",
+          "hazard": "Ritual channels and restricted shrine thresholds require care; attendants and guards watch the crowds, but no immediate threat is evident.",
+          "id": "e4281aaf-22e7-4779-868b-f52c8f94adb5"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The ward is occupied and orderly, with visible attendants and no immediate violence or active hazard threatening visitors."
+        }
+      },
+      "97b57c8b-0736-446e-8c8e-bfbe9a178471": {
+        "location": {
+          "name": "The Inner Sanctuary Walk",
+          "atmosphere": "An active, ancient processional way of worn stone reliefs and high banners, leading between the Temple Ward and deeper sanctuaries.",
+          "hazard": "Ritual channels score the paving near the shrine thresholds; attendants watch the approach, and visitors are expected to keep to the processional path.",
+          "id": "97b57c8b-0736-446e-8c8e-bfbe9a178471"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The walk is occupied by attendants and pilgrims, with no immediate violence or active hazard threatening visitors."
+        }
+      },
+      "078e9cfe-1642-4e78-aca5-22be1700c9a5": {
+        "location": {
+          "name": "The Copperwater Market",
+          "atmosphere": "A busy canal-side market of covered stalls, copperwork, ritual pigments, and spice counters, with barges unloading beneath carved stone bridges.",
+          "hazard": "The quay edges are slick with canal spray, and porters shoulder heavy cargo through the crowd; no immediate threat is evident.",
+          "id": "078e9cfe-1642-4e78-aca5-22be1700c9a5"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The market is crowded and active, but no immediate violence or hazard threatens visitors."
+        }
+      },
+      "e2e0fc84-96cf-4198-b32f-913881db9e58": {
+        "location": {
+          "name": "The Inner Sanctuary",
+          "atmosphere": "A living sanctuary of stepped stone, gold-inlaid doorways, incense braziers, and solemn processions beneath painted ceilings.",
+          "hazard": "Ritual channels cross the paving near restricted thresholds, where attendants and guards watch visitors closely.",
+          "id": "e2e0fc84-96cf-4198-b32f-913881db9e58"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The sanctuary is occupied and orderly; no immediate violence or active hazard threatens visitors."
+        }
+      },
+      "4474ca3a-059b-453e-a633-92375e1ed624": {
+        "location": {
+          "name": "The Veiled Court",
+          "atmosphere": "A screened ritual court of red-painted pillars, incense braziers, and curtained alcoves where physicians and ritual attendants receive private consultations.",
+          "hazard": "The inner rooms are restricted, and attendants closely monitor the treatment spaces; no immediate threat is evident.",
+          "id": "4474ca3a-059b-453e-a633-92375e1ed624"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The court is staffed and orderly, with no immediate violence or active hazard threatening visitors."
+        }
+      },
+      "05618924-f57c-4a73-8239-a059de4d4a77": {
+        "location": {
+          "name": "The Processional Avenue",
+          "atmosphere": "A broad, active thoroughfare of gold-faced façades and carved lintels, where porters, carts, petitioners, and imperial patrols thread through the capital’s steady traffic.",
+          "hazard": "Wagon congestion and dense foot traffic demand care, but no immediate violence or active hazard threatens visitors.",
+          "id": "05618924-f57c-4a73-8239-a059de4d4a77"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The avenue is crowded and guarded, but orderly, with no immediate violence or active hazard threatening travelers."
+        }
+      },
+      "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e": {
+        "location": {
+          "name": "North Causeway",
+          "atmosphere": "A raised stone road follows the canal works beyond the ceremonial avenues. Sluice towers and busy loading yards stand between the road and the distant roofs of the capital.",
+          "hazard": "The causeway narrows beside deep water, and heavy carts share the road with workers carrying cargo. No immediate violence or active threat is evident.",
+          "id": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The route is busy with ordinary canal and cargo traffic; no immediate violence or active hazard threatens travelers."
+        }
+      },
+      "d62d4cb5-a020-4764-814c-3c7a3f95f772": {
+        "location": {
+          "name": "North Road",
+          "atmosphere": "A busy stone road extends beyond the capital’s canal works, passing cargo yards, irrigated fields, and watchful waystations beneath the distant city walls.",
+          "hazard": "Wagon traffic and uneven paving demand attention; no immediate violence or active hazard is evident.",
+          "id": "d62d4cb5-a020-4764-814c-3c7a3f95f772"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The road carries ordinary commercial traffic, with no immediate threat apparent."
+        }
+      }
+    },
+    "worldMap": {
+      "nodes": {
+        "f87b1392-1bcd-45cb-9e38-c681c9632c9c": {
+          "id": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "name": "The Sunward Steps of Aztlan",
+          "visited": true
+        },
+        "05618924-f57c-4a73-8239-a059de4d4a77": {
+          "id": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "name": "The Processional Avenue",
+          "visited": true
+        },
+        "078e9cfe-1642-4e78-aca5-22be1700c9a5": {
+          "id": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+          "name": "The Copperwater Market",
+          "visited": true
+        },
+        "e4281aaf-22e7-4779-868b-f52c8f94adb5": {
+          "id": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "name": "The Temple Ward",
+          "visited": true
+        },
+        "97b57c8b-0736-446e-8c8e-bfbe9a178471": {
+          "id": "97b57c8b-0736-446e-8c8e-bfbe9a178471",
+          "name": "The Inner Sanctuary Walk",
+          "visited": true
+        },
+        "e2e0fc84-96cf-4198-b32f-913881db9e58": {
+          "id": "e2e0fc84-96cf-4198-b32f-913881db9e58",
+          "name": "The Inner Sanctuary",
+          "visited": true
+        },
+        "4474ca3a-059b-453e-a633-92375e1ed624": {
+          "id": "4474ca3a-059b-453e-a633-92375e1ed624",
+          "name": "The Veiled Court",
+          "visited": true
+        },
+        "979b1e96-0a2a-48f2-836c-d6a89a30de7d": {
+          "id": "979b1e96-0a2a-48f2-836c-d6a89a30de7d",
+          "name": "Sealed Treatment Rooms",
+          "visited": false
+        },
+        "8cc14dda-f149-4d9b-b7f9-459ce80ffb58": {
+          "id": "8cc14dda-f149-4d9b-b7f9-459ce80ffb58",
+          "name": "The Painted Workshops",
+          "visited": false
+        },
+        "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e": {
+          "id": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "name": "North Causeway",
+          "visited": true
+        },
+        "70e9e244-79d5-460e-a2c5-5510e5496700": {
+          "id": "70e9e244-79d5-460e-a2c5-5510e5496700",
+          "name": "Canal Loading Yard",
+          "visited": false
+        },
+        "d62d4cb5-a020-4764-814c-3c7a3f95f772": {
+          "id": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+          "name": "North Road",
+          "visited": true
+        }
+      },
+      "connections": [
+        {
+          "from": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "to": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "label": "South, back up to the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+          "to": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "label": "West, back up the steps to the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "to": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "label": "North, back beneath the lintels to the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "to": "97b57c8b-0736-446e-8c8e-bfbe9a178471",
+          "label": "South, toward the Inner Sanctuary Walk.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "e2e0fc84-96cf-4198-b32f-913881db9e58",
+          "to": "97b57c8b-0736-446e-8c8e-bfbe9a178471",
+          "label": "North, down the processional walk to the Inner Sanctuary Walk.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "to": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+          "label": "Southwest, along the avenue toward Copperwater Market.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "4474ca3a-059b-453e-a633-92375e1ed624",
+          "to": "e2e0fc84-96cf-4198-b32f-913881db9e58",
+          "label": "West, through the screened arch to the public sanctuary.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "4474ca3a-059b-453e-a633-92375e1ed624",
+          "to": "979b1e96-0a2a-48f2-836c-d6a89a30de7d",
+          "label": "East, beyond a guarded inner doorway; access is restricted.",
+          "blocked": true,
+          "bidirectional": false
+        },
+        {
+          "from": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "to": "8cc14dda-f149-4d9b-b7f9-459ce80ffb58",
+          "label": "East, through a painted arch into the ward’s artisan workshops.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "to": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "label": "South, back along the avenue toward the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "to": "70e9e244-79d5-460e-a2c5-5510e5496700",
+          "label": "East, toward the sluice gates and the cargo yards.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+          "to": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "label": "South, back along the causeway toward the canal works.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+          "to": "70e9e244-79d5-460e-a2c5-5510e5496700",
+          "label": "East, toward the sluice gates and the cargo yards.",
+          "blocked": false,
+          "bidirectional": true
+        }
+      ]
+    },
+    "memberLocations": {
+      "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+      "202c897b-1900-4c68-a169-096ee422b11b": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e"
+    },
+    "encounterRisk": {
+      "danger": "safe",
+      "reason": "Crowded public avenues lie under visible guard patrols; no immediate violence threatens the gathered crowd."
+    },
+    "npcs": {
+      "sivet": {
+        "id": "sivet",
+        "name": "Sivet",
+        "aliases": [
+          "the kobold courier"
+        ],
+        "locationId": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Gemling legionaire tells Sivet he is a mercenary available for hire and asks whether he has an escort contract. Sivet says no escort job is ready at the spice stalls, but offers to pass the offer to a licensed broker whose caravan is being rerouted around a flooded canal. He warns that the broker will expect a clear price and proof of competence."
+      },
+      "maeva": {
+        "id": "maeva",
+        "name": "Maeva",
+        "aliases": [
+          "the red-sashed physician"
+        ],
+        "locationId": "4474ca3a-059b-453e-a633-92375e1ed624",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Xulath shouts at Maeva, “TEST ME OR I WILL SPILL YOUR BLOOD INSTEAD.” Maeva does not agree to test him. She steps behind the consultation screen as two attendants move between them, and tells him, “Threats are not a proposal. Leave the court, or speak plainly without threatening my staff.” No one draws a weapon, and no violence occurs."
+      },
+      "oren-vask": {
+        "id": "oren-vask",
+        "name": "Oren Vask",
+        "aliases": [
+          "the licensed caravan broker"
+        ],
+        "locationId": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Gemling legionaire asks Oren Vask when the caravan cargo will be ready. Oren says the last copper fittings are being secured and the manifest checked; he expects the caravan to depart shortly, but it has not yet been loaded for departure. Gemling legionaire searches the nearby market while they talk, finding no particular object or lead."
+      },
+      "tovek": {
+        "id": "tovek",
+        "name": "Tovek",
+        "aliases": [],
+        "locationId": "05618924-f57c-4a73-8239-a059de4d4a77",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Tovek is a hired porter driving a cart along the Processional Avenue. Gemling legionaire asks him about the Unbound Ledger; Tovek has heard rumors of forged labor papers but knows no reliable names or contacts."
+      }
+    }
+  },
+  "members": [
+    {
+      "id": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+      "name": "Gemling legionaire",
+      "action": "Keep moving with the caravan and make some small talk with the folks on the cart while scanning for danger"
+    },
+    {
+      "id": "202c897b-1900-4c68-a169-096ee422b11b",
+      "name": "Xulath",
+      "action": "Go to canal loading yard"
+    }
+  ],
+  "response": {
+    "version": 3,
+    "beats": [
+      {
+        "kind": "move",
+        "actor": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "to": "new:north-road-beyond",
+        "fact": "Gemling legionaire continues north with Oren Vask’s caravan from North Road onto the onward road beyond the capital’s canal works, scanning the traffic and making small talk with the cart crew. No immediate danger or useful new information becomes apparent.",
+        "text": "The caravan leaves the busier stretch of North Road and continues north beyond the canal works. Gemling legionaire walks beside the wagons, scanning the road while trading small talk with the crew. The route runs past irrigated fields and a roadside waystation beneath the distant city walls; the porter’s easy reply is lost beneath the wagon wheels’ rumble.",
+        "place": {
+          "name": "Outer North Road",
+          "atmosphere": "A maintained stone road continues beyond the capital’s canal works, passing irrigated fields and a roadside waystation beneath the distant city walls.",
+          "hazard": "Uneven paving and passing wagons require attention; no immediate violence or active hazard is evident.",
+          "danger": "safe",
+          "riskReason": "The road carries ordinary commercial traffic, and no immediate threat is apparent."
+        },
+        "route": "North, following the road beyond the canal works.",
+        "exits": [
+          {
+            "to": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+            "label": "South, back along the road toward North Road.",
+            "name": "North Road",
+            "bidirectional": true
+          },
+          {
+            "to": "cd2f70c0-a020-4764-814c-3c7a3f95f772",
+            "label": "Southwest, toward North Causeway and the canal works.",
+            "name": "North Causeway",
+            "bidirectional": true
+          }
+        ]
+      },
+      {
+        "kind": "move",
+        "actor": "202c897b-1900-4c68-a169-096ee422b11b",
+        "to": "70e9e244-79d5-460e-a2c5-5510e5496700",
+        "fact": "Xulath travels east from North Causeway and reaches Canal Loading Yard, continuing toward the stated destination.",
+        "text": "Xulath leaves the raised causeway and follows the eastbound route toward the sluice gates. The canal widens beside the loading yard, where barges nose against stone quays and crews move copper fittings and ritual pigments beneath the watch of yard clerks. He reaches the loading yard amid the steady clang of cargo hooks and waterwheels.",
+        "place": {
+          "name": "Canal Loading Yard",
+          "atmosphere": "A busy canal-side yard of stone quays, sluice machinery, moored barges, and cargo crews shifting copper fittings and ritual pigments.",
+          "hazard": "Wet quay stones, swinging cargo hooks, and heavy loads demand care; no immediate violence or active threat is evident.",
+          "danger": "safe",
+          "riskReason": "The yard is occupied by working crews and ordinary cargo traffic, with no immediate danger apparent."
+        },
+        "exits": [
+          {
+            "to": "cd2f70c0-a020-4764-814c-3c7a3f95f772",
+            "label": "West, back along the causeway toward North Causeway.",
+            "name": "North Causeway",
+            "bidirectional": true
+          },
+          {
+            "to": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+            "label": "West, toward North Road.",
+            "name": "North Road",
+            "bidirectional": true
+          }
+        ]
+      }
+    ],
+    "summary": "Gemling legionaire continues escorting Oren Vask’s caravan north beyond North Road, alert to the traffic and making small talk with the crew. Xulath reaches Canal Loading Yard from North Causeway.",
+    "notes": []
+  }
+}

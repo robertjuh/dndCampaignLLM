@@ -3,6 +3,21 @@ import type { Outcome, PlaceState, Scene, WorldMap } from './schema';
 export const combatActive = (scene: Pick<Scene, 'encounter'>) =>
   !!scene.encounter && !scene.encounter.victory && !scene.encounter.escaped;
 
+/** Omit all-clear filler while preserving concrete warnings in the same field. */
+export function locationHazard(hazard?: string) {
+  const text = hazard?.trim() ?? '';
+  const allClear = [
+    /^(?:none|n\/a|(?:(?:but|and)\s+)?(?:there\s+(?:is|are)\s+)?no(?:\s+(?:immediate|active|direct|obvious|known|visible|apparent|current|specific|threats?|hazards?|dangers?|violence|or|and|is|are|evident|present|detected|observed|identified|noted|here))+)[.!?;]?$/iu,
+    /^(?:(?:maar|en)\s+)?(?:er\s+(?:is|zijn)\s+)?geen(?:\s+(?:directe?|onmiddellijke?|acuut|acute|zichtbaar|zichtbare|bekende?|duidelijke?|gevaar|gevaren|dreiging(?:en)?|risico|risicos|en|of|is|zijn|aanwezig|merkbaar|waargenomen|vastgesteld))+[.!?;]?$/iu,
+  ];
+  return text
+    .split(/(?<=[.!?;])\s+|(?<=,)\s+(?=(?:(?:but|and|maar|en)\s+)?(?:no|geen|there|er)\b)/iu)
+    .filter((part) => !allClear.some((pattern) => pattern.test(part.trim())))
+    .join(' ')
+    .replace(/[;,]\s*$/, '.')
+    .trim();
+}
+
 export function ensureLocations(scene: Scene, memberIds: string[] = []) {
   scene.location.id ??= crypto.randomUUID();
   scene.places ??= {};

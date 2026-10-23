@@ -81,7 +81,7 @@ function fixture(filename = ':memory:') {
         if (control.fail) throw new Error('Interrupted after the staircase check.');
         return outcome({
           xp: 7,
-          gold: 9,
+          currency: 9,
           location: { name: 'A floating garden', atmosphere: 'Rain rises.', hazard: 'Moving roots.' },
         });
       }
@@ -159,7 +159,7 @@ describe('replacement characters after successful encounters', () => {
     f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id);
     const fresh = member(f);
     expect(fresh.character.name).toBe('Ash');
-    expect(fresh.state).toMatchObject({ level: 1, xp: 0, gold: 0, hp: fresh.state.maxHp });
+    expect(fresh.state).toMatchObject({ level: 1, xp: 0, currency: 0, hp: fresh.state.maxHp });
     expect(f.game.snapshot(f.c.id, f.host.id).turn!.id).toBe(next.id);
     expect(f.game.snapshot(f.c.id, f.host.id).turn!.roster).toEqual([...next.roster, fresh.id]);
     expect(f.game.snapshot(f.c.id, f.host.id).turn!.roster).not.toContain(lateMember.id);
@@ -211,7 +211,7 @@ describe('replacement characters after successful encounters', () => {
     Object.assign(retired.state, {
       level: 4,
       xp: 82,
-      gold: 77,
+      currency: 77,
       pendingLevelUps: 2,
       kills: 9,
       bosses: 2,
@@ -246,7 +246,7 @@ describe('replacement characters after successful encounters', () => {
       level: 1,
       hp: fresh.state.maxHp,
       xp: 0,
-      gold: 0,
+      currency: 0,
       pendingLevelUps: 0,
       kills: 0,
       bosses: 0,
@@ -278,7 +278,7 @@ describe('replacement characters after successful encounters', () => {
     expect(snapshot.scene.encounters).toBe(1);
     expect(snapshot.scene.location.name).toBe('A floating garden');
     expect(snapshot.turn?.roster).toContain(fresh.id);
-    expect(member(f, f.p2.id).state).toMatchObject({ xp: 7, gold: 9 });
+    expect(member(f, f.p2.id).state).toMatchObject({ xp: 7, currency: 9 });
     expect(snapshot.history[1].actions.find((action) => action.memberId === fresh.id)?.characterName).toBe(
       'Mira',
     );
@@ -436,7 +436,7 @@ describe('replacement characters after successful encounters', () => {
     const reopened = openDatabase(filename);
     cleanup.push(() => reopened.close());
     const restored = new Game(reopened, () => f.provider, f.draw);
-    expect(reopened.pragma('user_version', { simple: true })).toBe(20);
+    expect(reopened.pragma('user_version', { simple: true })).toBe(22);
     expect(restored.members(f.c.id).map((m) => ({ character: m.character, state: m.state }))).toEqual(
       before.map((m) => ({ character: m.character, state: m.state })),
     );

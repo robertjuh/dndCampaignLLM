@@ -425,7 +425,7 @@ it('rejects duplicate deeds, unrelated actors, unknown IDs, excessive deltas and
     changes: [],
     journal: [],
     location: null,
-    rewards: { xp: 0, gold: 0, reason: 'None' },
+    rewards: { xp: 0, currency: 0, reason: 'None' },
   };
   const eventId = event(value, 'Mira helps an unnamed envoy who reports her identity.');
   const effect: FactionEffect = {

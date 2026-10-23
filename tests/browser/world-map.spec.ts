@@ -35,10 +35,20 @@ async function mappedTable(page: Page) {
     };
   });
   snapshot.myMemberId = snapshot.members[0].id;
-  snapshot.scene.location = { id: courtyard, name: 'Courtyard', atmosphere: 'Stone paving.', hazard: '' };
+  snapshot.scene.location = {
+    id: courtyard,
+    name: 'Courtyard',
+    atmosphere: 'Stone paving.',
+    hazard: 'No immediate threat is apparent.',
+  };
   snapshot.scene.places = {
     [road]: {
-      location: { id: road, name: 'Old checkpoint', atmosphere: 'A dusty road.', hazard: '' },
+      location: {
+        id: road,
+        name: 'Old checkpoint',
+        atmosphere: 'A dusty road.',
+        hazard: 'Loose stones along the roadside. No immediate threat is apparent.',
+      },
       encounter: null,
       loot: [],
     },
@@ -130,6 +140,11 @@ test('maps known routes and separate character positions on phones and the share
       await expect(current).toHaveAttribute('aria-current', 'location');
       await expect(current).toContainText('Mira');
       await expect(current).not.toContainText('Rowan');
+      const selection = map.getByRole('region', { name: 'Selected location', exact: true });
+      await expect(selection).toContainText('Stone paving.');
+      await expect(selection).not.toContainText('Known hazard');
+      await expect(selection).not.toContainText('No immediate threat');
+      await expect(view.locator('.location-banner')).not.toContainText('No immediate threat');
       await expect(map.getByRole('article', { name: 'Location: Old checkpoint' })).toContainText('Rowan');
       for (const name of ['Sir rexmen', 'Matthes']) {
         await expect(map.getByRole('article', { name: 'Location: Old checkpoint' })).toContainText(name);
@@ -165,7 +180,19 @@ test('maps known routes and separate character positions on phones and the share
       await expect(
         expanded.locator(`img[src="/api/portraits/${snapshot.members[0].character.portraitId}"]`),
       ).toBeVisible();
+      await expect(expanded.getByRole('region', { name: 'Selected location' })).toContainText('Stone paving.');
       await view.keyboard.press('Escape');
+      await map.getByRole('button', { name: 'Fit map', exact: true }).click();
+      await map.getByRole('button', { name: 'Location: Old checkpoint', exact: true }).click();
+      await expect(selection).toContainText('A dusty road.');
+      await expect(selection).toContainText('Known hazard: Loose stones along the roadside.');
+      await expect(selection).not.toContainText('No immediate threat');
+      await expect(selection).not.toContainText('Stone paving.');
+      await expect(selection.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible();
+      await map.getByRole('button', { name: 'Fit map', exact: true }).click();
+      await map.getByRole('button', { name: 'Location: Distant camp', exact: true }).click();
+      await expect(selection).toContainText('No description has been recorded for this location yet.');
+      await expect(selection).not.toContainText('Loose stones');
       await map.locator('summary').click();
       await expect(map.locator('.world-map-connections')).toContainText('Locked gate · Blocked');
       await expect(map.locator('.world-map-connections')).toContainText(
@@ -232,6 +259,7 @@ test('keeps places and the camera stable through discoveries, navigation and exp
   );
   expect(await canvas.getAttribute('style')).toBe(cameraBeforeTurn);
   expect(await origin.getAttribute('style')).toBe(initialPosition);
+  await expect(map.locator('.world-map-selection')).toContainText('Stone paving.');
   await expect(map.locator('.world-map-route.new')).toHaveCount(2);
 
   await viewport.scrollIntoViewIfNeeded();
@@ -284,6 +312,8 @@ test('keeps places and the camera stable through discoveries, navigation and exp
 
   await map.getByRole('button', { name: 'Find me', exact: true }).click();
   await expect(map.locator('.world-map-selection')).toContainText('Old checkpoint');
+  await expect(map.locator('.world-map-selection')).toContainText('A dusty road.');
+  await expect(map.locator('.world-map-selection')).not.toContainText('Stone paving.');
   const beforeExpand = await center();
   const zoom = await map.getByRole('status', { name: 'Zoom level' }).textContent();
   await map.getByRole('button', { name: 'Expand map', exact: true }).click();
@@ -303,6 +333,7 @@ test('keeps places and the camera stable through discoveries, navigation and exp
   await map.getByRole('button', { name: 'Location: New overlook', exact: true }).click();
   await expect(map.locator('.world-map-selection')).toContainText('New overlook');
   await expect(map.locator('.world-map-selection')).toContainText('Unvisited');
+  await expect(map.locator('.world-map-selection')).toContainText('This location has not been explored yet.');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

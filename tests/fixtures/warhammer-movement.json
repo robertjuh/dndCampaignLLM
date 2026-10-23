@@ -490,7 +490,7 @@
       ],
       "rewards": {
         "xp": 0,
-        "gold": 0,
+        "currency": 0,
         "reason": "Travel, locating already visible provisions and repeating an unchanged examination yield no new reward."
       },
       "placeUpdates": [],
@@ -1109,7 +1109,7 @@
       ],
       "rewards": {
         "xp": 10,
-        "gold": 0,
+        "currency": 0,
         "reason": "The party discovers a sheltered drainage patch on the upper road, a distinct place to examine despite the failed searches."
       },
       "placeUpdates": [

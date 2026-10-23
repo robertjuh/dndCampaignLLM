@@ -281,7 +281,12 @@ it('starts a triggered encounter at the intermediate stop and requires new comba
   const local = memberScene(f.snapshot().scene, f.members[1].id);
   expect(local.location.id).toBe(bridge);
   expect(local.encounter).toMatchObject({ round: 1, victory: false });
-  expect(local.encounter!.enemies[0].hp).toBe(20);
+  expect(local.encounter!.enemies[0]).toMatchObject({
+    hp: 12,
+    maxHp: 12,
+    onHitChance: 25,
+    maxAilmentsPerHit: 1,
+  });
   expect(f.snapshot().members[1].state.hp).toBe(hp);
   expect(completed.rolls.filter((roll) => roll.reason === 'Random encounter')).toHaveLength(1);
   expect(() => f.join()).toThrow('Characters in combat');

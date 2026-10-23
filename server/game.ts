@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { projectJournal } from '../shared/journal';
 import type { DiceSource } from './random';
 import { createInviteCode, type DB } from './db';
@@ -15,6 +16,17 @@ import {
 } from './turn-resolution';
 import { repairTurnCheckpoints } from './turn-recovery';
 import { resolvePickups, type PickupResult } from './turn-pickups';
+import { submittedActionObligations } from './action-intent';
+import { investigationSchema, type Investigation, type InvestigationResult } from '../shared/investigation';
+import {
+  bindInvestigationSource,
+  investigationAttemptKey,
+  investigationFact,
+  investigationKey,
+  investigationResults,
+  knownInvestigationAnswer,
+  validateInvestigationLeads,
+} from './investigations';
 import { validateNPCReactions, journalWithNPCReactions, type NPCReactionReceipt } from './npc-reactions';
 import {
   applyNPCUpdates,
@@ -25,6 +37,10 @@ import {
   saveNPCEncounter,
 } from './npcs';
 import { applyFeatureUpdates } from './scene-state';
+import { assertRandomEncounterBudget, boundRandomEnemy, randomEncounterBalance } from './encounter-balance';
+import { gmMemorySchema, prepareGMNotes, updateGMMemory, type GMMemory } from '../shared/gm-memory';
+import { sceneNarration } from './scene-turn';
+import { planQuests, applyQuestPlan } from './quests';
 import {
   factionWorldSchema,
   factionConnectionSchema,
@@ -65,7 +81,7 @@ import {
   type EncounterCheck,
   type EncounterChecks,
 } from './encounters';
-import { advanceWorldProgression } from './world-progression';
+import { advanceWorldProgression, worldProgressionContext } from './world-progression';
 import { gatheringRoute } from '../shared/gathering';
 import {
   campaignSchema,
@@ -115,6 +131,10 @@ import {
   abilityMechanics,
   abilityBonus,
   abilityDice,
+  isHealingAbility,
+  isRally,
+  hasAdvancedTargeting,
+  validateAbilityTheme,
   equipmentBonus,
   availableAbility,
   availableAbilities,
@@ -131,6 +151,7 @@ import {
   equippedItems,
   healWithItem,
   mendWithAbility,
+  mendWithAbilityTargets,
   isDead,
   isDowned,
   isInCombat,
@@ -179,6 +200,8 @@ const gameplayBuildId = createHash('sha256')
       './npc-reactions.ts',
       './npcs.ts',
       './scene-state.ts',
+      './scene-turn.ts',
+      '../shared/gm-memory.ts',
       '../shared/scene-state.ts',
       '../shared/npcs.ts',
       './adjudication-recovery.ts',
@@ -215,6 +238,7 @@ export type CampaignRow = {
   version: number;
   scene: string | null;
   factions: string | null;
+  gm_memory: string;
 };
 type TurnRow = {
   id: string;
@@ -258,6 +282,9 @@ export type StageBudget = {
   fallback?: string;
 };
 export type GMContext = {
+  partialAdjudication?: TurnAdjudication;
+  sceneProtocol?: boolean;
+  gmMemory?: GMMemory;
   buildId?: string;
   factions?: FactionWorld;
   config: CampaignConfig;
@@ -336,10 +363,13 @@ export type ResourceReceipt = ResourceUse & {
   cured?: string[];
   state: CharacterState;
   targetState: CharacterState;
+  targets?: { targetId: string; restored: number; cured: string[]; state: CharacterState }[];
 };
 export type GameTools = ((check: Check) => Roll) & {
+  investigate?: (input: Investigation) => InvestigationResult;
+  checkpointAdjudication?: (value: TurnAdjudication) => void;
   prepareEncounters?: (value: TurnAdjudication) => EncounterCheck[];
-  startCombat: (enemies: unknown, locationId?: string) => unknown;
+  startCombat: (enemies: unknown, locationId?: string, introduction?: string) => unknown;
   combat: (input: CombatInput, locationId?: string) => unknown;
   offerLoot: (input: {
     item: LootBlueprint;
@@ -354,6 +384,8 @@ export type GameTools = ((check: Check) => Roll) & {
   validateAdjudication?: (input: unknown) => TurnAdjudication;
 };
 type Draft = {
+  partialAdjudication?: TurnAdjudication;
+  gmMemory?: GMMemory;
   progress?: Turn['progress'];
   placeRefs?: Record<string, string>;
   factionLifecycle?: boolean;
@@ -372,6 +404,7 @@ type Draft = {
   narrationRevision?: number;
 };
 export interface GameMaster {
+  sceneTurns?: boolean;
   generateFactions?(context: GMContext, example: FactionWorld, budget: StageBudget): Promise<FactionWorld>;
   connectFactions?(
     context: GMContext,
@@ -400,12 +433,11 @@ export function validateLevelUpReward(context: LevelUpContext, input: unknown): 
     if (reward.ability) throw new GameError('An attribute reward cannot also grant an ability.');
   } else {
     const kind = context.choice.endsWith('combat') ? 'combat' : 'utility';
-    if (
-      !reward.ability ||
-      reward.ability.kind !== kind ||
-      reward.ability.level !== (context.target ? context.target.level + 1 : 1)
-    )
-      throw new GameError('The ability must match the chosen category and level.');
+    const powerLevel = context.target ? context.target.level + 1 : context.state.level;
+    if (!reward.ability || reward.ability.kind !== kind || reward.ability.level !== powerLevel)
+      throw new GameError(
+        `The ability must match the chosen category and level (${kind}, power level ${powerLevel}).`,
+      );
     if (
       context.target
         ? reward.ability.name !== context.target.name
@@ -414,7 +446,8 @@ export function validateLevelUpReward(context: LevelUpContext, input: unknown): 
       throw new GameError('Upgrade the selected ability, or give a new ability a unique name.');
     if (
       context.target &&
-      (reward.ability.effect !== context.target.effect ||
+      (reward.ability.effect !== (isRally(context.target) ? 'rally' : context.target.effect) ||
+        (reward.ability.targeting ?? 'single') !== (context.target.targeting ?? 'single') ||
         reward.ability.stat !== context.target.stat ||
         reward.ability.dice !== context.target.dice ||
         (reward.ability.bonus ?? 0) !== (context.target.bonus ?? 0) ||
@@ -424,6 +457,9 @@ export function validateLevelUpReward(context: LevelUpContext, input: unknown): 
       throw new GameError(
         'An upgrade must preserve the ability’s effect, attribute, dice, and rolled bonus.',
       );
+    if (hasAdvancedTargeting(reward.ability) && context.state.level < 2)
+      throw new GameError('Multi-target, area and party healing abilities unlock at character level 2.');
+    if (!context.target) validateAbilityTheme(reward.ability);
     if (!context.target && (reward.ability.dice !== undefined || (reward.ability.bonus ?? 0) !== 0))
       throw new GameError(
         'New level-up abilities must use standard base power, without model-chosen dice or bonuses.',
@@ -503,12 +539,15 @@ export class Game {
       result.characters++;
       const chosen = new Set(character.abilities.map((a) => a.name));
       for (const ability of character.abilityOptions) {
-        const dice = ['strike', 'mend'].includes(ability.effect) ? abilityDice(ability) : null;
+        const effect = isRally(ability) ? 'rally' : ability.effect;
+        const dice = ['strike', 'mend', 'restoration', 'barrier'].includes(ability.effect)
+          ? abilityDice(ability)
+          : null;
         const bonus = ability.bonus ?? 0;
-        const key = json([ability.kind, ability.effect, ability.stat, dice, bonus]);
+        const key = json([ability.kind, effect, ability.stat, dice, bonus]);
         const group = groups.get(key) ?? {
           kind: ability.kind,
-          effect: ability.effect,
+          effect,
           stat: ability.stat,
           dice,
           bonus,
@@ -893,7 +932,11 @@ export class Game {
     const viewTurn = (row: TurnRow): Turn => {
       const turn = this.turn(row);
       const draft: Draft | undefined = row.draft ? JSON.parse(row.draft) : undefined;
-      if (draft?.factions && row.phase !== 'complete') delete turn.resolution;
+      if (draft?.context?.sceneProtocol) {
+        delete turn.diagnostics;
+      }
+      if ((draft?.factions || draft?.context?.sceneProtocol) && row.phase !== 'complete')
+        delete turn.resolution;
       if (draft?.factions) {
         const known = new Set(publicFactions(world).map((faction) => faction.id));
         const hidden = draft.factions.factions.filter((faction) => !known.has(faction.id));
@@ -1047,7 +1090,12 @@ export class Game {
         const place = memberScene(scene, member.id);
         const inCombat = place.encounter && !place.encounter.victory && !place.encounter.escaped;
         const ability = availableAbility(member.character, member.state, abilityName);
-        if (!inCombat && ability.kind === 'combat' && !['strike', 'mend', 'cleanse'].includes(ability.effect))
+        if (
+          !inCombat &&
+          ability.kind === 'combat' &&
+          ability.effect !== 'strike' &&
+          !isHealingAbility(ability)
+        )
           throw new GameError(
             'Choose a utility, obstacle strike, healing, or cleansing ability outside combat.',
           );
@@ -1280,6 +1328,10 @@ export class Game {
         );
       if ((hasCombat(scene) && !startedCombats(draft)[scene.location.id!]) || fought(draft, check.memberId))
         throw new GameError('Use resolve_combat to adjudicate a combat round.');
+      if (draft.receipts[`investigation:${check.memberId}`])
+        throw new GameError(
+          'This investigation is already resolved. Reuse its saved finding without another check.',
+        );
       const member = draft.members.find((member) => member.id === check.memberId)!;
       if (incapacitatingCondition(member.state))
         throw new GameError('This character cannot make a check while incapacitated.');
@@ -1343,7 +1395,7 @@ export class Game {
         ability.effect !== 'strike'
       )
         throw new GameError(
-          'Only utility assist or a strike against a noncombat obstacle uses a check; execute Mend or Cleanse through use_resource.',
+          'Only utility assist or a strike against a noncombat obstacle uses a check; execute healing or cleansing abilities through use_resource.',
         );
       if (ability && ability.stat !== check.stat)
         throw new GameError('This ability must use its saved attribute for the relevant check.');
@@ -1358,10 +1410,28 @@ export class Game {
       const equipmentBonuses = equippedItems(member.state)
         .filter((item) => item.scaling.includes(check.stat) && item.checkBonus)
         .map((item) => ({ itemId: item.id, name: item.name, bonus: item.checkBonus }));
+      // Only the strongest successful ability assistance applies; ordinary help still grants advantage.
+      const helperBonus = Math.max(
+        0,
+        ...helpers.map((helperId) => {
+          const receipt = turn.rolls.find((roll) => roll.memberId === helperId && !roll.notation)!;
+          const helper = draft.members.find((candidate) => candidate.id === helperId)!;
+          const support = availableAbilities(helper.character, helper.state).find(
+            (candidate) =>
+              candidate.name === receipt.abilityName &&
+              candidate.kind === 'utility' &&
+              candidate.effect === 'assist',
+          );
+          return support ? abilityBonus(support) : 0;
+        }),
+      );
+      const ownBonus = ability ? abilityBonus(ability) : 0;
+      const assistanceBonus = Math.max(0, helperBonus - ownBonus);
       const bonus =
         modifier(member.state.stats[check.stat]) +
         equipmentBonus(member.state, check.stat, 'checkBonus') +
-        (ability ? abilityBonus(ability) : 0) -
+        ownBonus +
+        assistanceBonus -
         ailmentCheckPenalty(member.state, check.stat);
       const total = selected + bonus;
       const result: Roll = {
@@ -1371,6 +1441,7 @@ export class Game {
         dice,
         modifier: bonus,
         equipmentBonuses,
+        ...(assistanceBonus ? { assistanceBonus } : {}),
         total,
         success: selected !== 1 && (selected === 20 || total >= check.dc),
         critical: selected === 1 ? 'failure' : selected === 20 ? 'success' : undefined,
@@ -1392,6 +1463,202 @@ export class Game {
     });
     this.emit(id);
     return result;
+  }
+  investigate(id: string, turnId: string, input: Investigation): InvestigationResult {
+    const request = investigationSchema.parse(input);
+    const planKey = `investigation-plan:${request.memberId}`;
+    const resultKey = `investigation:${request.memberId}`;
+    const plan = this.withDraft(id, turnId, (draft) => {
+      const row = this.pending(id)!;
+      const context = this.resolutionContext(draft, row);
+      const action = context.turn.actions.find(
+        (action) => action.memberId === request.memberId && !action.passed,
+      );
+      const member = draft.members.find((member) => member.id === request.memberId);
+      const prior = draft.receipts[planKey] as
+        { request: Investigation; source: InvestigationResult['source']; signature: string; narrativeVersion?: 1 } | undefined;
+      if (
+        !action ||
+        !member ||
+        !row.number ||
+        !context.turn.roster.includes(member.id) ||
+        action.supportAction ||
+        action.gathering ||
+        (!prior && (member.state.hp <= 0 || incapacitatingCondition(member.state)))
+      )
+        throw new GameError('An investigation requires a conscious character with a submitted main action.');
+      if (
+        fought(draft, member.id) ||
+        (hasCombat(memberScene(draft.scene, member.id)) &&
+          !startedCombats(draft)[memberScene(draft.scene, member.id).location.id!])
+      )
+        throw new GameError('Resolve combat actions through the combat engine.');
+      const bound = bindInvestigationSource(context, member.id, request.source);
+      if (
+        !prior && request.source.kind === 'place' &&
+        submittedActionObligations(context, member.id).some((obligation) => obligation.kind === 'talk')
+      )
+        throw new GameError(
+          'Question the actual person using source kind:npc and their saved ID. An unnamed witness may be introduced with a stable new: role ID, name/role and description. A place source cannot replace the person answering.',
+        );
+      if (
+        !worldProgressionContext(context).threads.some(
+          (thread) => thread.id === (request.thread ?? 'premise'),
+        )
+      )
+        throw new GameError('Link the investigation to an existing public story thread.');
+      validateInvestigationLeads(context, request, bound.source);
+      if (prior) {
+        if (
+          prior.source.id !== bound.source.id ||
+          prior.source.kind !== bound.source.kind ||
+          prior.source.locationId !== bound.source.locationId ||
+          prior.request.answer !== request.answer ||
+          prior.request.preparation.id !== request.preparation.id
+        )
+          throw new GameError(
+            'The investigation target and prepared answer are locked. Reuse the saved finding.',
+          );
+        // Invalid check parameters may be corrected before any dice are spent; answers stay frozen.
+        if (
+          !draft.receipts[resultKey] &&
+          !context.turn.rolls.some((roll) => roll.memberId === member.id && !roll.notation)
+        ) {
+          prior.request.check = request.check;
+          prior.signature = `${bound.signature}:${request.check?.abilityName ?? 'ordinary'}`;
+        }
+        return prior;
+      }
+      if (context.turn.rolls.some((roll) => roll.memberId === member.id && !roll.notation))
+        throw new GameError(
+          'This legacy check already has dice. Describe its saved result without starting another investigation.',
+        );
+      if (
+        Object.entries(draft.receipts).some(
+          ([key, value]) =>
+            key.startsWith('resource:') &&
+            (value as ResourceReceipt).memberId === member.id &&
+            resourceSlot(value as ResourceReceipt) === 'main',
+        )
+      )
+        throw new GameError('This character has already spent their main action.');
+      const preparation = {
+        ...request.preparation,
+        ...(request.preparation.locationId === 'current' ? { locationId: bound.source.locationId } : {}),
+      };
+      if (preparation.journey)
+        throw new GameError('Prepare journeys in scene notes on the submitted travel, not through an investigation.');
+      const notes = prepareGMNotes(draft.gmMemory ?? [], [preparation]);
+      if (!notes[0].discoveries[request.answer]) throw new GameError('Select an existing prepared answer.');
+      draft.gmMemory = updateGMMemory(draft.gmMemory ?? [], notes);
+      const saved = {
+        request: { ...request, preparation },
+        source: bound.source,
+        signature: `${bound.signature}:${request.check?.abilityName ?? 'ordinary'}`,
+        narrativeVersion: 1 as const,
+      };
+      draft.receipts[planKey] = saved;
+      return saved;
+    });
+    const row = this.pending(id)!;
+    const draft: Draft = JSON.parse(row.draft!);
+    const existing = draft.receipts[resultKey] as InvestigationResult | undefined;
+    if (existing) return existing;
+    const note = draft.gmMemory!.find((note) => note.id === plan.request.preparation.id)!;
+    const location = plan.source.locationId;
+    const attemptKey = investigationAttemptKey(note.id, plan.request.answer, plan.signature);
+    const localSearch =
+      location === draft.scene.location.id || draft.scene.places?.[location]
+        ? placeScene(draft.scene, location).searches?.[plan.source.id.toLowerCase()]
+        : undefined;
+    const sourceSearch =
+      [draft.scene, ...Object.values(draft.scene.places ?? {})]
+        .map((place) => place.searches?.[plan.source.id.toLowerCase()])
+        .find((search) => search?.attempts?.[attemptKey]) ?? localSearch;
+    const priorSearch = sourceSearch?.attempts?.[attemptKey] ?? sourceSearch;
+    const cached = priorSearch?.investigation;
+    const knownAnswer = knownInvestigationAnswer(
+      this.resolutionContext(draft, row), note.discoveries[plan.request.answer],
+    );
+    const sameTurn = investigationResults(this.resolutionContext(draft, row)).find(
+      (result) =>
+        result.hookId === note.id &&
+        result.answer === plan.request.answer &&
+        result.source.kind === plan.source.kind &&
+        result.source.id === plan.source.id &&
+        result.signature === plan.signature,
+    );
+    const reused =
+      knownAnswer ||
+      !!sameTurn ||
+      !!(
+        cached &&
+        cached.hookId === note.id &&
+        cached.answer === plan.request.answer &&
+        cached.signature === plan.signature
+      );
+    const actor = draft.members.find((member) => member.id === request.memberId)!;
+    const submitted = this.turn(row).actions.find((action) => action.memberId === request.memberId)!;
+    if (!reused && !plan.request.check && requiresUtilityCheck(actor.character, submitted, actor.state))
+      throw new GameError(
+        'Resolve the requested utility ability through an investigation check with its exact saved name and stat.',
+      );
+    const roll =
+      !reused && plan.request.check
+        ? this.roll(id, turnId, { ...plan.request.check, memberId: request.memberId })
+        : undefined;
+    return this.withDraft(id, turnId, (current) => {
+      const known = knownAnswer;
+      const success = reused
+        ? known || (sameTurn ? sameTurn.success : cached?.success === true)
+        : (roll?.success ?? true);
+      const branch = success ? plan.request.success : plan.request.failure;
+      let finding = {
+        fact: success ? note.discoveries[plan.request.answer] : plan.request.failure.fact,
+        text: branch.text,
+        lead: branch.lead.fact,
+        leadLocationId:
+          branch.lead.locationId === 'current' ? plan.source.locationId : branch.lead.locationId,
+        ...(plan.narrativeVersion ? { narrativeVersion: plan.narrativeVersion } : {}),
+      };
+      if (reused)
+        finding = sameTurn
+          ? structuredClone(sameTurn.finding)
+          : cached && priorSearch && (!known || cached.success)
+            ? {
+                fact: priorSearch.information,
+                text: cached.text,
+                lead: cached.lead,
+                leadLocationId: cached.leadLocationId,
+                ...(cached.narrativeVersion ? { narrativeVersion: cached.narrativeVersion } : {}),
+              }
+            : {
+                fact: note.discoveries[plan.request.answer],
+                text: note.discoveries[plan.request.answer],
+                lead: branch.lead.fact,
+                leadLocationId: finding.leadLocationId,
+              };
+      const name = current.members.find((member) => member.id === request.memberId)!.character.name;
+      const result: InvestigationResult = {
+        memberId: request.memberId,
+        source: plan.source,
+        question: plan.request.question,
+        thread: plan.request.thread ?? 'premise',
+        hookId: note.id,
+        answer: plan.request.answer,
+        signature: plan.signature,
+        success,
+        reused,
+        ...(roll ? { rollId: roll.id } : {}),
+        finding,
+        actionFact:
+          current.context!.config.language === 'Nederlands'
+            ? `${name} onderzoekt ${plan.source.name}: ${success ? finding.fact : `geen antwoord op ${plan.request.question}`}`
+            : `${name} investigates ${plan.source.name}: ${success ? finding.fact : `does not resolve ${plan.request.question}`}`,
+      };
+      current.receipts[resultKey] = result;
+      return result;
+    });
   }
   private withDraft<T>(id: string, turnId: string, callback: (draft: Draft) => T, checkpoint = false): T {
     const result = this.db.transaction(() => {
@@ -1497,17 +1764,31 @@ export class Game {
       return prepared.required;
     });
   }
-  startCombat(id: string, turnId: string, input: unknown, locationId?: string) {
+  startCombat(id: string, turnId: string, input: unknown, locationId?: string, introduction?: string) {
     const proposed = enemySchema.array().min(1).max(10).parse(input);
     this.mechanicalIndex.set(turnId, 0);
     return this.withDraft(id, turnId, (draft) => {
       const targetId = locationId === 'current' || !locationId ? draft.scene.location.id! : locationId;
       const starts = startedCombats(draft);
       if (starts[targetId]) return starts[targetId];
-      const place = targetId.startsWith('new:') ? null : placeScene(draft.scene, targetId);
+      if (
+        introduction !== undefined &&
+        (typeof introduction !== 'string' || !introduction.trim() || introduction.length > 1500)
+      )
+        throw new GameError('Describe how and why combat begins in 1–1500 characters.');
       const check = (draft.receipts.encounterChecks as EncounterChecks | undefined)?.[targetId];
-      if (draft.receipts.encounterProposal && !check?.triggered)
+      const proposal = draft.receipts.encounterProposal as TurnAdjudication | undefined;
+      if (proposal && !check?.triggered)
         throw new GameError('Exploration is resolved. Introduce only the saved triggered encounters.');
+      // First arrivals at previewed map nodes get their full place state during finalization.
+      const pendingArrival =
+        targetId !== draft.scene.location.id &&
+        !draft.scene.places?.[targetId] &&
+        !!draft.scene.worldMap?.nodes[targetId] &&
+        check?.triggered &&
+        proposal?.arrivals?.some((arrival) => arrival.locationId === targetId) &&
+        proposal.placeUpdates?.some((update) => update.ref === targetId);
+      const place = targetId.startsWith('new:') || pendingArrival ? null : placeScene(draft.scene, targetId);
       const present = (memberId: string) =>
         check
           ? check.memberIds.includes(memberId)
@@ -1569,10 +1850,18 @@ export class Game {
         throw new GameError('Execute requested consumables through use_resource before starting combat.');
       if (place && hasCombat(place)) throw new GameError('Combat is already active.');
       const context = this.resolutionContext(draft, this.pending(id)!);
-      const proposal = draft.receipts.encounterProposal as TurnAdjudication | undefined;
       if (proposal?.npcUpdates?.length)
         applyNPCUpdates(context.scene, proposal, adjudicationPlaceRef(context, proposal));
-      const enemies = proposed.map((enemy) => persistentEnemy(context, enemy, targetId));
+      const balance = check?.triggered
+        ? randomEncounterBalance(context, targetId, check.memberIds)
+        : undefined;
+      const enemies = proposed.map((enemy) => {
+        const saved = persistentEnemy(context, enemy, targetId);
+        return balance && !knownNPCs(context.scene)[saved.id]?.enemy
+          ? boundRandomEnemy(saved, balance)
+          : saved;
+      });
+      if (balance) assertRandomEncounterBudget(enemies, balance);
       const otherEnemies = [
         ...Object.entries(starts)
           .filter(([key]) => key !== targetId)
@@ -1608,10 +1897,13 @@ export class Game {
             ? e.equipment
             : rollEnemyLoot(
                 randomUUID(),
-                Math.max(
-                  1,
-                  ...draft.members.filter((member) => present(member.id)).map((member) => member.state.level),
-                ),
+                balance?.level ??
+                  Math.max(
+                    1,
+                    ...draft.members
+                      .filter((member) => present(member.id))
+                      .map((member) => member.state.level),
+                  ),
                 e,
                 (sides, label) => die(sides, `${e.name}: ${label}`, e.id, 'INT'),
                 (JSON.parse(this.campaign(id).config) as CampaignConfig).language,
@@ -1635,6 +1927,10 @@ export class Game {
         savePlace(draft.scene, place);
       }
       draft.receipts.startCombatByLocation = { ...starts, [targetId]: structuredClone(encounter) };
+      if (introduction !== undefined) {
+        const introductions = (draft.receipts.combatIntroductionsByLocation ??= {}) as Record<string, string>;
+        introductions[targetId] = introduction.trim();
+      }
       draft.receipts.startCombat ??= structuredClone(encounter);
       if (!locationId) draft.receipts.startCombatLegacyLocation = targetId;
       return encounter;
@@ -1960,6 +2256,7 @@ export class Game {
         spent ||
         (slot === 'main' &&
           (action.supportAction ||
+            !!draft.receipts[`investigation:${use.memberId}`] ||
             (draft.receipts.support as SupportResult[] | undefined)?.some(
               (receipt) => receipt.memberId === use.memberId,
             ) ||
@@ -1981,6 +2278,7 @@ export class Game {
         throw new GameError('This support action has already been resolved by the server.');
       if (isDead(target.state)) throw new GameError('A dead character cannot be healed.');
       let restored = 0;
+      let targets: ResourceReceipt['targets'];
       const originalConditions = [...target.state.conditions];
       let sourceName: string;
       if (use.itemId) {
@@ -1998,14 +2296,40 @@ export class Game {
         )
           throw new GameError('Use a saved healing ability requested in the player’s action.');
         sourceName = use.abilityName!;
-        restored = mendWithAbility(
-          member.character,
-          member.state,
-          sourceName,
-          target,
-          (sides, label, _actor, stat, bonus, dc) =>
-            this.mechanicalDie(id, turnId, sides, label, member.id, stat, bonus, dc, key),
-        );
+        const ability = availableAbility(member.character, member.state, sourceName);
+        let healingRoll = 0;
+        const roll: Parameters<typeof mendWithAbility>[4] = (sides, label, _actor, stat, bonus, dc) =>
+          this.mechanicalDie(
+            id,
+            turnId,
+            sides,
+            label,
+            member.id,
+            stat,
+            bonus,
+            dc,
+            ability.targeting === 'party' ? `${key}:${healingRoll++}` : key,
+          );
+        if (ability.targeting === 'party') {
+          targets = mendWithAbilityTargets(
+            member.character,
+            member.state,
+            sourceName,
+            draft.members.filter(
+              (ally) =>
+                memberScene(draft.scene, ally.id).location.id ===
+                  memberScene(draft.scene, member.id).location.id &&
+                canInteract(memberScene(draft.scene, member.id), member.state, ally.state),
+            ),
+            roll,
+          ).map(({ target, restored, cured }) => ({
+            targetId: target.id,
+            restored,
+            cured,
+            state: structuredClone(target.state),
+          }));
+          restored = targets.reduce((sum, result) => sum + result.restored, 0);
+        } else restored = mendWithAbility(member.character, member.state, sourceName, target, roll);
       }
       const receipt: ResourceReceipt = {
         ...use,
@@ -2018,6 +2342,7 @@ export class Game {
         ),
         state: structuredClone(member.state),
         targetState: structuredClone(target.state),
+        ...(targets ? { targets } : {}),
       };
       draft.receipts[key] = receipt;
       return receipt;
@@ -2085,6 +2410,7 @@ export class Game {
         (sides) => this.mechanicalDie(id, turnId, sides, 'Exploration loot rarity', 'world', 'INT'),
         blueprint,
       );
+      if (sourceId && item.kind === 'tool') item.sourceId = sourceId;
       if (place) {
         offerGroundItem(place, item);
         if (sourceId) place.searchedLoot = { ...place.searchedLoot, [sourceId]: item.name };
@@ -2302,6 +2628,7 @@ export class Game {
         (localCombat(action.memberId) && !starts[memberScene(draft.scene, action.memberId).location.id!]) ||
         action.supportAction ||
         blocked(action, 'main') ||
+        (draft.receipts[`investigation:${action.memberId}`] as InvestigationResult | undefined)?.reused ||
         draft.receipts[`resource:ability:${action.memberId}`]
       )
         return false;
@@ -2356,22 +2683,34 @@ export class Game {
       if (
         !ability ||
         blocked(action, 'main') ||
-        !['mend', 'cleanse'].includes(ability.effect) ||
+        !isHealingAbility(ability) ||
         draft.receipts[`resource:ability:${member.id}`] ||
         (member.state.abilityUses?.[abilityUseKey(ability)] ?? 0) >= 1 ||
         turn.rolls.some((roll) => roll.memberId === member.id && !!roll.abilityName)
       )
         continue;
-      const target =
-        draft.members.find(
-          (ally) =>
-            ally.id !== member.id && action.text.toLowerCase().includes(ally.character.name.toLowerCase()),
-        ) ?? member;
+      const targets =
+        ability.targeting === 'party'
+          ? draft.members.filter(
+              (ally) =>
+                memberScene(draft.scene, ally.id).location.id ===
+                memberScene(draft.scene, member.id).location.id,
+            )
+          : [
+              draft.members.find(
+                (ally) =>
+                  ally.id !== member.id &&
+                  action.text.toLowerCase().includes(ally.character.name.toLowerCase()),
+              ) ?? member,
+            ];
       if (
-        !isDead(target.state) &&
-        (ability.effect === 'cleanse'
-          ? matchingCures(ability, target.state).length > 0
-          : target.state.hp < target.state.maxHp || matchingCures(ability, target.state).length > 0)
+        targets.some(
+          (target) =>
+            !isDead(target.state) &&
+            (ability.effect === 'cleanse'
+              ? matchingCures(ability, target.state).length > 0
+              : target.state.hp < target.state.maxHp || matchingCures(ability, target.state).length > 0),
+        )
       )
         throw new GameError(
           `Execute ${member.character.name}'s requested ${ability.name} through use_resource.`,
@@ -2392,6 +2731,7 @@ export class Game {
     this.assertResolved(this.turn(row), draft, outcomeSchema.parse(outcome));
   }
   private finalizeScene(draft: Draft, outcome: Outcome, opening: boolean, savedMap?: Scene['worldMap']) {
+    draft.scene.currencyName ??= outcome.currencyName;
     ensureLocations(
       draft.scene,
       draft.members.map((member) => member.id),
@@ -2510,6 +2850,22 @@ export class Game {
       loot.locationId = lootId;
       delete loot.pendingPlacement;
     }
+    if (draft.adjudication?.version === 2)
+      for (const item of draft.adjudication.storyItems ?? []) {
+        const place = placeScene(draft.scene, refs[item.locationId] ?? item.locationId);
+        if (Object.hasOwn(place.searchedLoot ?? {}, item.sourceId))
+          throw new GameError('This story object source is already exhausted.');
+        const collected = (draft.receipts.pickups as PickupResult[] | undefined)?.some(
+          (pickup) => pickup.itemId === item.id,
+        );
+        if (!collected)
+          offerGroundItem(place, { ...baseItem(item.id, item.name, 'tool'), description: item.description, sourceId: item.sourceId });
+        place.searchedLoot = { ...place.searchedLoot, [item.sourceId]: item.name };
+        const feature = draft.scene.features?.[item.sourceId];
+        if (feature && feature.locationId === place.location.id && feature.name === item.name)
+          delete draft.scene.features![item.sourceId];
+        savePlace(draft.scene, place);
+      }
     ensureWorldMapPositions(draft.scene, savedMap);
     return transition;
   }
@@ -2564,6 +2920,7 @@ export class Game {
         if (draft.resolution) return draft.resolution;
         const row = this.pending(id)!;
         let adjudication = draft.adjudication!;
+        const questContext = this.resolutionContext(draft, row);
         if (adjudication.version === 2 && adjudication.pickups?.length) {
           const pickup = resolvePickups(this.resolutionContext(draft, row), adjudication);
           adjudication = pickup.value;
@@ -2572,6 +2929,7 @@ export class Game {
           draft.receipts.pickups = pickup.results;
         }
         const config = draft.context!.config;
+        const questPlan = adjudication.version === 2 ? planQuests(questContext, adjudication) : undefined;
         const turn = this.turn(row);
         this.assertResolved(turn, draft, outcome);
         const events: TurnResolution['events'][number][] = structuredClone(adjudication.events);
@@ -2640,20 +2998,20 @@ export class Game {
             turn.roster.includes(member.id)
           ) {
             grantXp(member.character, member.state, bossRewarded(draft, member.id) ? 0 : outcome.xp);
-            member.state.gold += outcome.gold;
+            member.state.currency += outcome.currency;
           }
         }
         const rewards = draft.members.flatMap((member) => {
           const previous = draft.startingMembers!.find((previous) => previous.id === member.id)!;
           const xp = (member.state.level - previous.state.level) * 100 + member.state.xp - previous.state.xp;
-          const gold = member.state.gold - previous.state.gold;
-          return xp || gold
+          const currency = member.state.currency - previous.state.currency;
+          return xp || currency
             ? [
                 {
                   memberId: member.id,
                   characterName: member.character.name,
                   xp,
-                  gold,
+                  currency,
                   reason: fought(draft, member.id)
                     ? 'Resolved combat rewards.'
                     : bossRewarded(draft, member.id)
@@ -2674,14 +3032,38 @@ export class Game {
           saveEncounterRisks(draft.scene, adjudication, resolve);
           applyNPCUpdates(draft.scene, adjudication, resolve);
           applyFeatureUpdates(draft.scene, adjudication, resolve);
+          draft.gmMemory = updateGMMemory(
+            draft.gmMemory ?? draft.context!.gmMemory ?? [],
+            (adjudication.gmNotes ?? []).map((note) => ({ ...note, locationId: resolve(note.locationId) })),
+          );
           draft.scene.worldProgression = advanceWorldProgression(draft.context!, adjudication, resolve);
+        }
+        const questResult =
+          adjudication.version === 2 && questPlan && Object.keys(questPlan.quests).length
+            ? applyQuestPlan(
+                questContext, adjudication, questPlan, draft.scene, draft.members,
+                (ref) => ref === 'current' ? questContext.scene.location.id! : (draft.placeRefs?.[ref] ?? ref),
+                (sides, key) => this.mechanicalDie(id, turnId, sides, 'Quest reward', 'world', 'INT', 0, 10, key),
+              )
+            : { facts: [], reputation: [] };
+        if (questPlan?.claims.length) draft.receipts.quests = { claims: questPlan.claims, ...questResult };
+        for (const fact of questResult.facts) {
+          add(fact.fact, null, ['tool:quests']);
+          (events.at(-1)! as import('../shared/turn-resolution').ResolvedEvent).locationRef = fact.locationId;
         }
         if (adjudication.version === 2)
           for (const action of adjudication.actions) {
             const search = action.search;
             if (!search) continue;
             const member = draft.members.find((member) => member.id === action.memberId)!;
-            const place = memberScene(draft.scene, member.id);
+            const searchLocation =
+              search.locationId === 'current'
+                ? draft.context!.scene.location.id!
+                : (draft.placeRefs?.[search.locationId] ?? search.locationId);
+            const place = placeScene(draft.scene, searchLocation);
+            const investigated = draft.receipts[`investigation:${member.id}`] as
+              InvestigationResult | undefined;
+            if (investigated?.source.kind === 'place') search.sourceId = place.location.id!.toLowerCase();
             const information = events.find((event) => event.id === search.informationEventId)!.fact;
             const prior = place.searches?.[search.sourceId];
             const discovery = draft.receipts.loot as { sourceId?: string; locationId?: string } | undefined;
@@ -2691,9 +3073,42 @@ export class Game {
                 : discovery?.locationId === 'current'
                   ? draft.context!.scene.location.id
                   : (draft.placeRefs?.[discovery?.locationId ?? ''] ?? discovery?.locationId);
+            const investigation = investigated
+              ? {
+                  hookId: investigated.hookId,
+                  answer: investigated.answer,
+                  signature: investigated.signature,
+                  success: investigated.success,
+                  question: investigated.question,
+                  text: investigated.finding.text,
+                  ...(investigated.finding.narrativeVersion
+                    ? { narrativeVersion: investigated.finding.narrativeVersion }
+                    : {}),
+                  lead: investigated.finding.lead,
+                  leadLocationId:
+                    draft.placeRefs?.[investigated.finding.leadLocationId] ??
+                    investigated.finding.leadLocationId,
+                }
+              : undefined;
             const record = {
               ...prior,
               information,
+              ...(investigation && investigated
+                ? {
+                    investigation,
+                    attempts: {
+                      ...prior?.attempts,
+                      [investigationAttemptKey(
+                        investigation.hookId,
+                        investigation.answer,
+                        investigation.signature,
+                      )]: {
+                        information: investigationFact(investigated.finding),
+                        investigation,
+                      },
+                    },
+                  }
+                : {}),
               rewardRolled:
                 !!prior?.rewardRolled ||
                 (Object.hasOwn(place.searchedLoot ?? {}, search.sourceId) &&
@@ -2776,10 +3191,12 @@ export class Game {
           }
         draft.scene.lethalWarning = null;
         if (draft.factions) {
-          const receipts =
-            adjudication.version === 2
+          const receipts = [
+            ...questResult.reputation,
+            ...(adjudication.version === 2
               ? applyFactionEffects(draft.factions, draft.members, adjudication, row.number)
-              : [];
+              : []),
+          ];
           draft.receipts.factionReputation = receipts;
           for (const receipt of receipts) {
             const faction = draft.factions.factions.find((faction) => faction.id === receipt.factionId)!;
@@ -2822,6 +3239,7 @@ export class Game {
             : {}),
           turnId,
           turnNumber: row.number,
+          currencyName: draft.scene.currencyName,
           actions: adjudication.actions.map((action) => {
             const actor = draft.startingMembers!.find((member) => member.id === action.memberId)!;
             return { ...action, characterId: actor.characterId, characterName: actor.character.name };
@@ -2837,7 +3255,7 @@ export class Game {
             abilityUses: member.state.abilityUses ?? {},
             level: member.state.level,
             xp: member.state.xp,
-            gold: member.state.gold,
+            currency: member.state.currency,
           })),
           changes: outcome.changes,
           journal: projectJournal(
@@ -2862,6 +3280,7 @@ export class Game {
             locationId: npc.locationId,
             status: npc.status,
             allegiance: npc.allegiance,
+            ...(npc.followingMemberId !== undefined ? { followingMemberId: npc.followingMemberId } : {}),
             hp: npc.enemy?.hp ?? null,
             maxHp: npc.enemy?.maxHp ?? null,
             conditions: npc.enemy?.conditions ?? [],
@@ -2991,6 +3410,8 @@ export class Game {
           .run(json(member.state), json(member.character), member.characterId, member.id);
       if (draft.factions)
         this.db.prepare('UPDATE campaigns SET factions = ? WHERE id = ?').run(json(draft.factions), id);
+      if (draft.gmMemory)
+        this.db.prepare('UPDATE campaigns SET gm_memory = ? WHERE id = ?').run(json(draft.gmMemory), id);
       for (const entry of journalWithNPCReactions(
         journalWithNPCInteractions(
           resolution.journal,
@@ -3147,7 +3568,7 @@ export class Game {
           (JSON.parse(row.roster) as string[]).includes(member.id)
         ) {
           grantXp(member.character, member.state, bossRewarded(draft, member.id) ? 0 : outcome.xp);
-          member.state.gold += outcome.gold;
+          member.state.currency += outcome.currency;
         }
       }
       const previousMembers = this.members(id);
@@ -3315,13 +3736,12 @@ export class Game {
         if (action.abilityName) {
           if (!row || c.status !== 'active') throw new GameError('Healing abilities require an active turn.');
           const ability = availableAbility(member.character, state, action.abilityName);
-          if (!['mend', 'cleanse'].includes(ability.effect))
-            throw new GameError('Choose a healing or cleansing ability.');
+          if (!isHealingAbility(ability)) throw new GameError('Choose a healing or cleansing ability.');
           if (isDead(target.state)) throw new GameError('A dead character cannot be healed.');
           if (ability.effect === 'cleanse' && !matchingCures(ability, target.state).length)
             throw new GameError('The target has no matching ailment.');
           if (
-            ability.effect === 'mend' &&
+            (ability.effect === 'mend' || ability.effect === 'restoration') &&
             target.state.hp >= target.state.maxHp &&
             !matchingCures(ability, target.state).length
           )
@@ -3576,6 +3996,8 @@ export class Game {
   private resolutionContext(draft: Draft, row: TurnRow): GMContext {
     return {
       ...draft.context!,
+      partialAdjudication: draft.partialAdjudication,
+      gmMemory: draft.gmMemory ?? draft.context?.gmMemory,
       members: draft.members,
       startingMembers: draft.startingMembers,
       scene: { ...draft.scene, npcs: knownNPCs(draft.scene) },
@@ -3817,8 +4239,8 @@ export class Game {
         const tools: GameTools = Object.assign(
           (input: Check) => execute(() => this.roll(id, turnId, input)),
           {
-            startCombat: (enemies: unknown, locationId?: string) =>
-              execute(() => this.startCombat(id, turnId, enemies, locationId), true),
+            startCombat: (enemies: unknown, locationId?: string, introduction?: string) =>
+              execute(() => this.startCombat(id, turnId, enemies, locationId, introduction), true),
             combat: (input: CombatInput, locationId?: string) =>
               execute(() => this.combat(id, turnId, input, locationId)),
             offerLoot: (input: Parameters<GameTools['offerLoot']>[0]) =>
@@ -3826,7 +4248,15 @@ export class Game {
             completeChallenge: (input: { memberId: string; reason: string; bossEquivalent: boolean }) =>
               execute(() => this.completeChallenge(id, turnId, input)),
             useResource: (input: ResourceUse) => execute(() => this.useResource(id, turnId, input)),
+            investigate: (input: Investigation) => execute(() => this.investigate(id, turnId, input)),
             validateAdjudication: validate,
+            checkpointAdjudication: (value: TurnAdjudication) => {
+              const checked = validate(value);
+              this.withDraft(id, turnId, (draft) => {
+                draft.partialAdjudication = checked;
+              });
+              refresh(undefined);
+            },
             prepareEncounters: (value: TurnAdjudication) =>
               refresh(this.prepareEncounters(id, turnId, value)),
             validateResolution: (outcome: Outcome) => this.assertResolved(context.turn, saved, outcome),
@@ -3835,6 +4265,23 @@ export class Game {
         const accepted = validate(
           completedEncounterProposal(context) ?? (await provider.adjudicate!(context, tools)),
         );
+        for (const prior of saved.partialAdjudication?.actions ?? []) {
+          const next = accepted.actions.find((action) => action.memberId === prior.memberId);
+          for (const phase of ['main', 'minor', 'movement'] as const) {
+            const part = prior.components[phase];
+            if (part && !part.processingFailure && !isDeepStrictEqual(part, next?.components[phase]))
+              throw new GameError('Retry cannot replace an already resolved action component.', 500);
+          }
+        }
+        if (
+          accepted.actions.some((action) =>
+            Object.values(action.components).some((part) => part?.processingFailure),
+          )
+        )
+          throw new GameError(
+            'The GM could not finish processing all actions. Retry continues this turn with the saved dice and resources.',
+            500,
+          );
         if (accepted.encounterRisks !== undefined || context.receipts?.encounterChecks) {
           const required = tools.prepareEncounters!(accepted);
           if (required.length)
@@ -3845,6 +4292,7 @@ export class Game {
           turnId,
           (draft) => {
             draft.adjudication = accepted;
+            delete draft.partialAdjudication;
             draft.adjudicationFallback = budget.fallback;
             draft.placeRefs ??= {};
             for (const update of accepted.placeUpdates ?? [])
@@ -3869,9 +4317,12 @@ export class Game {
             'Narration skipped because adjudication fell back to saved receipts; no extra model requests can establish the missing world outcomes.';
         let proposed: TurnNarration;
         try {
-          proposed = saved.adjudicationFallback
-            ? factualNarration(saved.resolution!, config.language)
-            : await provider.narrate!(structuredClone(saved.resolution!), config, narrationBudget);
+          proposed =
+            saved.adjudication?.version === 2 && saved.adjudication.sceneDraft
+              ? sceneNarration(saved.adjudication, saved.resolution!)
+              : saved.adjudicationFallback
+                ? factualNarration(saved.resolution!, config.language)
+                : await provider.narrate!(structuredClone(saved.resolution!), config, narrationBudget);
         } catch (error) {
           // Presentation failures cannot hold already finalized gameplay hostage.
           narrationBudget.fallback = `Narration unavailable; published saved facts. ${
@@ -3937,6 +4388,7 @@ export class Game {
       const pipelineVersion =
         previous?.pipelineVersion ?? (provider.adjudicate && provider.narrate && !executed ? 1 : 0);
       const draft: Draft = previous ?? { members: internalMembers, scene: snapshot.scene, receipts: {} };
+      if (!previous) draft.gmMemory = gmMemorySchema.parse(JSON.parse(c.gm_memory ?? '[]'));
       if (!previous && c.factions) draft.factions = factionWorldSchema.parse(JSON.parse(c.factions));
       if (!previous?.context && !executed) draft.factionLifecycle = true;
       draft.pipelineVersion = pipelineVersion;
@@ -3948,6 +4400,8 @@ export class Game {
       }
       draft.startingMembers ??= structuredClone(draft.members);
       draft.context ??= {
+        sceneProtocol: !!provider.sceneTurns && !executed,
+        gmMemory: draft.gmMemory,
         buildId: gameplayBuildId,
         factions: draft.factions,
         config: snapshot.config,
@@ -4084,8 +4538,8 @@ export class Game {
         const tools: GameTools = Object.assign(
           (input: Check) => refreshContext(this.roll(id, row.id, input)),
           {
-            startCombat: (enemies: unknown, locationId?: string) =>
-              refreshContext(this.startCombat(id, row.id, enemies, locationId)),
+            startCombat: (enemies: unknown, locationId?: string, introduction?: string) =>
+              refreshContext(this.startCombat(id, row.id, enemies, locationId, introduction)),
             combat: (input: CombatInput, locationId?: string) =>
               refreshContext(this.combat(id, row.id, input, locationId)),
             offerLoot: (input: Parameters<GameTools['offerLoot']>[0]) => this.offerLoot(id, row.id, input),
@@ -4157,6 +4611,7 @@ export class Game {
       version: 1,
       containsSpoilers: true,
       factions: this.campaign(id).factions ? JSON.parse(this.campaign(id).factions!) : null,
+      gmMemory: JSON.parse(this.campaign(id).gm_memory ?? '[]'),
       exportedAt: new Date().toISOString(),
       config: JSON.parse(this.campaign(id).config),
       scene: this.snapshot(id, playerId).scene,

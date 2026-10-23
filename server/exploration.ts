@@ -3,7 +3,7 @@ import type { TurnAdjudication } from '../shared/turn-resolution';
 import { baseItem, usableSlots, incapacitatingCondition } from '../shared/rules';
 import { memberScene, knownLocations, placeScene, combatActive } from '../shared/locations';
 import { assertPublicFactionText } from './factions';
-import { travelNextHop, turnConnections } from './world-map';
+import { travelNextHop, turnConnections, memberLocationAtEvent, submittedTravel } from './world-map';
 import type { CampaignConfig, LootBlueprint } from '../shared/schema';
 
 export function explorationPotion(language: CampaignConfig['language']): LootBlueprint {
@@ -39,6 +39,35 @@ export function validateExploration(
     const member = context.members.find((member) => member.id === action.memberId);
     if (!member) throw new Error('Exploration references an unknown character.');
     const main = action.components.main;
+    const journey = context.sceneProtocol ? submittedTravel(context, member.id) : undefined;
+    if (journey) {
+      if (journey.goalId) {
+        if (action.travel && action.travel.goalId !== journey.goalId)
+          throw new Error(
+            `Preserve the submitted travel goal ${journey.goalId}, using the companion’s saved position for a join request.`,
+          );
+        action.travel ??= { goalId: journey.goalId };
+      }
+      const failedTraversal = value.events.some(
+        (event) =>
+          event.memberId === member.id &&
+          event.actionId === action.actionId &&
+          event.effect === 'movement' &&
+          ['failure', 'blocked'].includes(event.result ?? ''),
+      );
+      if (
+        resultingPlace(member.id) === memberScene(context.scene, member.id).location.id &&
+        member.state.hp > 0 &&
+        !incapacitatingCondition(member.state) &&
+        !combatActive(memberScene(context.scene, member.id)) &&
+        main?.basis !== 'engine' &&
+        main?.status !== 'blocked' &&
+        !failedTraversal
+      )
+        throw new Error(
+          `Resolve ${member.character.name}’s submitted travel with a move to a distinct adjacent place${journey.goalId ? ` toward ${journey.goalId}` : ', discovering the next local place when necessary'}. An act beat or failed conversation cannot replace ordinary travel. Preserve the journey on correction; an actual traversal obstacle must be explicit.`,
+        );
+    }
     if (action.intent === 'search' && main && main.status !== 'blocked' && !action.search)
       throw new Error('A resolved environmental search needs its local source and useful information event.');
     if (action.search) {
@@ -55,8 +84,6 @@ export function validateExploration(
       )
         throw new Error('Exploration search evidence needs a resolved noncombat main search action.');
       const placeId = resolve(search.locationId);
-      if (resultingPlace(member.id) !== placeId)
-        throw new Error('A search must occur at its character’s resulting location.');
       const information = value.events.find((event) => event.id === search.informationEventId);
       if (
         !information ||
@@ -67,6 +94,8 @@ export function validateExploration(
         resolve(information.locationRef) !== placeId
       )
         throw new Error('Search information needs a public world event at the searched place.');
+      if (memberLocationAtEvent(context, value, member.id, information.id, resolve) !== placeId)
+        throw new Error('A search must occur at its character’s location when its finding is established.');
       const check = context.turn.rolls.find((roll) => roll.memberId === member.id && !roll.notation);
       if (
         check &&

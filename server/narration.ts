@@ -348,6 +348,29 @@ export function narrationBeats(
         for (const receipt of context.resourceUses?.filter(
           (receipt) => receipt.memberId === action.memberId,
         ) ?? []) {
+          if (receipt.targets) {
+            facts.push(
+              dutch
+                ? `${name} gebruikt ${receipt.sourceName}, waarbij één ability use wordt verbruikt.`
+                : `${name} uses ${receipt.sourceName}, spending one ability use.`,
+            );
+            for (const result of receipt.targets) {
+              const recipient = context.members.find((member) => member.id === result.targetId)!.character
+                .name;
+              facts.push(
+                dutch
+                  ? `${recipient} herstelt ${result.restored} HP.`
+                  : `${recipient} recovers ${result.restored} HP.`,
+              );
+              if (result.cured.length)
+                facts.push(
+                  dutch
+                    ? `${receipt.sourceName} verwijdert ${result.cured.join(' en ')} bij ${recipient}.`
+                    : `${receipt.sourceName} removes ${result.cured.join(' and ')} from ${recipient}.`,
+                );
+            }
+            continue;
+          }
           const target = context.members.find(
             (member) => member.id === (receipt.targetId ?? action.memberId),
           );

@@ -1,0 +1,1839 @@
+{
+  "description": "Public turn-26 gathering/checkpoint regression. No accounts, credentials, private GM notes or prompts.",
+  "scene": {
+    "location": {
+      "name": "The Sunward Steps of Aztlan",
+      "atmosphere": "A broad ceremonial terrace of polished black stone and gold, crowded with vendors, petitioners, porters, and the constant hum of Soul Core machinery.",
+      "hazard": "The terrace is orderly but not gentle: a raised blood-channel borders the avenue, and the imperial guards enforce public law with practiced speed.",
+      "id": "f87b1392-1bcd-45cb-9e38-c681c9632c9c"
+    },
+    "encounters": 0,
+    "encounter": null,
+    "loot": [],
+    "lethalWarning": null,
+    "places": {
+      "e4281aaf-22e7-4779-868b-f52c8f94adb5": {
+        "location": {
+          "name": "The Temple Ward",
+          "atmosphere": "An active precinct of stepped sanctuaries, painted workshops, incense braziers, and ritual courtyards, where priests and artisans move beneath vivid banners.",
+          "hazard": "Ritual channels and restricted shrine thresholds require care; attendants and guards watch the crowds, but no immediate threat is evident.",
+          "id": "e4281aaf-22e7-4779-868b-f52c8f94adb5"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The ward is occupied and orderly, with visible attendants and no immediate violence or active hazard threatening visitors."
+        }
+      },
+      "97b57c8b-0736-446e-8c8e-bfbe9a178471": {
+        "location": {
+          "name": "The Inner Sanctuary Walk",
+          "atmosphere": "An active, ancient processional way of worn stone reliefs and high banners, leading between the Temple Ward and deeper sanctuaries.",
+          "hazard": "Ritual channels score the paving near the shrine thresholds; attendants watch the approach, and visitors are expected to keep to the processional path.",
+          "id": "97b57c8b-0736-446e-8c8e-bfbe9a178471"
+        },
+        "encounter": null,
+        "loot": [],
+        "searches": {
+          "97b57c8b-0736-446e-8c8e-bfbe9a178471:public-processional-inspection": {
+            "information": "The Inner Sanctuary Walk is a public processional route; attendants keep visitors to the path, and no active blood ritual is visible here.",
+            "rewardRolled": false
+          }
+        },
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The walk is occupied by attendants and pilgrims, with no immediate violence or active hazard threatening visitors."
+        }
+      },
+      "078e9cfe-1642-4e78-aca5-22be1700c9a5": {
+        "location": {
+          "name": "The Copperwater Market",
+          "atmosphere": "A busy canal-side market of covered stalls, copperwork, ritual pigments, and spice counters, with barges unloading beneath carved stone bridges.",
+          "hazard": "The quay edges are slick with canal spray, and porters shoulder heavy cargo through the crowd; no immediate threat is evident.",
+          "id": "078e9cfe-1642-4e78-aca5-22be1700c9a5"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The market is crowded and active, but no immediate violence or hazard threatens visitors."
+        }
+      },
+      "e2e0fc84-96cf-4198-b32f-913881db9e58": {
+        "location": {
+          "name": "The Inner Sanctuary",
+          "atmosphere": "A living sanctuary of stepped stone, gold-inlaid doorways, incense braziers, and solemn processions beneath painted ceilings.",
+          "hazard": "Ritual channels cross the paving near restricted thresholds, where attendants and guards watch visitors closely.",
+          "id": "e2e0fc84-96cf-4198-b32f-913881db9e58"
+        },
+        "encounter": null,
+        "loot": [],
+        "searches": {
+          "e2e0fc84-96cf-4198-b32f-913881db9e58:public-procession-and-notices": {
+            "information": "No blood-priest gathering is visible in the public Inner Sanctuary; a discreet consultation notice points toward the screened eastern ritual court.",
+            "rewardRolled": false
+          }
+        },
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The sanctuary is occupied and orderly; no immediate violence or active hazard threatens visitors."
+        }
+      },
+      "4474ca3a-059b-453e-a633-92375e1ed624": {
+        "location": {
+          "name": "The Veiled Court",
+          "atmosphere": "A screened ritual court of red-painted pillars, incense braziers, and curtained alcoves where physicians and ritual attendants receive private consultations.",
+          "hazard": "The inner rooms are restricted, and attendants closely monitor the treatment spaces; no immediate threat is evident.",
+          "id": "4474ca3a-059b-453e-a633-92375e1ed624"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The court is staffed and orderly, with no immediate violence or active hazard threatening visitors."
+        }
+      },
+      "05618924-f57c-4a73-8239-a059de4d4a77": {
+        "location": {
+          "name": "The Processional Avenue",
+          "atmosphere": "A broad, active thoroughfare of gold-faced façades and carved lintels, where porters, carts, petitioners, and imperial patrols thread through the capital’s steady traffic.",
+          "hazard": "Wagon congestion and dense foot traffic demand care, but no immediate violence or active hazard threatens visitors.",
+          "id": "05618924-f57c-4a73-8239-a059de4d4a77"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The avenue is crowded and guarded, but orderly, with no immediate violence or active hazard threatening travelers."
+        }
+      },
+      "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e": {
+        "location": {
+          "name": "North Causeway",
+          "atmosphere": "A raised stone road follows the canal works beyond the ceremonial avenues. Sluice towers and busy loading yards stand between the road and the distant roofs of the capital.",
+          "hazard": "The causeway narrows beside deep water, and heavy carts share the road with workers carrying cargo. No immediate violence or active threat is evident.",
+          "id": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "Busy canal and cargo traffic surrounds the route, but no immediate violence or active hazard threatens travelers."
+        }
+      },
+      "d62d4cb5-a020-4764-814c-3c7a3f95f772": {
+        "location": {
+          "name": "North Road",
+          "atmosphere": "A busy stone road extends beyond the capital’s canal works, passing cargo yards, irrigated fields, and watchful waystations beneath the distant city walls.",
+          "hazard": "Wagon traffic and uneven paving demand attention; no immediate violence or active hazard is evident.",
+          "id": "d62d4cb5-a020-4764-814c-3c7a3f95f772"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The road carries ordinary commercial traffic, with no immediate threat apparent."
+        }
+      },
+      "bcbfe1ad-77fe-43b3-9348-31d725839e2c": {
+        "location": {
+          "name": "Outer North Road",
+          "atmosphere": "A busy stone road extends beyond the capital’s cargo yards, passing irrigated fields and watchful waystations beneath distant walls.",
+          "hazard": "Wagon traffic and uneven paving demand attention; no immediate violence or active hazard is evident.",
+          "id": "bcbfe1ad-77fe-43b3-9348-31d725839e2c"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "Ordinary commercial traffic and uneven paving are present, but no immediate threat is apparent."
+        }
+      },
+      "70e9e244-79d5-460e-a2c5-5510e5496700": {
+        "location": {
+          "name": "Canal Loading Yard",
+          "atmosphere": "Busy stone loading platforms beside powerful sluice gates, with barges, cargo crews, and Soul Core-powered lifting machinery in constant motion.",
+          "hazard": "Deep, fast water borders the quay; heavy cargo and moving machinery make the work area hazardous, though no immediate violence is evident.",
+          "id": "70e9e244-79d5-460e-a2c5-5510e5496700"
+        },
+        "encounter": {
+          "enemies": [
+            {
+              "id": "canal-warden-a",
+              "name": "Sluice Warden",
+              "tier": "minor",
+              "hp": 6,
+              "defense": 10,
+              "attack": 0,
+              "damage": "1d4",
+              "description": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+              "tactic": "Presses forward with a hooking thrust, trying to drive its target away from the quay edge.",
+              "equipmentBlueprints": [
+                {
+                  "name": "Bronze Hook Polearm",
+                  "kind": "weapon",
+                  "scaling": [
+                    "STR"
+                  ],
+                  "hands": 2,
+                  "light": false,
+                  "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+                }
+              ],
+              "onHit": null,
+              "onHitChance": 25,
+              "maxAilmentsPerHit": 1,
+              "equipment": [
+                {
+                  "id": "2548ada7-ad97-4d38-82fb-f9dba57ffff2-0",
+                  "name": "Bronze Hook Polearm",
+                  "kind": "weapon",
+                  "rarity": "Common",
+                  "scaling": [
+                    "STR"
+                  ],
+                  "requirements": {
+                    "STR": 3,
+                    "DEX": 0,
+                    "INT": 0,
+                    "CHA": 0,
+                    "CON": 0,
+                    "WIS": 0
+                  },
+                  "hands": 2,
+                  "light": false,
+                  "damage": "1d4",
+                  "defense": 0,
+                  "initiativePenalty": 0,
+                  "healing": 0,
+                  "attackBonus": 0,
+                  "checkBonus": 0,
+                  "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+                }
+              ],
+              "maxHp": 6,
+              "initiative": 15,
+              "conditions": [],
+              "conditionTurns": {}
+            },
+            {
+              "id": "canal-warden-b",
+              "name": "Sluice Warden",
+              "tier": "minor",
+              "hp": 6,
+              "defense": 10,
+              "attack": 0,
+              "damage": "1d4",
+              "description": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+              "tactic": "Flanks along the loading platform and attacks with a short, driving jab.",
+              "equipmentBlueprints": [
+                {
+                  "name": "Bronze Hook Polearm",
+                  "kind": "weapon",
+                  "scaling": [
+                    "STR"
+                  ],
+                  "hands": 2,
+                  "light": false,
+                  "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+                }
+              ],
+              "onHit": null,
+              "onHitChance": 25,
+              "maxAilmentsPerHit": 1,
+              "equipment": [
+                {
+                  "id": "55fd76af-4d87-45bd-99b9-f59974d8f4a4-0",
+                  "name": "Bronze Hook Polearm",
+                  "kind": "weapon",
+                  "rarity": "Uncommon",
+                  "scaling": [
+                    "STR"
+                  ],
+                  "requirements": {
+                    "STR": 4,
+                    "DEX": 0,
+                    "INT": 0,
+                    "CHA": 0,
+                    "CON": 0,
+                    "WIS": 0
+                  },
+                  "hands": 2,
+                  "light": false,
+                  "damage": "1d4",
+                  "defense": 0,
+                  "initiativePenalty": 0,
+                  "healing": 0,
+                  "attackBonus": 0,
+                  "checkBonus": 0,
+                  "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+                },
+                {
+                  "id": "55fd76af-4d87-45bd-99b9-f59974d8f4a4-healing",
+                  "name": "Sluice Warden's healing item",
+                  "kind": "consumable",
+                  "rarity": "Common",
+                  "scaling": [],
+                  "requirements": {
+                    "STR": 0,
+                    "DEX": 0,
+                    "INT": 0,
+                    "CHA": 0,
+                    "CON": 0,
+                    "WIS": 0
+                  },
+                  "hands": 1,
+                  "light": false,
+                  "damage": "1d6",
+                  "defense": 0,
+                  "initiativePenalty": 0,
+                  "healing": 6,
+                  "attackBonus": 0,
+                  "checkBonus": 0,
+                  "description": "Restores HP when used."
+                }
+              ],
+              "maxHp": 6,
+              "initiative": 15,
+              "conditions": [],
+              "conditionTurns": {}
+            },
+            {
+              "id": "canal-warden-c",
+              "name": "Sluice Warden",
+              "tier": "minor",
+              "hp": 6,
+              "defense": 10,
+              "attack": 0,
+              "damage": "1d4",
+              "description": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+              "tactic": "Advances between the cargo stacks and strikes at exposed openings in the guard.",
+              "equipmentBlueprints": [
+                {
+                  "name": "Bronze Hook Polearm",
+                  "kind": "weapon",
+                  "scaling": [
+                    "STR"
+                  ],
+                  "hands": 2,
+                  "light": false,
+                  "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+                }
+              ],
+              "onHit": null,
+              "onHitChance": 25,
+              "maxAilmentsPerHit": 1,
+              "equipment": [
+                {
+                  "id": "8890445a-3f99-4827-9a24-c756250ee2a6-0",
+                  "name": "Bronze Hook Polearm",
+                  "kind": "weapon",
+                  "rarity": "Uncommon",
+                  "scaling": [
+                    "STR"
+                  ],
+                  "requirements": {
+                    "STR": 4,
+                    "DEX": 0,
+                    "INT": 0,
+                    "CHA": 0,
+                    "CON": 0,
+                    "WIS": 0
+                  },
+                  "hands": 2,
+                  "light": false,
+                  "damage": "1d4",
+                  "defense": 0,
+                  "initiativePenalty": 0,
+                  "healing": 0,
+                  "attackBonus": 0,
+                  "checkBonus": 0,
+                  "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+                }
+              ],
+              "maxHp": 6,
+              "initiative": 11,
+              "conditions": [],
+              "conditionTurns": {}
+            }
+          ],
+          "round": 4,
+          "initiative": [
+            {
+              "id": "202c897b-1900-4c68-a169-096ee422b11b",
+              "total": 16
+            },
+            {
+              "id": "canal-warden-a",
+              "total": 15
+            },
+            {
+              "id": "canal-warden-b",
+              "total": 15
+            },
+            {
+              "id": "canal-warden-c",
+              "total": 11
+            }
+          ],
+          "victory": false,
+          "escaped": true
+        },
+        "loot": [],
+        "encounterRisk": {
+          "danger": "dangerous",
+          "reason": "Open water, heavy moving loads, and active lifting machinery create real local hazards."
+        }
+      },
+      "6948f1be-ddc7-428f-95f5-0a837981f6e1": {
+        "location": {
+          "name": "Northern Waystation",
+          "atmosphere": "A busy roadside station of shaded stone galleries, water jars, tethering posts, and a watch platform above the irrigated fields. Travelers and cargo crews pass through under the attention of stationed officials.",
+          "hazard": "Wagon traffic and livestock crowd the yard; the raised watch platform and open fields are visible, but no immediate threat is apparent.",
+          "id": "6948f1be-ddc7-428f-95f5-0a837981f6e1"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The waystation is active and watched, with ordinary travel congestion but no sign of immediate violence."
+        }
+      },
+      "d30efd83-b6a1-4004-8ffe-ed3dde12bac0": {
+        "location": {
+          "name": "North Road Beyond the Waystation",
+          "atmosphere": "A paved imperial road runs between irrigated fields and low stone markers, with the Northern Waystation behind and open country ahead. A few distant travelers move along the route.",
+          "hazard": "Wagons share the uneven road with field traffic; no immediate threat is apparent.",
+          "id": "d30efd83-b6a1-4004-8ffe-ed3dde12bac0"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "Ordinary road traffic and uneven paving are present, but no immediate violence or active hazard is evident."
+        }
+      },
+      "138a5966-74c2-48fe-a681-5ac910147a81": {
+        "location": {
+          "name": "Far North Road",
+          "atmosphere": "An imperial road crosses open irrigated country beyond the Northern Waystation, bordered by field channels and low stone markers. The capital’s walls sit distant behind the fields.",
+          "hazard": "Uneven paving and roadside irrigation channels require care; no immediate threat is apparent.",
+          "id": "138a5966-74c2-48fe-a681-5ac910147a81"
+        },
+        "encounter": null,
+        "loot": [
+          {
+            "id": "4b1757b9-3fe7-4194-960c-d79fe8c6a724",
+            "name": "Roadside Vaal Shortsword",
+            "kind": "weapon",
+            "rarity": "Uncommon",
+            "scaling": [
+              "DEX"
+            ],
+            "requirements": {
+              "STR": 0,
+              "DEX": 4,
+              "INT": 0,
+              "CHA": 0,
+              "CON": 0,
+              "WIS": 0
+            },
+            "hands": 1,
+            "light": true,
+            "damage": "1d8",
+            "defense": 0,
+            "initiativePenalty": 0,
+            "healing": 0,
+            "attackBonus": 0,
+            "checkBonus": 0,
+            "description": "A plain, serviceable bronze shortsword, wrapped in worn leather and left beside a field marker.",
+            "quantity": 1
+          }
+        ],
+        "searchedLoot": {
+          "place:14:roadside-weapon-search": "Roadside Vaal Shortsword"
+        },
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The road carries ordinary travelers and field traffic, with no visible immediate threat."
+        }
+      }
+    },
+    "worldMap": {
+      "nodes": {
+        "f87b1392-1bcd-45cb-9e38-c681c9632c9c": {
+          "id": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "name": "The Sunward Steps of Aztlan",
+          "visited": true
+        },
+        "05618924-f57c-4a73-8239-a059de4d4a77": {
+          "id": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "name": "The Processional Avenue",
+          "visited": true
+        },
+        "078e9cfe-1642-4e78-aca5-22be1700c9a5": {
+          "id": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+          "name": "The Copperwater Market",
+          "visited": true
+        },
+        "e4281aaf-22e7-4779-868b-f52c8f94adb5": {
+          "id": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "name": "The Temple Ward",
+          "visited": true
+        },
+        "97b57c8b-0736-446e-8c8e-bfbe9a178471": {
+          "id": "97b57c8b-0736-446e-8c8e-bfbe9a178471",
+          "name": "The Inner Sanctuary Walk",
+          "visited": true
+        },
+        "e2e0fc84-96cf-4198-b32f-913881db9e58": {
+          "id": "e2e0fc84-96cf-4198-b32f-913881db9e58",
+          "name": "The Inner Sanctuary",
+          "visited": true
+        },
+        "4474ca3a-059b-453e-a633-92375e1ed624": {
+          "id": "4474ca3a-059b-453e-a633-92375e1ed624",
+          "name": "The Veiled Court",
+          "visited": true
+        },
+        "979b1e96-0a2a-48f2-836c-d6a89a30de7d": {
+          "id": "979b1e96-0a2a-48f2-836c-d6a89a30de7d",
+          "name": "Sealed Treatment Rooms",
+          "visited": false
+        },
+        "8cc14dda-f149-4d9b-b7f9-459ce80ffb58": {
+          "id": "8cc14dda-f149-4d9b-b7f9-459ce80ffb58",
+          "name": "The Painted Workshops",
+          "visited": false
+        },
+        "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e": {
+          "id": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "name": "North Causeway",
+          "visited": true
+        },
+        "70e9e244-79d5-460e-a2c5-5510e5496700": {
+          "id": "70e9e244-79d5-460e-a2c5-5510e5496700",
+          "name": "Canal Loading Yard",
+          "visited": true
+        },
+        "d62d4cb5-a020-4764-814c-3c7a3f95f772": {
+          "id": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+          "name": "North Road",
+          "visited": true
+        },
+        "bcbfe1ad-77fe-43b3-9348-31d725839e2c": {
+          "id": "bcbfe1ad-77fe-43b3-9348-31d725839e2c",
+          "name": "Outer North Road",
+          "visited": true
+        },
+        "6948f1be-ddc7-428f-95f5-0a837981f6e1": {
+          "id": "6948f1be-ddc7-428f-95f5-0a837981f6e1",
+          "name": "Northern Waystation",
+          "visited": true
+        },
+        "5c41e262-d706-4224-9092-1e5f671ee180": {
+          "id": "5c41e262-d706-4224-9092-1e5f671ee180",
+          "name": "Eastern Canal Cargo Route",
+          "visited": false
+        },
+        "d30efd83-b6a1-4004-8ffe-ed3dde12bac0": {
+          "id": "d30efd83-b6a1-4004-8ffe-ed3dde12bac0",
+          "name": "North Road Beyond the Waystation",
+          "visited": true
+        },
+        "138a5966-74c2-48fe-a681-5ac910147a81": {
+          "id": "138a5966-74c2-48fe-a681-5ac910147a81",
+          "name": "Far North Road",
+          "visited": true
+        },
+        "0d434782-9ec8-43a4-89dd-f04591d16c05": {
+          "id": "0d434782-9ec8-43a4-89dd-f04591d16c05",
+          "name": "The Far Fields Road",
+          "visited": false
+        }
+      },
+      "connections": [
+        {
+          "from": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "to": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "label": "South, back up to the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+          "to": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "label": "West, back up the steps to the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "to": "f87b1392-1bcd-45cb-9e38-c681c9632c9c",
+          "label": "North, back beneath the lintels to the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "to": "97b57c8b-0736-446e-8c8e-bfbe9a178471",
+          "label": "South, toward the Inner Sanctuary Walk.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "e2e0fc84-96cf-4198-b32f-913881db9e58",
+          "to": "97b57c8b-0736-446e-8c8e-bfbe9a178471",
+          "label": "North, down the processional walk to the Inner Sanctuary Walk.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "to": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+          "label": "Southwest, along the avenue toward Copperwater Market.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "4474ca3a-059b-453e-a633-92375e1ed624",
+          "to": "e2e0fc84-96cf-4198-b32f-913881db9e58",
+          "label": "West, through the screened arch to the public sanctuary.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "4474ca3a-059b-453e-a633-92375e1ed624",
+          "to": "979b1e96-0a2a-48f2-836c-d6a89a30de7d",
+          "label": "East, beyond a guarded inner doorway; access is restricted.",
+          "blocked": true,
+          "bidirectional": false
+        },
+        {
+          "from": "e4281aaf-22e7-4779-868b-f52c8f94adb5",
+          "to": "8cc14dda-f149-4d9b-b7f9-459ce80ffb58",
+          "label": "East, through a painted arch into the ward’s artisan workshops.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "to": "05618924-f57c-4a73-8239-a059de4d4a77",
+          "label": "South, back along the avenue toward the Sunward Steps.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "to": "70e9e244-79d5-460e-a2c5-5510e5496700",
+          "label": "East, toward the sluice gates and the cargo yards.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+          "to": "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e",
+          "label": "South, back along the causeway toward the canal works.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+          "to": "70e9e244-79d5-460e-a2c5-5510e5496700",
+          "label": "East, toward the sluice gates and cargo yards.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "bcbfe1ad-77fe-43b3-9348-31d725839e2c",
+          "to": "d62d4cb5-a020-4764-814c-3c7a3f95f772",
+          "label": "South, back toward North Road.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "6948f1be-ddc7-428f-95f5-0a837981f6e1",
+          "to": "bcbfe1ad-77fe-43b3-9348-31d725839e2c",
+          "label": "South, back toward Outer North Road.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "70e9e244-79d5-460e-a2c5-5510e5496700",
+          "to": "5c41e262-d706-4224-9092-1e5f671ee180",
+          "label": "East, following the canal-side cargo route beyond the sluice gates.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "6948f1be-ddc7-428f-95f5-0a837981f6e1",
+          "to": "d30efd83-b6a1-4004-8ffe-ed3dde12bac0",
+          "label": "North, onward along the road beyond the waystation.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "138a5966-74c2-48fe-a681-5ac910147a81",
+          "to": "d30efd83-b6a1-4004-8ffe-ed3dde12bac0",
+          "label": "South, back toward North Road Beyond the Waystation.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "138a5966-74c2-48fe-a681-5ac910147a81",
+          "to": "0d434782-9ec8-43a4-89dd-f04591d16c05",
+          "label": "North, onward across the irrigated fields.",
+          "blocked": false,
+          "bidirectional": true
+        }
+      ],
+      "positions": {
+        "f87b1392-1bcd-45cb-9e38-c681c9632c9c": {
+          "x": 0,
+          "y": 0
+        },
+        "05618924-f57c-4a73-8239-a059de4d4a77": {
+          "x": 180,
+          "y": 0
+        },
+        "078e9cfe-1642-4e78-aca5-22be1700c9a5": {
+          "x": -89.99999999999996,
+          "y": 155.88457268119896
+        },
+        "e4281aaf-22e7-4779-868b-f52c8f94adb5": {
+          "x": -180,
+          "y": 2.2043642384652358e-14
+        },
+        "97b57c8b-0736-446e-8c8e-bfbe9a178471": {
+          "x": -89.99999999999999,
+          "y": -155.88457268119893
+        },
+        "e2e0fc84-96cf-4198-b32f-913881db9e58": {
+          "x": 90.00000000000001,
+          "y": -155.88457268119893
+        },
+        "4474ca3a-059b-453e-a633-92375e1ed624": {
+          "x": 270,
+          "y": -155.88457268119893
+        },
+        "979b1e96-0a2a-48f2-836c-d6a89a30de7d": {
+          "x": 360,
+          "y": 2.842170943040401e-14
+        },
+        "8cc14dda-f149-4d9b-b7f9-459ce80ffb58": {
+          "x": -269.99999999999994,
+          "y": 155.884572681199
+        },
+        "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e": {
+          "x": 90.00000000000004,
+          "y": 155.88457268119896
+        },
+        "70e9e244-79d5-460e-a2c5-5510e5496700": {
+          "x": 270.00000000000006,
+          "y": 155.88457268119896
+        },
+        "d62d4cb5-a020-4764-814c-3c7a3f95f772": {
+          "x": 8.526512829121202e-14,
+          "y": 311.7691453623979
+        },
+        "bcbfe1ad-77fe-43b3-9348-31d725839e2c": {
+          "x": 180.00000000000009,
+          "y": 311.7691453623979
+        },
+        "6948f1be-ddc7-428f-95f5-0a837981f6e1": {
+          "x": 90.00000000000013,
+          "y": 467.6537180435969
+        },
+        "5c41e262-d706-4224-9092-1e5f671ee180": {
+          "x": 450.00000000000006,
+          "y": 155.88457268119896
+        },
+        "d30efd83-b6a1-4004-8ffe-ed3dde12bac0": {
+          "x": -89.99999999999987,
+          "y": 467.6537180435969
+        },
+        "138a5966-74c2-48fe-a681-5ac910147a81": {
+          "x": -179.99999999999994,
+          "y": 311.7691453623979
+        },
+        "0d434782-9ec8-43a4-89dd-f04591d16c05": {
+          "x": -359.99999999999994,
+          "y": 311.7691453623979
+        }
+      }
+    },
+    "memberLocations": {
+      "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa": "138a5966-74c2-48fe-a681-5ac910147a81",
+      "202c897b-1900-4c68-a169-096ee422b11b": "6948f1be-ddc7-428f-95f5-0a837981f6e1"
+    },
+    "encounterRisk": {
+      "danger": "safe",
+      "reason": "Crowded public avenues lie under visible guard patrols; no immediate violence threatens the gathered crowd."
+    },
+    "npcs": {
+      "sivet": {
+        "id": "sivet",
+        "name": "Sivet",
+        "aliases": [
+          "the kobold courier"
+        ],
+        "locationId": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Gemling legionaire tells Sivet he is a mercenary available for hire and asks whether he has an escort contract. Sivet says no escort job is ready at the spice stalls, but offers to pass the offer to a licensed broker whose caravan is being rerouted around a flooded canal. He warns that the broker will expect a clear price and proof of competence."
+      },
+      "maeva": {
+        "id": "maeva",
+        "name": "Maeva",
+        "aliases": [
+          "the red-sashed physician"
+        ],
+        "locationId": "4474ca3a-059b-453e-a633-92375e1ed624",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Xulath shouts at Maeva, “TEST ME OR I WILL SPILL YOUR BLOOD INSTEAD.” Maeva does not agree to test him. She steps behind the consultation screen as two attendants move between them, and tells him, “Threats are not a proposal. Leave the court, or speak plainly without threatening my staff.” No one draws a weapon, and no violence occurs."
+      },
+      "oren-vask": {
+        "id": "oren-vask",
+        "name": "Oren Vask",
+        "aliases": [
+          "the licensed caravan broker"
+        ],
+        "locationId": "078e9cfe-1642-4e78-aca5-22be1700c9a5",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Gemling legionaire asks Oren Vask when the caravan cargo will be ready. Oren says the last copper fittings are being secured and the manifest checked; he expects the caravan to depart shortly, but it has not yet been loaded for departure. Gemling legionaire searches the nearby market while they talk, finding no particular object or lead."
+      },
+      "tovek": {
+        "id": "tovek",
+        "name": "Tovek",
+        "aliases": [],
+        "locationId": "05618924-f57c-4a73-8239-a059de4d4a77",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "Tovek is a hired porter driving a cart along the Processional Avenue. Gemling legionaire asks him about the Unbound Ledger; Tovek has heard rumors of forged labor papers but knows no reliable names or contacts."
+      },
+      "canal-warden-a": {
+        "id": "canal-warden-a",
+        "name": "Sluice Warden",
+        "aliases": [],
+        "locationId": "70e9e244-79d5-460e-a2c5-5510e5496700",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+        "enemy": {
+          "id": "canal-warden-a",
+          "name": "Sluice Warden",
+          "tier": "minor",
+          "hp": 6,
+          "defense": 10,
+          "attack": 0,
+          "damage": "1d4",
+          "description": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+          "tactic": "Presses forward with a hooking thrust, trying to drive its target away from the quay edge.",
+          "equipmentBlueprints": [
+            {
+              "name": "Bronze Hook Polearm",
+              "kind": "weapon",
+              "scaling": [
+                "STR"
+              ],
+              "hands": 2,
+              "light": false,
+              "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+            }
+          ],
+          "onHit": null,
+          "onHitChance": 25,
+          "maxAilmentsPerHit": 1,
+          "equipment": [
+            {
+              "id": "2548ada7-ad97-4d38-82fb-f9dba57ffff2-0",
+              "name": "Bronze Hook Polearm",
+              "kind": "weapon",
+              "rarity": "Common",
+              "scaling": [
+                "STR"
+              ],
+              "requirements": {
+                "STR": 3,
+                "DEX": 0,
+                "INT": 0,
+                "CHA": 0,
+                "CON": 0,
+                "WIS": 0
+              },
+              "hands": 2,
+              "light": false,
+              "damage": "1d4",
+              "defense": 0,
+              "initiativePenalty": 0,
+              "healing": 0,
+              "attackBonus": 0,
+              "checkBonus": 0,
+              "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+            }
+          ],
+          "maxHp": 6,
+          "initiative": 15,
+          "conditions": [],
+          "conditionTurns": {}
+        }
+      },
+      "canal-warden-b": {
+        "id": "canal-warden-b",
+        "name": "Sluice Warden",
+        "aliases": [],
+        "locationId": "70e9e244-79d5-460e-a2c5-5510e5496700",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+        "enemy": {
+          "id": "canal-warden-b",
+          "name": "Sluice Warden",
+          "tier": "minor",
+          "hp": 6,
+          "defense": 10,
+          "attack": 0,
+          "damage": "1d4",
+          "description": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+          "tactic": "Flanks along the loading platform and attacks with a short, driving jab.",
+          "equipmentBlueprints": [
+            {
+              "name": "Bronze Hook Polearm",
+              "kind": "weapon",
+              "scaling": [
+                "STR"
+              ],
+              "hands": 2,
+              "light": false,
+              "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+            }
+          ],
+          "onHit": null,
+          "onHitChance": 25,
+          "maxAilmentsPerHit": 1,
+          "equipment": [
+            {
+              "id": "55fd76af-4d87-45bd-99b9-f59974d8f4a4-0",
+              "name": "Bronze Hook Polearm",
+              "kind": "weapon",
+              "rarity": "Uncommon",
+              "scaling": [
+                "STR"
+              ],
+              "requirements": {
+                "STR": 4,
+                "DEX": 0,
+                "INT": 0,
+                "CHA": 0,
+                "CON": 0,
+                "WIS": 0
+              },
+              "hands": 2,
+              "light": false,
+              "damage": "1d4",
+              "defense": 0,
+              "initiativePenalty": 0,
+              "healing": 0,
+              "attackBonus": 0,
+              "checkBonus": 0,
+              "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+            },
+            {
+              "id": "55fd76af-4d87-45bd-99b9-f59974d8f4a4-healing",
+              "name": "Sluice Warden's healing item",
+              "kind": "consumable",
+              "rarity": "Common",
+              "scaling": [],
+              "requirements": {
+                "STR": 0,
+                "DEX": 0,
+                "INT": 0,
+                "CHA": 0,
+                "CON": 0,
+                "WIS": 0
+              },
+              "hands": 1,
+              "light": false,
+              "damage": "1d6",
+              "defense": 0,
+              "initiativePenalty": 0,
+              "healing": 6,
+              "attackBonus": 0,
+              "checkBonus": 0,
+              "description": "Restores HP when used."
+            }
+          ],
+          "maxHp": 6,
+          "initiative": 15,
+          "conditions": [],
+          "conditionTurns": {}
+        }
+      },
+      "canal-warden-c": {
+        "id": "canal-warden-c",
+        "name": "Sluice Warden",
+        "aliases": [],
+        "locationId": "70e9e244-79d5-460e-a2c5-5510e5496700",
+        "status": "alive",
+        "allegiance": null,
+        "fact": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+        "enemy": {
+          "id": "canal-warden-c",
+          "name": "Sluice Warden",
+          "tier": "minor",
+          "hp": 6,
+          "defense": 10,
+          "attack": 0,
+          "damage": "1d4",
+          "description": "A compact bronze construct with a crimson Soul Core and a hooked polearm.",
+          "tactic": "Advances between the cargo stacks and strikes at exposed openings in the guard.",
+          "equipmentBlueprints": [
+            {
+              "name": "Bronze Hook Polearm",
+              "kind": "weapon",
+              "scaling": [
+                "STR"
+              ],
+              "hands": 2,
+              "light": false,
+              "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+            }
+          ],
+          "onHit": null,
+          "onHitChance": 25,
+          "maxAilmentsPerHit": 1,
+          "equipment": [
+            {
+              "id": "8890445a-3f99-4827-9a24-c756250ee2a6-0",
+              "name": "Bronze Hook Polearm",
+              "kind": "weapon",
+              "rarity": "Uncommon",
+              "scaling": [
+                "STR"
+              ],
+              "requirements": {
+                "STR": 4,
+                "DEX": 0,
+                "INT": 0,
+                "CHA": 0,
+                "CON": 0,
+                "WIS": 0
+              },
+              "hands": 2,
+              "light": false,
+              "damage": "1d4",
+              "defense": 0,
+              "initiativePenalty": 0,
+              "healing": 0,
+              "attackBonus": 0,
+              "checkBonus": 0,
+              "description": "A workman's polearm with a hooked bronze head, suited to hauling cargo and catching an opponent's guard."
+            }
+          ],
+          "maxHp": 6,
+          "initiative": 11,
+          "conditions": [],
+          "conditionTurns": {}
+        }
+      }
+    },
+    "worldProgression": {
+      "version": 1,
+      "places": {
+        "f87b1392-1bcd-45cb-9e38-c681c9632c9c": {
+          "stalledTurns": 2,
+          "lastTurnId": "91e113f5-e214-41b6-9f87-d53559c78b0a",
+          "recentFacts": [
+            "a porter identifies kobold courier sivet at the copperwater market spice stalls a porter identifies sivet at the copperwater market spice stalls"
+          ]
+        },
+        "e4281aaf-22e7-4779-868b-f52c8f94adb5": {
+          "stalledTurns": 2,
+          "lastTurnId": "d99d6f04-c05f-46cb-9678-2b8a841613d2",
+          "recentFacts": []
+        },
+        "97b57c8b-0736-446e-8c8e-bfbe9a178471": {
+          "stalledTurns": 3,
+          "lastTurnId": "ff14daea-12a8-4743-bea8-6cc557ed4d2c",
+          "recentFacts": []
+        },
+        "078e9cfe-1642-4e78-aca5-22be1700c9a5": {
+          "stalledTurns": 7,
+          "lastTurnId": "bbd685f9-ca7c-49df-8ed2-16afd7b5524c",
+          "recentFacts": []
+        },
+        "e2e0fc84-96cf-4198-b32f-913881db9e58": {
+          "stalledTurns": 3,
+          "lastTurnId": "923904ab-ac73-4e02-a626-1f2782f9ad88",
+          "recentFacts": []
+        },
+        "4474ca3a-059b-453e-a633-92375e1ed624": {
+          "stalledTurns": 6,
+          "lastTurnId": "d75f2777-aef5-4582-9cda-2503300b7c89",
+          "recentFacts": []
+        },
+        "05618924-f57c-4a73-8239-a059de4d4a77": {
+          "stalledTurns": 8,
+          "lastTurnId": "bac8a79b-7505-4468-95c9-e08e85d19e8e",
+          "recentFacts": []
+        },
+        "cd2f70c0-44fb-4370-a10a-2a5b59e0ae9e": {
+          "stalledTurns": 2,
+          "lastTurnId": "c5c4d946-29f1-4041-a2b0-c9f6f2320ad3",
+          "recentFacts": []
+        },
+        "d62d4cb5-a020-4764-814c-3c7a3f95f772": {
+          "stalledTurns": 2,
+          "lastTurnId": "120c4235-14d2-49bb-bbd1-37dc05d138c7",
+          "recentFacts": []
+        },
+        "bcbfe1ad-77fe-43b3-9348-31d725839e2c": {
+          "stalledTurns": 5,
+          "lastTurnId": "3eb793f4-944c-4a10-a848-98bb78a36a51",
+          "recentFacts": []
+        },
+        "70e9e244-79d5-460e-a2c5-5510e5496700": {
+          "stalledTurns": 1,
+          "lastTurnId": "a2ad5924-3f80-4531-9ace-56421c6572ee",
+          "recentFacts": []
+        },
+        "6948f1be-ddc7-428f-95f5-0a837981f6e1": {
+          "stalledTurns": 2,
+          "lastTurnId": "e4c4f908-7cdb-47cc-983c-3b491a50eaf0",
+          "recentFacts": []
+        },
+        "d30efd83-b6a1-4004-8ffe-ed3dde12bac0": {
+          "stalledTurns": 1,
+          "lastTurnId": "3eb793f4-944c-4a10-a848-98bb78a36a51",
+          "recentFacts": []
+        },
+        "138a5966-74c2-48fe-a681-5ac910147a81": {
+          "stalledTurns": 1,
+          "lastTurnId": "e4c4f908-7cdb-47cc-983c-3b491a50eaf0",
+          "recentFacts": []
+        }
+      }
+    },
+    "searches": {
+      "f87b1392-1bcd-45cb-9e38-c681c9632c9c": {
+        "information": "A porter identifies kobold courier Sivet at the Copperwater Market spice stalls.\nA porter identifies Sivet at the Copperwater Market spice stalls.",
+        "investigation": {
+          "hookId": "ledger-kobold-contact",
+          "answer": 0,
+          "signature": "8d65ceb41a8b8e8814272939db8ca3a7b4a27508e90501a3699090320a7eb589:ordinary",
+          "success": true,
+          "question": "Ask people about the Unbound Ledger and find a kobold contact.",
+          "text": "A porter answers: “A kobold runner named Sivet carries messages. He’s at the spice stalls in Copperwater Market. Say the lift crew sent you.”",
+          "lead": "A porter identifies Sivet at the Copperwater Market spice stalls.",
+          "leadLocationId": "f87b1392-1bcd-45cb-9e38-c681c9632c9c"
+        },
+        "attempts": {
+          "067ebc2c05fc797b5e25475c0e86d95c6596127073bee34067db67e14b7e2772": {
+            "information": "A porter identifies kobold courier Sivet at the Copperwater Market spice stalls.\nA porter identifies Sivet at the Copperwater Market spice stalls.",
+            "investigation": {
+              "hookId": "ledger-kobold-contact",
+              "answer": 0,
+              "signature": "8d65ceb41a8b8e8814272939db8ca3a7b4a27508e90501a3699090320a7eb589:ordinary",
+              "success": true,
+              "question": "Ask people about the Unbound Ledger and find a kobold contact.",
+              "text": "A porter answers: “A kobold runner named Sivet carries messages. He’s at the spice stalls in Copperwater Market. Say the lift crew sent you.”",
+              "lead": "A porter identifies Sivet at the Copperwater Market spice stalls.",
+              "leadLocationId": "f87b1392-1bcd-45cb-9e38-c681c9632c9c"
+            }
+          }
+        },
+        "rewardRolled": true
+      },
+      "f87b1392-1bcd-45cb-9e38-c681c9632c9c:public-terrace-search": {
+        "information": "Xulath’s survey of the Sunward Steps turns up no particular object or reliable lead; the dense public traffic offers only ordinary signs of commerce and imperial order.",
+        "rewardRolled": true
+      }
+    },
+    "gathering": {
+      "id": "2a34e244-857e-4819-b86d-309ad298127b",
+      "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+      "locationId": "138a5966-74c2-48fe-a681-5ac910147a81"
+    }
+  },
+  "members": [
+    {
+      "id": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+      "name": "Gemling legionaire",
+      "stats": {
+        "STR": 5,
+        "DEX": 8,
+        "INT": 6,
+        "CHA": 6,
+        "CON": 7,
+        "WIS": 6
+      }
+    },
+    {
+      "id": "202c897b-1900-4c68-a169-096ee422b11b",
+      "name": "Xulath",
+      "stats": {
+        "STR": 3,
+        "DEX": 5,
+        "INT": 9,
+        "CHA": 7,
+        "CON": 7,
+        "WIS": 5
+      }
+    }
+  ],
+  "turn": {
+    "id": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4",
+    "number": 26,
+    "actions": [
+      {
+        "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+        "text": "I travel to the gathering at Far North Road.",
+        "passed": false,
+        "submittedAt": "2026-10-21T16:31:08.348Z",
+        "acceptsLethalRisk": false,
+        "gathering": {
+          "id": "2a34e244-857e-4819-b86d-309ad298127b",
+          "locationId": "138a5966-74c2-48fe-a681-5ac910147a81",
+          "route": [
+            "6948f1be-ddc7-428f-95f5-0a837981f6e1",
+            "d30efd83-b6a1-4004-8ffe-ed3dde12bac0",
+            "138a5966-74c2-48fe-a681-5ac910147a81"
+          ]
+        }
+      },
+      {
+        "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "text": "Look for weapons in the area",
+        "passed": false,
+        "submittedAt": "2026-10-21T16:31:53.699Z",
+        "acceptsLethalRisk": false
+      }
+    ],
+    "rolls": [
+      {
+        "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "stat": "WIS",
+        "dc": 10,
+        "reason": "Gemling legionaire scans the roadside and field margins at Far North Road for a weapon left among the travelers’ ordinary gear; the open road offers several places to look, but no specific cache is visible.",
+        "mode": "normal",
+        "circumstances": {
+          "favorable": false,
+          "adverse": false
+        },
+        "lethal": false,
+        "abilityName": null,
+        "assistsMemberId": null,
+        "assistedBy": [],
+        "id": "0ff31f0f-4a12-41e2-8d5b-a48668fba279",
+        "dice": [
+          12
+        ],
+        "modifier": 0,
+        "equipmentBonuses": [],
+        "total": 12,
+        "success": true,
+        "source": "Local OS cryptographic randomness"
+      },
+      {
+        "id": "bb952de4-0cad-422b-a0c9-6cd95bae8964",
+        "memberId": "world",
+        "stat": "INT",
+        "dc": 10,
+        "mode": "normal",
+        "lethal": false,
+        "reason": "Exploration loot rarity",
+        "label": "Exploration loot rarity",
+        "notation": "d100",
+        "dice": [
+          74
+        ],
+        "modifier": 0,
+        "total": 74,
+        "success": true,
+        "source": "Local OS cryptographic randomness"
+      }
+    ]
+  },
+  "receipts": {
+    "executionEvents": [
+      {
+        "id": "check:0ff31f0f-4a12-41e2-8d5b-a48668fba279",
+        "sequence": 0,
+        "kind": "mechanics",
+        "phase": "main",
+        "result": "success",
+        "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "fact": "Gemling legionaire: the WIS check succeeds.",
+        "receiptRefs": [
+          "roll:0ff31f0f-4a12-41e2-8d5b-a48668fba279"
+        ],
+        "dependsOn": []
+      },
+      {
+        "id": "loot",
+        "sequence": 1,
+        "kind": "mechanics",
+        "phase": null,
+        "result": null,
+        "memberId": null,
+        "actionId": null,
+        "fact": "Scene loot is available: Roadside Vaal Shortsword.",
+        "receiptRefs": [
+          "tool:loot"
+        ],
+        "dependsOn": []
+      }
+    ],
+    "loot": {
+      "item": {
+        "id": "4b1757b9-3fe7-4194-960c-d79fe8c6a724",
+        "name": "Roadside Vaal Shortsword",
+        "kind": "weapon",
+        "rarity": "Uncommon",
+        "scaling": [
+          "DEX"
+        ],
+        "requirements": {
+          "STR": 0,
+          "DEX": 4,
+          "INT": 0,
+          "CHA": 0,
+          "CON": 0,
+          "WIS": 0
+        },
+        "hands": 1,
+        "light": true,
+        "damage": "1d8",
+        "defense": 0,
+        "initiativePenalty": 0,
+        "healing": 0,
+        "attackBonus": 0,
+        "checkBonus": 0,
+        "description": "A plain, serviceable bronze shortsword, wrapped in worn leather and left beside a field marker."
+      },
+      "reason": "Gemling legionaire's successful roadside search locates a usable weapon left beside a field marker.",
+      "locationId": "138a5966-74c2-48fe-a681-5ac910147a81",
+      "sourceId": "place:14:roadside-weapon-search",
+      "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa"
+    },
+    "encounterChecks": {
+      "138a5966-74c2-48fe-a681-5ac910147a81": {
+        "locationId": "138a5966-74c2-48fe-a681-5ac910147a81",
+        "memberIds": [
+          "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa"
+        ],
+        "danger": "safe",
+        "reason": "The road carries ordinary travelers and field traffic, with no visible immediate threat.",
+        "die": null,
+        "triggered": false
+      }
+    }
+  },
+  "partial": {
+    "version": 2,
+    "turnId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4",
+    "actions": [
+      {
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+        "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+        "status": "blocked",
+        "basis": "none",
+        "fact": "Xulath cannot carry out the submitted action.",
+        "reason": "Model attempts were exhausted; server results are preserved and unresolved parts have no additional effect.",
+        "receiptRefs": [],
+        "eventIds": [
+          "outcome:202c897b-1900-4c68-a169-096ee422b11b"
+        ],
+        "components": {
+          "main": {
+            "status": "blocked",
+            "basis": "none",
+            "fact": "Xulath cannot carry out the submitted action.",
+            "reason": "Model attempts were exhausted; server results are preserved and unresolved parts have no additional effect.",
+            "receiptRefs": [],
+            "eventIds": [
+              "outcome:202c897b-1900-4c68-a169-096ee422b11b"
+            ],
+            "processingFailure": true
+          },
+          "minor": null
+        }
+      },
+      {
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "status": "success",
+        "basis": "check",
+        "fact": "Gemling legionaire spots a serviceable bronze shortsword beside a field marker.",
+        "reason": "His successful roadside search finds the weapon; it remains on the ground for collection.",
+        "receiptRefs": [
+          "roll:0ff31f0f-4a12-41e2-8d5b-a48668fba279"
+        ],
+        "eventIds": [
+          "check:0ff31f0f-4a12-41e2-8d5b-a48668fba279"
+        ],
+        "intent": "action",
+        "search": {
+          "sourceId": "place:14:roadside-weapon-search",
+          "locationId": "138a5966-74c2-48fe-a681-5ac910147a81",
+          "informationEventId": "roadside-search-finding",
+          "reward": null
+        },
+        "travel": null,
+        "components": {
+          "main": {
+            "status": "success",
+            "basis": "check",
+            "fact": "Gemling legionaire spots a serviceable bronze shortsword beside a field marker.",
+            "reason": "His successful roadside search finds the weapon; it remains on the ground for collection.",
+            "receiptRefs": [
+              "roll:0ff31f0f-4a12-41e2-8d5b-a48668fba279"
+            ],
+            "eventIds": [
+              "check:0ff31f0f-4a12-41e2-8d5b-a48668fba279"
+            ]
+          },
+          "minor": null
+        }
+      }
+    ],
+    "events": [
+      {
+        "id": "check:0ff31f0f-4a12-41e2-8d5b-a48668fba279",
+        "sequence": 0,
+        "kind": "mechanics",
+        "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "fact": "Gemling legionaire: the WIS check succeeds.",
+        "receiptRefs": [
+          "roll:0ff31f0f-4a12-41e2-8d5b-a48668fba279"
+        ],
+        "dependsOn": [],
+        "phase": "main",
+        "result": "success"
+      },
+      {
+        "id": "loot",
+        "sequence": 1,
+        "kind": "mechanics",
+        "memberId": null,
+        "actionId": null,
+        "fact": "Scene loot is available: Roadside Vaal Shortsword.",
+        "receiptRefs": [
+          "tool:loot"
+        ],
+        "dependsOn": [],
+        "phase": null,
+        "result": null
+      },
+      {
+        "id": "roadside-search-finding",
+        "sequence": 2,
+        "kind": "world",
+        "memberId": null,
+        "actionId": null,
+        "fact": "Gemling legionaire finds a serviceable bronze shortsword beside a field marker. The Roadside Vaal Shortsword remains available as ground loot.",
+        "receiptRefs": [
+          "tool:loot"
+        ],
+        "dependsOn": [
+          {
+            "eventId": "check:0ff31f0f-4a12-41e2-8d5b-a48668fba279",
+            "requires": "success"
+          }
+        ],
+        "phase": null,
+        "locationRef": "138a5966-74c2-48fe-a681-5ac910147a81",
+        "result": "success"
+      },
+      {
+        "id": "outcome:202c897b-1900-4c68-a169-096ee422b11b",
+        "sequence": 3,
+        "kind": "action",
+        "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+        "fact": "Xulath cannot carry out the submitted action.",
+        "receiptRefs": [],
+        "dependsOn": [],
+        "phase": "main",
+        "result": "blocked"
+      }
+    ],
+    "changes": [],
+    "journal": [],
+    "location": null,
+    "memberLocations": [],
+    "placeUpdates": [],
+    "mapUpdates": {
+      "locations": [],
+      "connections": []
+    },
+    "sceneFocus": "138a5966-74c2-48fe-a681-5ac910147a81",
+    "rewards": {
+      "xp": 0,
+      "currency": 0,
+      "reason": "No new reward."
+    },
+    "featureUpdates": [],
+    "npcUpdates": [],
+    "pickups": [],
+    "worldProgress": [],
+    "encounterRisks": [],
+    "arrivals": [],
+    "factionEffects": []
+  },
+  "initial": {
+    "version": 2,
+    "turnId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4",
+    "actions": [
+      {
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+        "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+        "components": {
+          "main": null,
+          "minor": null,
+          "movement": {
+            "status": "success",
+            "basis": "routine",
+            "fact": "Xulath follows the road north from the Northern Waystation, crosses the open stretch beyond it, and reaches Far North Road to join the gathering.",
+            "reason": "The supplied gathering route is clear and passes through an already assessed safe road location.",
+            "receiptRefs": [],
+            "eventIds": [
+              "xulath-gathering-movement"
+            ]
+          }
+        },
+        "intent": "action",
+        "search": null,
+        "travel": {
+          "goalId": "place:14",
+          "via": [],
+          "avoid": []
+        }
+      },
+      {
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "memberId": "eddc3a7d-66d8-4fe0-8d8f-bc73c93a4caa",
+        "components": {
+          "main": {
+            "status": "success",
+            "basis": "check",
+            "fact": "Gemling legionaire spots a serviceable bronze shortsword beside a field marker.",
+            "reason": "His successful roadside search finds the weapon; it remains on the ground for collection.",
+            "receiptRefs": [
+              "roll:0ff31f0f-4a12-41e2-8d5b-a48668fba279"
+            ],
+            "eventIds": [
+              "check:0ff31f0f-4a12-41e2-8d5b-a48668fba279",
+              "roadside-search-finding"
+            ]
+          },
+          "minor": null,
+          "movement": null
+        },
+        "intent": "action",
+        "search": {
+          "sourceId": "place:14:roadside-weapon-search",
+          "locationId": "place:14",
+          "informationEventId": "roadside-search-finding",
+          "reward": null
+        },
+        "travel": null
+      }
+    ],
+    "events": [
+      {
+        "id": "xulath-gathering-movement",
+        "sequence": 2,
+        "kind": "action",
+        "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+        "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+        "phase": "movement",
+        "result": "success",
+        "locationRef": "place:14",
+        "fact": "Xulath reaches Far North Road along the supplied gathering route.",
+        "receiptRefs": [],
+        "dependsOn": []
+      },
+      {
+        "id": "roadside-search-finding",
+        "sequence": 3,
+        "kind": "world",
+        "actionId": null,
+        "phase": null,
+        "result": "success",
+        "locationRef": "place:14",
+        "fact": "Gemling legionaire finds a serviceable bronze shortsword beside a field marker. The Roadside Vaal Shortsword remains available as ground loot.",
+        "receiptRefs": [
+          "tool:loot"
+        ],
+        "dependsOn": [
+          {
+            "eventId": "check:0ff31f0f-4a12-41e2-8d5b-a48668fba279",
+            "requires": "success"
+          }
+        ]
+      },
+      {
+        "id": "far-north-road-arrival",
+        "sequence": 4,
+        "kind": "world",
+        "actionId": null,
+        "phase": null,
+        "result": null,
+        "locationRef": "place:14",
+        "fact": "At Far North Road, irrigated fields and roadside channels border the imperial paving. The Northern Waystation lies south; the road continues north across the fields. Gemling legionaire and Xulath are now together at the gathering.",
+        "receiptRefs": [],
+        "dependsOn": [
+          {
+            "eventId": "xulath-gathering-movement",
+            "requires": "success"
+          }
+        ]
+      }
+    ],
+    "changes": [],
+    "journal": [
+      {
+        "kind": "fact",
+        "name": "place:14:roadside-weapon-search",
+        "detail": "Gemling legionaire’s successful search found a serviceable bronze shortsword beside a field marker. The Roadside Vaal Shortsword remains at Far North Road for pickup."
+      }
+    ],
+    "location": null,
+    "sceneFocus": "place:14",
+    "memberLocations": [
+      {
+        "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+        "locationId": "place:14",
+        "movementEventId": "xulath-gathering-movement"
+      }
+    ],
+    "rewards": {
+      "xp": 10,
+      "currency": 0,
+      "reason": "Gemling legionaire’s successful search revealed a useful roadside weapon."
+    },
+    "placeUpdates": [],
+    "mapUpdates": {
+      "locations": [],
+      "connections": []
+    },
+    "separations": [],
+    "factionEffects": [],
+    "arrivals": [
+      {
+        "locationId": "place:14",
+        "eventId": "far-north-road-arrival"
+      }
+    ],
+    "worldProgress": [],
+    "encounterRisks": [],
+    "pickups": [],
+    "npcUpdates": [],
+    "featureUpdates": []
+  },
+  "repairs": [
+    {
+      "version": 2,
+      "actions": [
+        {
+          "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "status": "success",
+          "basis": "none",
+          "fact": "Xulath completes the gathering journey along the road and joins Gemling legionaire at Far North Road.",
+          "reason": "The supplied clear gathering route carries him from the Northern Waystation through North Road Beyond the Waystation to Far North Road.",
+          "receiptRefs": [],
+          "eventIds": [
+            "xulath-gathering-arrival"
+          ],
+          "travel": {
+            "goalId": "place:14",
+            "via": [],
+            "avoid": []
+          },
+          "components": {
+            "main": null,
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "reason": "The clear submitted gathering route is completed without an additional act.",
+              "receiptRefs": [],
+              "eventIds": [
+                "xulath-gathering-arrival"
+              ]
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "id": "xulath-gathering-arrival",
+          "sequence": 4,
+          "kind": "action",
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+          "fact": "Xulath completes the gathering journey and reaches Far North Road, rejoining Gemling legionaire beside the field markers.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "success",
+          "locationRef": "place:14"
+        }
+      ],
+      "memberLocations": [
+        {
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "locationId": "place:14",
+          "movementEventId": "xulath-gathering-arrival"
+        }
+      ],
+      "arrivals": [],
+      "rewards": {
+        "xp": 0,
+        "currency": 0,
+        "reason": "Travel to the gathering yields no additional reward."
+      },
+      "changes": [],
+      "journal": [],
+      "sceneFocus": "place:14",
+      "mapUpdates": {
+        "locations": [],
+        "connections": []
+      },
+      "placeUpdates": [],
+      "factionEffects": [],
+      "encounterRisks": []
+    },
+    {
+      "version": 2,
+      "actions": [
+        {
+          "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "travel": {
+            "goalId": "place:14",
+            "via": [],
+            "avoid": []
+          },
+          "components": {
+            "main": null,
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Xulath completes the gathering journey and reaches Far North Road, joining Gemling legionaire beside the field markers.",
+              "reason": "The supplied clear gathering route is completed without an additional act.",
+              "receiptRefs": [],
+              "eventIds": [
+                "xulath-gathering-arrival"
+              ]
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "id": "xulath-gathering-arrival",
+          "sequence": 4,
+          "kind": "action",
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+          "fact": "Xulath completes the gathering journey and reaches Far North Road, joining Gemling legionaire beside the field markers.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "result": "success",
+          "locationRef": "place:14"
+        }
+      ],
+      "memberLocations": [
+        {
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "locationId": "place:14",
+          "movementEventId": "xulath-gathering-arrival"
+        }
+      ],
+      "arrivals": [],
+      "changes": [],
+      "journal": [],
+      "sceneFocus": "place:14",
+      "mapUpdates": {
+        "locations": [],
+        "connections": []
+      },
+      "placeUpdates": [],
+      "factionEffects": [],
+      "encounterRisks": [],
+      "rewards": {
+        "xp": 0,
+        "currency": 0,
+        "reason": "Travel to the gathering yields no additional reward."
+      }
+    },
+    {
+      "version": 2,
+      "actions": [
+        {
+          "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+          "memberId": "202c897b-1900-4c2a-b4fb-b882ee422b11b",
+          "status": "success",
+          "basis": "routine",
+          "fact": "Xulath completes the gathering journey from the Northern Waystation through North Road Beyond the Waystation and reaches Far North Road, joining Gemling legionaire beside the field markers.",
+          "reason": "The supplied clear gathering route is completed without an additional act.",
+          "receiptRefs": [],
+          "eventIds": [
+            "xulath-gathering-arrival"
+          ],
+          "travel": {
+            "goalId": "place:14",
+            "via": [],
+            "avoid": []
+          },
+          "components": {
+            "main": null,
+            "minor": null,
+            "movement": {
+              "status": "success",
+              "basis": "routine",
+              "fact": "Xulath completes the gathering journey and reaches Far North Road.",
+              "reason": "The supplied clear gathering route is completed without an additional act.",
+              "receiptRefs": [],
+              "eventIds": [
+                "xulath-gathering-arrival"
+              ]
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "id": "xulath-gathering-arrival",
+          "kind": "action",
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "actionId": "572bdf38-f30a-4c2a-b4fb-b882ffd033d4:action:202c897b-1900-4c68-a169-096ee422b11b",
+          "fact": "Xulath travels the supplied open route from the Northern Waystation through North Road Beyond the Waystation to Far North Road, where he joins Gemling legionaire.",
+          "receiptRefs": [],
+          "dependsOn": [],
+          "phase": "main",
+          "effect": "movement",
+          "locationRef": "place:14",
+          "result": "success"
+        }
+      ],
+      "memberLocations": [
+        {
+          "memberId": "202c897b-1900-4c68-a169-096ee422b11b",
+          "locationId": "place:14",
+          "movementEventId": "xulath-gathering-arrival"
+        }
+      ]
+    }
+  ]
+}

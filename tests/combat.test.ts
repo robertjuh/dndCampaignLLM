@@ -81,6 +81,33 @@ function fixture(text = 'Attack the enemy'): GMContext {
   };
 }
 
+it('normalizes saved multi-target strikes while preserving explicit choices and leaving unspecified targets for the engine', () => {
+  const context = fixture('Use Focused strike on Ork Breachmob and Violet Vox-Herald');
+  const actor = context.members[0];
+  actor.state.level = 2;
+  actor.character.abilities[0].targeting = 'multiple';
+  expect(normalizeCombatInput(context).actions[0]).toMatchObject({
+    main: 'ability',
+    targetIds: ['enemy-0', 'enemy-1'],
+  });
+  context.turn.actions[0].text = 'Use Focused strike only on Ork Breachmob';
+  expect(
+    normalizeCombatInput(context, { actions: [{ memberId: actor.id, targetIds: ['enemy-0', 'enemy-1'] }] })
+      .actions[0],
+  ).toMatchObject({ targetId: 'enemy-0', targetIds: ['enemy-0'], allowRetarget: false });
+  context.turn.actions[0].text = 'Use Focused strike';
+  expect(normalizeCombatInput(context).actions[0]).toMatchObject({ targetId: null, targetIds: [] });
+  expect(
+    normalizeCombatInput(context, { actions: [{ memberId: actor.id, targetIds: ['enemy-1', 'invented'] }] })
+      .actions[0].targetIds,
+  ).toEqual(['enemy-1']);
+  delete actor.character.abilities[0].targeting;
+  expect(
+    normalizeCombatInput(context, { actions: [{ memberId: actor.id, targetIds: ['enemy-0', 'enemy-1'] }] })
+      .actions[0].targetIds,
+  ).toBeUndefined();
+});
+
 describe('server combat interpretation defaults', () => {
   it.each([false, true])(
     'ignores a model death claim and executes the engine-valid strike (ability=%s)',
@@ -149,8 +176,8 @@ describe('server combat interpretation defaults', () => {
         return sides === 20 ? 12 : Math.min(2, sides);
       });
       expect(checks).toEqual([
-        { stat: 'CHA', bonus: 4 },
-        { stat: 'CHA', bonus: 4 },
+        { stat: 'CHA', bonus: 6 },
+        { stat: 'CHA', bonus: 6 },
       ]);
       expect(actor.state.abilityUses?.[ability.name]).toBe(1);
       if (effect === 'flee') expect(actor.state.conditions).toContain('Escaped');
@@ -191,7 +218,7 @@ describe('server combat interpretation defaults', () => {
     });
     context.scene.encounter!.initiative = [{ id: actor.id, total: 15 }];
     runCombat(context.members, context.scene.encounter!, plan, () => 4);
-    expect(target.state.hp).toBe(14);
+    expect(target.state.hp).toBe(16);
     expect(target.state.conditions).not.toContain('Shocked');
     expect(actor.state.abilityUses?.[ability.name]).toBe(1);
   });

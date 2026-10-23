@@ -142,7 +142,7 @@ function routine(context: GMContext): TurnAdjudication {
     journal: [],
     location: null,
     memberLocations: [],
-    rewards: { xp: 0, gold: 0, reason: 'No new achievement.' },
+    rewards: { xp: 0, currency: 0, reason: 'No new achievement.' },
   };
 }
 
@@ -601,7 +601,7 @@ it('uses the same location ownership in the retained compatibility publication r
     journal: [],
     location: { name: 'Bunker', atmosphere: 'A quiet room.', hazard: '' },
     xp: 0,
-    gold: 0,
+    currency: 0,
     lethalWarning: null,
   });
   const id = await f.turn();

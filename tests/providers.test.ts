@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChatGPTAuth } from '../server/auth';
+import { localDice } from '../server/random';
 import { ChatGPTGM, PracticeGM, readResponseStream } from '../server/providers';
 import { initialState, initialScene } from '../shared/rules';
 import { GameError, type GMContext, type GameTools } from '../server/game';
@@ -331,7 +332,7 @@ it('keeps procedural route declarations through adjudication and grounds narrati
   }
   const request = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
   expect(request.instructions).toContain('at most ONE map connection per turn');
-  expect(request.instructions).toContain('Generate no recursive destinations');
+  expect(request.instructions).toContain('Generate no preview contents or recursive exits');
 });
 it.each(['help-up', 'heal-ally'] as const)(
   'practice narrates saved %s receipts and arriving characters without repeating mechanics',
@@ -561,7 +562,7 @@ describe('campaign output language', () => {
     const outcome = await gm.resolve(context, combatTools());
     expect(outcome.narration).toContain('Mira mist Gatekeeper (5 vs defense 10).');
     expect(outcome.summary).toBe('De combatronde is afgehandeld.');
-    expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0 });
+    expect(outcome).toMatchObject({ changes: [], xp: 0, currency: 0 });
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
   it('localizes offline GM prose and upgrade descriptions while preserving saved names and mechanics', async () => {
@@ -1369,7 +1370,7 @@ describe('server-driven combat phases', () => {
                         },
                       ],
                       xp: 40,
-                      gold: 100,
+                      currency: 100,
                       location: { name: 'Desert', atmosphere: 'Sunny', hazard: '' },
                     }),
                   },
@@ -1388,7 +1389,7 @@ describe('server-driven combat phases', () => {
       fetcher as typeof fetch,
     );
     const outcome = await gm.resolve(context, tools);
-    expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0, location: null });
+    expect(outcome).toMatchObject({ changes: [], xp: 0, currency: 0, location: null });
     expect(outcome.narration).toContain('boarding knife');
     expect(tools).not.toHaveBeenCalled();
     expect(tools.combat).not.toHaveBeenCalled();
@@ -1761,7 +1762,7 @@ describe('complete player narration', () => {
       expect(request.instructions).toContain('without contradicting facts or inventing mechanical effects');
       expect(tools).not.toHaveBeenCalled();
       expect(tools.combat).not.toHaveBeenCalled();
-      expect(outcome).toMatchObject({ changes: [], xp: 0, gold: 0, location: null });
+      expect(outcome).toMatchObject({ changes: [], xp: 0, currency: 0, location: null });
     },
   );
 
@@ -2154,7 +2155,7 @@ describe('setting and character interactions', () => {
         expect(outcome.narration).toContain(narration);
         expect(outcome.narration.indexOf(effect)).toBeLessThan(outcome.narration.indexOf(question));
         expect(outcome.journal).toEqual([fact]);
-        expect(outcome).toMatchObject({ choices: [], changes: [], xp: 0, gold: 0, location: null });
+        expect(outcome).toMatchObject({ choices: [], changes: [], xp: 0, currency: 0, location: null });
         for (const log of context.combatResult?.logs ?? []) expect(outcome.narration).toContain(log);
         if (phase === 'noncombat') expect(outcome.narration).toContain('Mira studies the gate’s hinges');
       }
@@ -2410,6 +2411,112 @@ describe('ChatGPT registration boundaries', () => {
     );
     expect(fetcher).not.toHaveBeenCalled();
   });
+});
+
+it('chooses a themed ailment with the final ability flavor and retries an explosive Weakened mismatch', async () => {
+  const dice = vi.spyOn(localDice, 'draw').mockReturnValue(1);
+  let flavorAttempts = 0;
+  const requests: any[] = [];
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(init!.body as string);
+    requests.push(request);
+    const data = JSON.parse(request.input[0].content);
+    const value = structuredClone(data.schemaExample);
+    if (data.rolledEquipment) {
+      flavorAttempts++;
+      Object.assign(value.abilities[0], {
+        name: 'Explosive crossbow shot',
+        description: 'Launch a crossbow bolt that bursts into flame.',
+        stat: 'DEX',
+        inflicts: flavorAttempts === 1 ? 'Weakened' : 'Burning',
+      });
+    } else value.concept = 'An explosive crossbow specialist';
+    return stream([
+      event({
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] }],
+        },
+      }),
+    ]);
+  });
+  try {
+    const auth = {
+      accessToken: async () => 'test',
+      models: async () => [{ id: 'model', name: 'Test' }],
+    } as unknown as ChatGPTAuth;
+    const gm = new ChatGPTGM(auth, 'owner', 'model', fetcher as unknown as typeof fetch);
+    const character = await gm.generate('An explosive crossbow specialist');
+    expect(character.abilityOptions![0]).toMatchObject({
+      name: 'Explosive crossbow shot',
+      effect: 'strike',
+      stat: 'DEX',
+      inflicts: 'Burning',
+    });
+    expect(
+      character.abilityOptions!.every((ability) => !ability.targeting || ability.targeting === 'single'),
+    ).toBe(true);
+    expect(flavorAttempts).toBe(2);
+    expect(requests[1].instructions).toContain('faithful to the character');
+    expect(requests[2].input.at(-1).content).toContain('does not fit its damage theme');
+  } finally {
+    dice.mockRestore();
+  }
+});
+
+it.each([
+  ['strike', 'multiple', 'combat'],
+  ['strike', 'area', 'combat'],
+  ['mend', 'party', 'utility'],
+] as const)('generates %s/%s only once character level allows it', async (effect, targeting, kind) => {
+  for (const level of [1, 2, 5, 10]) {
+    const context = resolveContext();
+    context.members[0].state.level = level;
+    let attempts = 0;
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(init!.body as string);
+      const data = JSON.parse(request.input[0].content);
+      expect(data.targetingOptions[effect]).toContain(level >= 2 ? targeting : 'single');
+      expect(data.schemaExample.ability.level).toBe(level);
+      expect(request.instructions).toContain('Character state.level, not ability.level');
+      const value = {
+        ability: {
+          ...data.schemaExample.ability,
+          name: 'New technique',
+          kind,
+          effect,
+          targeting: level === 1 && attempts++ > 0 ? 'single' : targeting,
+        },
+        description: 'A fitting new technique.',
+      };
+      return stream([
+        event({
+          type: 'response.completed',
+          response: {
+            status: 'completed',
+            output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] }],
+          },
+        }),
+      ]);
+    });
+    const gm = new ChatGPTGM(
+      { accessToken: async () => 'test' } as unknown as ChatGPTAuth,
+      'owner',
+      'model',
+      fetcher as unknown as typeof fetch,
+    );
+    const reward = await gm.levelUp({
+      config: context.config,
+      character: context.members[0].character,
+      state: context.members[0].state,
+      choice: kind === 'combat' ? 'new-combat' : 'new-utility',
+      target: null,
+      attributes: [],
+    });
+    expect(reward.ability).toMatchObject({ level, targeting: level >= 2 ? targeting : 'single' });
+    expect(fetcher).toHaveBeenCalledTimes(level >= 2 ? 1 : 2);
+  }
 });
 
 it('generates a custom template from the supplied concept without a species catalog', async () => {

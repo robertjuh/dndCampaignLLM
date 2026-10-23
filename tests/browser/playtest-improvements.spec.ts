@@ -386,7 +386,7 @@ test('recovery and rewards are available in a closed mechanics log beside the si
         changes: [],
         journal: [],
         xp: 0,
-        gold: 0,
+        currency: 0,
         lethalWarning: null,
         location: null,
       },

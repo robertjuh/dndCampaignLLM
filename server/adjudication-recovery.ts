@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import {
+  actionId,
   aggregateComponents,
   turnAdjudicationSchema,
   type TurnAdjudication,
@@ -47,6 +48,20 @@ export function retainAdjudicationProgress(
   fallback: TurnAdjudication,
   validate: (input: unknown) => TurnAdjudication,
 ) {
+  // Optional pacing repairs must preserve the complete legal outcome, including unused slots.
+  try {
+    const value = validate(candidate);
+    return {
+      value,
+      locked: new Set(
+        value.actions.flatMap((action) =>
+          phases.filter((phase) => phase in action.components).map((phase) => key(action.memberId, phase)),
+        ),
+      ),
+    };
+  } catch {
+    // Invalid outcomes still need component-by-component recovery below.
+  }
   const locked = new Set<string>();
   const lockedWorld = new Set<string>();
   const engine = engineEvents(context);
@@ -187,7 +202,13 @@ export function retainAdjudicationProgress(
   // ponytail: one greedy pass; use dependency ordering if coupled actions need local recovery.
   for (const phase of phases)
     for (const action of candidate.actions) {
-      if (!action.components[phase]) continue;
+      const unusedMain =
+        phase === 'main' &&
+        action.components.main === null &&
+        locked.has(key(action.memberId, 'movement')) &&
+        fallback.actions.find((base) => base.memberId === action.memberId)?.components.main
+          ?.processingFailure;
+      if (!action.components[phase] && !unusedMain) continue;
       const selected = new Set([...locked, key(action.memberId, phase)]);
       try {
         value = validate(project(selected));
@@ -228,13 +249,18 @@ export function applyAdjudicationRepair(
       const background = retained.value.events.filter((event) => !eventIds.has(event.id));
       const backgroundIds = new Set(background.map((event) => event.id));
       const actors = new Set(raw.actions.map((action) => action?.memberId));
+      const identities = new Set(raw.actions.map((action) => action?.actionId));
       // Derive compact fields from saved facts too, without adding retained passes to the patch.
       const normalized = normalizeAdjudicationStructure(
         {
           ...context,
           turn: {
             ...context.turn,
-            actions: context.turn.actions.filter((action) => actors.has(action.memberId)),
+            actions: context.turn.actions.filter(
+              (action) =>
+                actors.has(action.memberId) ||
+                identities.has(actionId(context.turn.id, action.memberId)),
+            ),
           },
         },
         {

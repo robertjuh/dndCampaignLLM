@@ -1,5 +1,13 @@
 # World progression
 
+20 October update: the [scene GM](SCENE_GM_IMPLEMENTATION_PLAN.md) receives local
+pacing context before writing its scene, without a separate pacing-repair request.
+Private persistent hook notes supply stable causes, discoverable answers, NPC
+motives and due activities, including during passes. The GM establishes witnessed
+developments through ordinary scene operations; the server generates their public
+progress evidence and journal links. The compatibility pipeline retains its
+bounded pacing repair described below.
+
 Repeated searches and travel should change what the party can understand or affect. Progress can be a consequential discovery, an NPC acting on an established concern, a visible threat changing, or an objective being resolved. It does not require combat, treasure, a new obstacle, or an action chosen for a player.
 
 ## Implemented contract

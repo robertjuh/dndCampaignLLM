@@ -28,6 +28,11 @@ export const worldProgressionStateSchema = z
         })
         .strict(),
     ),
+    threads: z.record(z.object({
+      stalledTurns: z.number().int().nonnegative(),
+      lastTurnId: z.string().min(1),
+      recentFacts: z.array(z.string().max(6000)).max(24),
+    }).strict()).optional(),
   })
   .strict();
 export type WorldProgressionState = z.infer<typeof worldProgressionStateSchema>;

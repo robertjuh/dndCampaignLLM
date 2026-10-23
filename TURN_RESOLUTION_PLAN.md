@@ -1,5 +1,13 @@
 # Separate turn resolution from narration
 
+20 October update: [scene GM implementation](SCENE_GM_IMPLEMENTATION_PLAN.md)
+replaces the model-facing contract for new ChatGPT noncombat/opening turns with
+small scene operations and prose from one creative response. The server compiles
+them to the canonical resolution and completes its narration stage locally.
+Combat, gathering and started compatibility checkpoints retain the pipeline below.
+Technical fallback components now stay pending with independently saved progress;
+formatting failures cannot publish as fictional inability.
+
 18 October follow-up: [fluent turn resolution](FLUENT_TURN_RESOLUTION_PLAN_2026-10-18.md)
 extends the same pipeline with generous intent defaults, typed explicit pickup,
 server-derived summaries and pass outcomes, canonical journal persistence,

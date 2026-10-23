@@ -83,6 +83,7 @@ export function repairTurnCheckpoints(draft: Checkpoints, context: GMContext) {
   for (const event of authoritative) {
     if (!event.id.startsWith('resource:')) continue;
     const resource = next.receipts[event.id] as ResourceReceipt;
+    if (resource.targets) continue;
     if ((resource.targetId ?? resource.memberId) === resource.memberId) continue;
     const actor = registry.find((member) => member.id === resource.memberId)!;
     const previous = combatFact(

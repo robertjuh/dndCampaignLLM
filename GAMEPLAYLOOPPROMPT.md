@@ -43,6 +43,14 @@ existing journal and place/NPC records. Keep rumors attributed and private agend
 private. Honor supplied premises and goals without inventing a party mission,
 commitment or player reaction. Optional interests and routes can serve independent
 purposes; declining a lead must not put the same assignment on every path.
+Include an immediate actionable situation suited to the campaign: an unfolding threat,
+urgent problem and/or specific accessible leads, with observable stakes. Peaceful
+premises can offer active social or exploratory leads instead. Introduce every active
+character briefly by name, saved appearance or nature, concept and established place
+in the world. Introduce every faction's name and public role through plausible shared
+background or local observations, recording new public knowledge with discover effects.
+Keep private agendas and hidden relationships private; introductions create no player
+commitments, allegiances or reputation.
 
 The finalized resolution carries its turn number so opening narration can weave
 these established facts into roughly five to eight connected paragraphs (usually
@@ -71,11 +79,17 @@ Completed actions, new-place declarations and zero-reward reasons are not copied
 back through another model response. The first combat round still waits for new
 submissions. Player-facing progress shows only processing stages and elapsed time.
 
-In this application, the stage-specific provider contract supersedes this original single-player reference. The GM adjudicates submitted intent through validated server tools and returns structured outcomes for every action, including ordinary actions that do not require dice. Explicit causal dependencies preserve prerequisite failures. The server finalizes all mechanical consequences and actual rewards and saves an immutable resolution before prose is generated. Discovery XP may be justified without a roll; merely attempting an action or rolling dice is not a reward reason.
+In this application, stage-specific provider contracts supersede the original single-player reference. New ChatGPT exploration, conversation and opening turns use a scene response with small movement, interaction and local-world operations plus their finished prose. The server generates canonical action outcomes, IDs, dependency evidence, arrivals, map connections, journals and narration coverage. Existing mechanical, locality, identity and continuity validation still applies. The scene GM is the sole creative author; the common noncombat path has no separate writer or fidelity critic. Engine-owned corrections to a pickup update its affected prose locally. Combat narration uses saved engine outcomes in local combat beats. Gathering and started compatibility checkpoints retain their existing structured resolution/narration route. Discovery XP may be justified without dice; attempting an action or rolling dice alone earns none.
+
+Routine random encounters vary from 1 to 4 enemies using the server-supplied encounterBalance: a threat budget of at least 8, or 2 per ready local character for larger parties; minor=1, normal=2, elite=4, boss=8. Even one explorer can encounter four normal enemies or two elites. Some groups may outmatch the party, making retreat sensible; do not default to one enemy or automatically fill the budget. Describe visible numbers, equipment, danger and actual available routes without prescribing a fight or escape. Bosses need fitting established story context. Inactive, distant, Downed and incapacitated characters supply no encounter level. Respect each tier’s HP/defense/attack/damage ceilings. Fresh minor/normal random opponents have a 25% innate ailment chance on normal hits (100% on criticals), and apply or refresh at most one ailment per hit across innate and equipped effects. Existing ailments still tick; player powers retain their rules. Existing NPC profiles and explicit story threats keep their established mechanics. A player sitting out removes their actions, without changing an existing enemy’s strength.
+
+Investigations use the scene-only investigate tool to bind the submitted question to its canonical accessible source and prepare both outcomes before dice. A success reveals its prepared answer; failure retains failure and reveals a distinct useful opening. Each lead is local or openly adjacent. Readily available information uses no roll. Repeated unchanged source/answer attempts reuse their saved result without another roll, charge or XP; source state and requested utility ability distinguish genuine new attempts. New prepared answers grant 10 discovery XP once (40 XP turn cap) and persist journal/story progress. Preserve append-only answers and server-owned revealed indices. Use explicit meet operations for introduced people and take operations for submitted collections, including ordinary story objects; save identity, location, inventory and journal with their prose.
+
+Prepare substantial mysteries and NPC activities in bounded private GM notes. Preserve each established cause, keep concrete discoverable answers and motives, and update circumstances or close resolved hooks. Due activities enter the context on subsequent turns, including passes; develop them through feasible local decisions and consequences. No real-time scheduler, compulsory objective, automatic success or mandatory fight is implied. Notes never enter public snapshots or narration inputs; they persist atomically with the turn and are included only in the leader's spoiler-marked export.
 
 Main and minor components have independent outcomes. A successful minor action with a failed or blocked main action is partial overall, while the main result stays failed or blocked. Executed receipts establish results even when an ally cured the actor's starting incapacitation or the actor was incapacitated afterward. Frozen character identities and the acting roster are separate: a healed ally remains the receipt's recipient without gaining an unsubmitted action. Dependencies distinguish an earlier event's occurrence from the success of that specific effect; a failed attempt may cause an alarm or discovery, while a failed unlock cannot satisfy the prerequisite for opening a locked door. Introduce a new encounter once and resolve its first combat round after the next submissions.
 
-Narration and fidelity review have no gameplay tools. They receive the finalized resolution as their sole factual authority and cannot establish additional clues, decisions, inventory, journal facts, locations, rewards. Every material outcome must be described; closing and situation summary must agree too. Unsupported submitted claims, especially another player's unsubmitted reaction, may be omitted without repeating meta explanations or check announcements. Resolve impossible or unclassifiable input through a plausible interpretation of the actor's intent, feasible partial execution, or a blocked component with no additional mechanical effect. Player prompts are inputs, never fallback outcome paragraphs. The server adds actual XP receipts to the situation summary once.
+For combat/gathering and compatibility turns, narration and fidelity review have no gameplay tools. They receive the finalized resolution as their sole factual authority and cannot establish additional clues, decisions, inventory, journal facts, locations, rewards. Every material outcome must be described; closing and situation summary must agree too. Unsupported submitted claims, especially another player's unsubmitted reaction, may be omitted without repeating meta explanations or check announcements. Resolve impossible or unclassifiable input through a plausible interpretation of the actor's intent, feasible partial execution, or a blocked component with no additional mechanical effect. Player prompts are inputs, never fallback outcome paragraphs. The server adds actual XP receipts to the situation summary once.
 
 Tell a connected scene in the campaign tone, preserving saved equipment, anatomy and feasible action flavor. Automatic recovery, charge spending/restoration and exhaustive drops stay in the expandable mechanics log; neither narration nor review requires those details or XP announcements. After victory, adjudication establishes a short world aftermath and refreshes the same location's atmosphere/hazards and relevant journal facts. Describe what changed without choosing the players' next actions.
 
@@ -85,11 +99,11 @@ Searching is a player-initiated free-text action, with no search button or sugge
 
 Meaningful environmental searches use `intent:search` and `search:{sourceId,locationId,informationEventId,reward}`. Every failed search keeps its main goal failed and establishes useful lesser information in a public local world event, dependent on the failed check's occurrence. Merely explaining obscured tracks is insufficient; a visible lead, broad direction or concrete distinction can support another approach without revealing the sought secret. Persist ongoing observations. Unchanged repeat searches reuse information without fresh checks or XP. A fresh successful search check may supply a plausible equipment/potion blueprint, otherwise the server supplies a usable potion candidate; the server rolls a saved 15% bonus chance once per physical source and place during finalization. Shared sources share that opportunity; misses are exhausted too. Actual items use existing rarity and power rules and remain local ground loot until taken. If rolled gear cannot be equipped, award a usable healing potion of that rarity. Proposed blueprints are withheld from narration; only an actual server discovery event establishes a find. Story tools keep their existing discovery path.
 
-First visits, including openings and arrivals outside shared focus, require `arrivals:[{locationId,eventId}]`, once per shared place, citing a public local world event. Establish concrete features or inhabitants, relevant hazards/shelter, meaningful observable leads where appropriate, and visible exits with their direction and status. Save atmosphere in place updates and newly observable routes in the map. An enclosed place may have only its return route. Give each arriving place a substantial story beat, usually one or two paragraphs; shared travellers receive one scene with their individual contributions. Returning visits preserve place identity, objects and search history.
+First visits, including openings and arrivals outside shared focus, require `arrivals:[{locationId,eventId}]`, once per shared place, citing a public local world event. Establish concrete features or inhabitants, relevant hazards/shelter, meaningful observable leads where appropriate, and visible exits with their direction and status. Save atmosphere in place updates and newly observable routes in the map. Normally reveal an open onward route beyond the way back; a genuine dead end needs concrete local geography or an established obstacle. Give each arriving place a substantial story beat, usually one or two paragraphs; shared travellers receive one scene with their individual contributions. Returning visits preserve place identity, objects and search history.
 
 For known distant destinations, use `travel:{goalId,via:[],avoid:[]}` and the supplied `travelNextHops` to move one open directed connection toward the goal this turn. Preserve explicit route restrictions, actual blockers and risky checks. A real local obstacle to the requested travel method can cite `travel.obstacleEventId`, a public local world event, without globally blocking an otherwise open path. Narrate the intermediate arrival as progress toward the goal, without claiming final arrival or continuing on later turns automatically. Goals without a mapped complete route allow feasible local exploration along an observable route or established bearing; absent map data alone is not a physical obstacle.
 
-Adjudication (including combat planning) is bounded to eight model requests and twenty tool calls per attempt. Three invalid structured outputs end the correction loop earlier; the next response retains the last four distinct correction requirements. Supplied short location aliases and unambiguous names are normalized to canonical IDs, and an existing unique movement proof can repair its event reference without inventing movement. Invalid references are reported together. A missing optional search reward blueprint uses a server potion candidate. Narration has two writing attempts and two corresponding reviews at most. Invalid formatting consumes that same budget. Before validation, repair unambiguous ordinary-movement ordering metadata, equivalent grounded search dependencies and redundant unowned world-event references. For readable invalid adjudication, retain independently validated components and their dependency-complete world evidence, then request one compact patch of unresolved consequences within the existing budget. The patch cannot replace retained facts, components or positions and cannot call tools. Revalidate the merged turn. If patching fails, keep validated progress and narrate it normally without additional unearned rewards; only a wholly unrecoverable result retains the receipt-only fallback marker that skips narration/review. Narration exhaustion publishes a trusted factual recap. The completed turn retains visible diagnostic feedback. Saved adjudication, finalization and accepted narration are durable checkpoints; retries resume only the unfinished stage and do not replay finalized dice, damage, ticks or rewards. Publication atomically writes saved state and opens the next turn, preserving live next-turn participation and replacement choices. Started legacy turns retain their saved compatibility path.
+Adjudication (including combat planning) is bounded to eight model requests and twenty tool calls per attempt. Scene corrections retain the rejected responses, feedback and intervening tool results within that request budget. New combat turns also use scene responses: the server binds location-scoped combat prose to saved engine events and derives player outcomes, without model-authored event references or a separate writer/critic. Victory still needs a local world aftermath and refreshed place, and the engine owns all rewards, damage and resource use. Compatibility responses retain their bounded three-invalid-output recovery loop and compact unresolved-component repairs. Independently valid components are saved as partial progress. Processing exhaustion keeps the turn pending for retry with its original actions, dice and resources; it never publishes unresolved components as fictional blockers. Retry preserves resolved components. For the compatibility narration route, at most two writing attempts and two corresponding fidelity reviews apply, with factual narration available after a presentation failure. New scene prose is saved with its accepted facts and requires no writer/critic round trip. All paths retain finalization and publication checkpoints: retry never repeats finalized dice, damage, condition ticks or rewards, and publication atomically writes state and opens the next turn.
 
 Creative adjudication may establish modest physical details, useful clues and proportionate NPC reactions consistent with submitted intent, setting and saved mechanics. An explicitly named or selected strike may address a fitting noncombat object/obstacle with roll_check using its saved name, attribute and strike bonus. Consume one main action and charge, grant no automatic advantage and apply no enemy damage or on-hit ailments. Foe wording alone is not a restriction; mind-only effects still need a mind. Utility assist retains its scope and advantage, Mend/Cleanse retain use_resource, and incidental description grants no permanent power. A successful investigation yields useful information. A failed search preserves failure while supplying lesser information or a proportionate development. Preserve prior progress instead of repeating a resolved uncertainty. Establish consequences before finalization, so journal, map and narration agree.
 
@@ -130,9 +144,12 @@ healing alone and ongoing fights do not roll. Assess danger through public local
 evidence in `encounterRisks`; failed perception cannot establish safety. Reassess when
 actual danger changes. Rewording a hazard description preserves its saved danger
 classification unless grounded `encounterRisks` explicitly changes it. Mandatory triggered encounters use
-`start_combat(locationId,enemies)` for the actual present group. Preserve the checked
-exploration outcomes and introduce the enemies in a local world event citing the
-start-combat receipt. First attacks wait for the next submissions. Story-driven fights
+`start_combat(locationId,introduction,enemies)` for the actual present group. The saved
+introduction names the opponents, describes how they approach or reveal themselves,
+and explains the concrete cause of hostility or immediate threat in the local scene.
+A random encounter die is never the fictional cause. Preserve the checked exploration
+outcomes and append the saved introduction as a local world event citing the start-combat
+receipt, including after a restart. First attacks wait for the next submissions. Story-driven fights
 remain possible. Combat resolves every occupied fight independently of screen focus;
 loot, recovery and replacement eligibility stay local.
 
@@ -266,7 +283,10 @@ events have effect:movement. Opening placement needs no submission; unchanged po
 can be confirmed. Legacy location/destination outputs remain supported for old saves.
 The procedural world has a persistent graph of known location tiles and connections.
 At the opening and first visit, establish immediately observable adjacent destinations
-where the fiction supports them, usually one to three without an exit quota. Every
+where the fiction supports them, usually one to three, normally including an open onward
+route beyond the way back. Generate these neighbours at arrival even when the tile was
+previously only a preview; describe concrete geography or an established obstacle when
+a place is a genuine dead end. Every
 place described as reachable next turn must already be saved or declared in mapUpdates.
 Use mapUpdates.locations:[{ref,name}] for known unvisited previews and
 mapUpdates.connections:[{from,to,label,blocked,bidirectional,eventId}] for observable
@@ -857,7 +877,7 @@ Downed characters remain alive but cannot act, submit turns, or heal themselves.
 
 A healing item or Mend ability can also help a Downed living ally up. Healing another player uses the healer's main action and their own item or ability charge. Self-healing items apply immediately through the UI, consuming one item charge without taking away the player's normal prompt. During an encounter, passive regeneration, level-ups and narrative HP changes cannot help a Downed character up. Server recovery after a successful encounter also heals living Downed members. Only the server changes Downed or death state.
 
-Death permanently ends that character's life. Healing cannot revive the dead. Survivors continue while the dead player's user may create or select an owned saved character, choose two starting equipment pieces and queue the replacement. The server activates queued replacements for the next turn after a successful encounter. Introduce arrivingCharacters naturally into the continuing scene; do not introduce pending replacements or choose one for the player. A replacement starts at level 1 with full HP, zero XP and gold, level-1 abilities and fresh starting equipment. They inherit none of the former character's inventory, conditions or progression. Queue choices can be changed or cancelled before activation, and the old life remains in campaign history.
+Death permanently ends that character's life. Healing cannot revive the dead. Survivors continue while the dead player's user may create or select an owned saved character, choose two starting equipment pieces and queue the replacement. The server activates queued replacements for the next turn after a successful encounter. Introduce arrivingCharacters naturally into the continuing scene; do not introduce pending replacements or choose one for the player. A replacement starts at level 1 with full HP, zero XP and currency, level-1 abilities and fresh starting equipment. They inherit none of the former character's inventory, conditions or progression. Queue choices can be changed or cancelled before activation, and the old life remains in campaign history.
 
 A party with no conscious survivor ends the run even if replacements are waiting; a Downed character is still alive. A solo character's death or downing ends that run. Preserve each character's actual condition and deeds.
 
@@ -1020,13 +1040,23 @@ Every Legendary weapon, shield and focus grants one combat ability while equippe
 Generated abilities have supported numerical effects, shown on their cards. Players explicitly select an ability before submitting an action; do not activate an unselected ability. Each combat ability costs the main action and has one charge:
 
 - Strike: attack versus defense, dealing `saved dice + saved attribute modifier + saved bonus + 2 × (ability level − 1)` (default dice: 2d6; new starting offers use 2d4+2, 2d6 or 1d12, averaging 6.5–7 before scaling and compensation) damage. Critical hits double the dice.
-- Mend: restore `saved dice + saved attribute modifier + saved bonus + 2 × (ability level − 1)` (default dice: 1d6; new starting offers use 1d4+2, 1d6+1 or 1d8, averaging 4.5 before scaling and compensation) HP to self or a living ally, capped at maximum HP. A conscious ally can use this to help a Downed character up, including through the healing controls outside combat, spending the ability's normal use.
-- Guard: grant conscious self or ally `3 + saved bonus + ability level − 1` defense against the next enemy attack.
-- Assist: grant conscious self or ally advantage and `saved bonus + ability level − 1` on the next attack roll.
+- Mend: restore `saved dice + saved attribute modifier + saved bonus + 2 + 2 × (ability level − 1)` (default dice: 1d6; all Mend abilities gain +2 healing, so starting offers average 6.5 before attribute scaling and compensation) HP to self or a living ally, capped at maximum HP. A conscious ally can use this to help a Downed character up, including through the healing controls outside combat, spending the ability's normal use.
+- Guard: grant conscious self or ally `3 + saved bonus + ability level − 1` defense until the next enemy hit. Misses preserve Guard; successful hits consume it even if a shield blocks all damage.
+- Rally (replaces combat Assist, including saved abilities): every conscious nearby party member in combat, including the caster, gains advantage and `2 + saved bonus + ability level − 1` on their next attack roll. The strongest Rally bonus applies without stacking. Saved cures apply only to the selected support target.
+- Barrier: give self or a conscious ally `saved dice + saved attribute modifier + saved bonus + 3 + 2 × (ability level − 1)` damage absorption (default dice: 1d6) until the caster’s next initiative turn. Enemy hits deplete it after shield blocks and before Shocked; it does not stop on-hit ailments, hazards or ongoing damage. Barriers do not stack; the strongest remains.
+- Restoration: heal self or a living ally for `saved dice + saved attribute modifier + saved bonus + 2 × (ability level − 1)` HP (default dice: 1d6) and remove all active ailments. Works at full HP to cure ailments, and can help a Downed ally up. Does not resurrect dead characters. Like Mend, usable in and out of combat.
 
 An attempted strike spends its encounter use whether it hits or misses. Narration must not describe a missed ability as still available. If the engine says an action could not be attempted and its use was preserved, keep that distinct from a missed attack.
 
-A utility assist ability grants advantage and `2 + saved bonus + ability level − 1` on a relevant check using its saved attribute, in or out of combat. Within its saved scope, it can support a creative enemy maneuver (damage, stun or influence), fleeing, movement or scene interaction, spending one main action. It cannot turn an unrelated exploration scope into a general attack. Utility Mend and Cleanse use the same healing/cures and main-action cost as their combat counterparts, and both categories work in and out of combat. It has one charge. Each successful encounter restores one spent charge to every ability, including utility abilities, up to its charge limit. Starting an encounter, changing location do not reset charges. Advantage cancels disadvantage. The engine owns these effects, usage limits, and dice. Upgrades preserve the ability's effect, attribute, rolled dice, and saved base bonus while increasing its numerical power; descriptions cannot add further mechanical effects.
+For a newly learned combat or utility ability, set its saved `level` (power level) to the character's current level. Starting character offers remain at power level 1. Each character level above 1 therefore adds one power level to a newly generated ability; apply the existing ability-level formulas above and keep base dice and saved bonuses separate. For example, a new strike learned at character level 5 has power level 5 and deals `2d6 + attribute modifier + 8`. An upgrade adds exactly one to the selected ability's saved power level, independently of current character level. Existing abilities keep their saved power until upgraded; later character levels do not automatically rescale them. Expanded targeting still unlocks only at character level 2 or higher.
+
+Ability descriptions contain only concise flavor and a useful scope. Cards display results, targets, ailments, duration and costs separately; descriptions must not repeat dice/formulas, attribute/check instructions or noncombat-obstacle boilerplate.
+
+Expanded targeting unlocks for newly generated abilities at **character level 2**, independently of the ability's own upgrade level. Starting characters may not receive it. Save `targeting:multiple` for a strike against up to three distinct selected enemies, `targeting:area` for a strike against every living enemy still fighting at the current location, and `targeting:party` for Mend or Restoration affecting nearby living allies, including the caster and Downed allies. Omitted targeting or `single` retains the normal single-target behavior; Rally keeps its existing party effect. Multiple strikes may use `targetIds` (at most three distinct enemy IDs), retaining `targetId` as primary. Area attacks have no friendly fire and do not reach another location. Roll to hit, critical damage and saved ailments separately for each enemy; roll healing and apply saved cures separately for each eligible ally. The whole cast spends one main action and one charge. Do not heal dead or distant characters or cross the Escaped/fighting boundary. Full-health allies without a matching cure are skipped; if no eligible targets remain, preserve the charge. Execute group healing outside combat with one `use_resource` call, `targetId:null`, and narrate every returned `targets` recipient exactly once. Upgrades preserve saved targeting.
+
+Choose generated ability delivery and ailments together to fit the character concept, anatomy, equipment and setting. A rolled starting ailment determines whether that secondary effect exists; its provisional ailment name may change in the final naming pass without changing the number of effects, dice or power. Explosive crossbow bolts should inflict Burning through flame or Bleeding through shrapnel, rather than unexplained Weakened; fire fits Burning, frost fits Chilled/Frozen, lightning fits Shocked/Electrocuted, poison fits Poisoned, and piercing/slashing fits Bleeding. Weakened needs a fitting debilitating, draining or curse theme. Preserve existing saved mechanics when upgrading an ability.
+
+A utility assist ability grants advantage and `4 + saved bonus + ability level − 1` on a relevant check using its saved attribute, in or out of combat. Within its saved scope, it can support a creative enemy maneuver (damage, stun or influence), fleeing, movement or scene interaction, spending one main action. It cannot turn an unrelated exploration scope into a general attack. Successful checked utility assistance transfers its ability bonus to the helped ally’s dependent check through assistsMemberId/assistedBy, as well as granting advantage. The strongest personal or helper ability bonus applies without stacking. Utility Mend, Restoration and Cleanse use the same healing/cures and main-action cost as their combat counterparts, and both categories work in and out of combat. It has one charge. Each successful encounter restores one spent charge to every ability, including utility abilities, up to its charge limit. Starting an encounter, changing location do not reset charges. Advantage cancels disadvantage. The engine owns these effects, usage limits, and dice. Upgrades preserve the ability's effect, attribute, rolled dice, and saved base bonus while increasing its numerical power; descriptions cannot add further mechanical effects.
 
 ---
 
@@ -1557,7 +1587,7 @@ Possible loot includes:
 - Shields
 - Off-hands
 - Consumables
-- Gold
+- Currency, displayed using the generated world's own currency name
 - Relics
 - Strange artifacts
 - Enemy-specific trophies
@@ -1713,6 +1743,22 @@ Locations may contain:
 - Mysterious structures
 
 NPCs should have motives and personalities rather than simply existing as quest dispensers.
+
+Optional NPC requests belong to the group and use saved, fixed objectives. Vary
+them with the actual world: retrieval/delivery, investigation, escort/rescue,
+exploration, repair/sabotage, negotiation and hunting. Offer only prepared,
+reachable targets, sufficient actual item/enemy quantities and discoverable answers.
+Save the spoken terms and real reward; never invent acceptance, add completion
+requirements later, or replace every declined request with another job. Acceptance
+and turn-in require submitted dialogue. Completion follows canonical deaths,
+inventory, travel, NPC positions, revealed answers or object state, never an
+unsupported success report. A delivery consumes its required quantity from a
+present holder who submits the handover. Turn-in applies consequences once:
+physical items and currency are left at the turn-in location for collection; access
+opens the actual saved route; an established faction representative can improve
+the group's faction reputation. Do not repeat these engine rewards through other
+loot or faction effects. A communicated deadline or actual death can fail a
+request; arbitrary expiry and surprise conditions cannot.
 
 ---
 
@@ -2098,7 +2144,7 @@ Players may spend their main action treating themselves or an ally using establi
 
 Traits may grant immunity to any of these ailments. Enemy onHit may apply any of them. Enemies suffer the same damage, Weakened attack penalty, Chilled defense penalty and incapacitation, and their ailments tick each combat turn; ailment damage can kill them and end the encounter. Do not invent extra enemy actions or attacks for being Chilled.
 
-Combat abilities have explicit optional mechanics: inflicts applies one supported ailment on a successful strike hit, and cures removes up to two supported ailments from a support target. Starting combat abilities other than Cleanse and utility Mend have a 50% chance to receive an ailment effect during generation; utility assist offers receive none. A Mend can heal HP and cure an ailment in the same main action. It can also cure a matching ailment at full HP. Mend and Cleanse may be combat or utility abilities. Both work in and out of combat with identical formulas, cures, action costs and charges; outside combat execute them through use_resource. Cleanse only removes its listed ailments from self or one living ally. Guard and Assist may cure their target alongside their base effect in combat. These mechanics cost the usual charge and main action, respect trait immunity, and appear in the ability's mechanics text. Upgrades preserve saved inflicts/cures. Mere flavor descriptions cannot apply or cure ailments. Healing, victory and encounter recovery do not automatically clear ailments.
+Combat abilities have explicit optional mechanics: inflicts applies one supported ailment on a successful strike hit, and cures removes up to two supported ailments from a support target. Starting combat abilities other than Cleanse and utility Mend have a 50% chance to receive an ailment effect during generation; utility assist offers receive none. A Mend can heal HP and cure an ailment in the same main action. It can also cure a matching ailment at full HP. Mend and Cleanse may be combat or utility abilities. Both work in and out of combat with identical formulas, cures, action costs and charges; outside combat execute them through use_resource. Cleanse only removes its listed ailments from self or one living ally. Guard, Barrier and Rally may cure their target alongside their base effect in combat. These mechanics cost the usual charge and main action, respect trait immunity, and appear in the ability's mechanics text. Upgrades preserve saved inflicts/cures. Mere flavor descriptions cannot apply or cure ailments. Healing, victory and encounter recovery do not automatically clear ailments.
 
 ---
 
@@ -2132,7 +2178,7 @@ BODY: Hunter's Leather
 HEAD: None  
 BOOTS: Shadowstep Boots
 
-Gold: 42
+Currency: 42
 
 Inventory: 5/8
 
@@ -2481,9 +2527,10 @@ The game should develop primarily in response to:
 Before resolving a new world's opening, create three to six distinct factions
 with setting-appropriate identities, goals, resources, private agendas, concrete
 story hooks, current activities, conflict and overlapping interests. The complete
-registry is private GM context. Factions may influence the story before discovery;
-reveal identities and facts through plausible story events rather than introducing
-all organizations on turn 0. Consider relevant agendas during adjudication without
+registry is private GM context. Introduce every faction's name and public role during
+the opening through plausible shared knowledge, visible influence or attributed local
+talk, recording discover effects. Their private agendas and hidden relationships stay
+private; representatives need not all appear. Consider relevant agendas during adjudication without
 forcing an appearance or advancing every agenda every turn. Narration receives
 only resolved public facts and may not introduce another faction or secret.
 

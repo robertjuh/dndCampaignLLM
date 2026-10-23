@@ -152,7 +152,7 @@ function proposal(context: GMContext): TurnAdjudication {
     location: null,
     rewards: {
       xp: context.turn.number ? 10 : 0,
-      gold: 0,
+      currency: 0,
       reason: 'Discovery of the sanctuary and new caravan clues.',
     },
   };
@@ -248,7 +248,7 @@ it('finalizes explicit pickup once and resumes publication after a restart witho
     value.events = value.events.filter((event) => event.kind === 'action');
     value.events.forEach((event, sequence) => (event.sequence = sequence));
     value.journal = [];
-    value.rewards = { xp: 0, gold: 0, reason: 'Routine handling.' };
+    value.rewards = { xp: 0, currency: 0, reason: 'Routine handling.' };
     const action = value.actions[0];
     const event = value.events.find((event) => event.actionId === action.actionId)!;
     event.locationRef = context.scene.location.id;
@@ -388,7 +388,7 @@ it('resumes saved exploration at a new place after encounter creation without ca
         reason: 'An armed captain guards the deck.',
       },
     ];
-    value.rewards = { xp: 0, gold: 0, reason: 'No new reward.' };
+    value.rewards = { xp: 0, currency: 0, reason: 'No new reward.' };
     const accepted = tools.validateAdjudication!(value);
     expect(tools.prepareEncounters!(accepted)).toHaveLength(1);
     tools.startCombat(
@@ -660,7 +660,7 @@ function resolution(): Extract<TurnResolution, { version: 2 }> {
       abilityUses: member.state.abilityUses ?? {},
       level: member.state.level,
       xp: member.state.xp,
-      gold: member.state.gold,
+      currency: member.state.currency,
     })),
     factualRecap: p.events.map((event) => event.fact).join('\n'),
     changes: [],
@@ -705,7 +705,7 @@ function survivingSpiderContext() {
   };
   c.receipts = { combat: c.combatResult };
   const value = proposal(c);
-  value.rewards = { xp: 0, gold: 0, reason: 'No combat victory.' };
+  value.rewards = { xp: 0, currency: 0, reason: 'No combat victory.' };
   return { c, value, spider };
 }
 
@@ -1054,7 +1054,7 @@ it.each([
         action.fact = main.fact;
         action.reason = reason;
         value.journal = [{ kind: 'npc', name: 'Postmoth', detail: `${background} ${fact}` }];
-        value.rewards = { xp: 0, gold: 0, reason: 'An inquiry is resolved.' };
+        value.rewards = { xp: 0, currency: 0, reason: 'An inquiry is resolved.' };
         value.events = value.events.filter((event) => event.kind !== 'mechanics');
         return completed(value);
       }
@@ -1702,7 +1702,7 @@ it('freezes NPC voice and new attributed conversation hooks for narration, revie
         dependsOn: [{ eventId: own.id, requires: 'occurrence' }],
       });
       value.journal = [];
-      value.rewards = { xp: 0, gold: 0, reason: 'An ordinary conversation.' };
+      value.rewards = { xp: 0, currency: 0, reason: 'An ordinary conversation.' };
       return completed(value);
     }
     expect(body.tools).toBeUndefined();
@@ -2357,7 +2357,7 @@ it('requires and persists victory aftermath, preserves equipment flavor and keep
     requests++;
     const body = JSON.parse(init!.body as string);
     const value = proposal(current);
-    value.rewards = { xp: 0, gold: 0, reason: 'Combat rewards belong to the server.' };
+    value.rewards = { xp: 0, currency: 0, reason: 'Combat rewards belong to the server.' };
     if (requests > 1) {
       const feedback = JSON.parse(body.input[0].content);
       expect(
@@ -2530,7 +2530,7 @@ it('stops invalid structured responses early within the shared request budget in
   );
   expect(result.actions.map((action) => action.status)).toEqual(['blocked', 'blocked']);
   expect(result.changes).toEqual([]);
-  expect(result.rewards).toMatchObject({ xp: 0, gold: 0 });
+  expect(result.rewards).toMatchObject({ xp: 0, currency: 0 });
   expect(c.requestBudget.fallback).toContain('3 invalid structured responses');
   expect(fetcher).toHaveBeenCalledTimes(6);
   expect(c.requestBudget.used).toBe(6);
@@ -2554,6 +2554,15 @@ it.each(['repaired', 'malformed', 'rewrites retained facts', 'oversized response
         return completed(invalid);
       }
       const input = JSON.parse(body.input[0].content);
+      if (input.task === 'Resume unresolved actions from the saved checkpoint.') {
+        expect(input.retainedProgress.actions[0].status).toBe('success');
+        return completed({
+          actions: [original!.actions[1]],
+          events: original!.events.filter((event) => event.id !== 'act:0'),
+          journal: original!.journal,
+          rewards: original!.rewards,
+        });
+      }
       expect(body.tools).toBeUndefined();
       expect(input.task).toContain('Repair only unresolved');
       expect(input.lockedComponents).toEqual([`${current.members[0].id}:main`]);
@@ -2579,11 +2588,6 @@ it.each(['repaired', 'malformed', 'rewrites retained facts', 'oversized response
       return gm.adjudicate(context, tools);
     };
     const narrationCalls = f.narrate.mock.calls.length;
-    const narrate = f.provider.narrate!;
-    if (repair === 'malformed')
-      f.provider.narrate = async () => {
-        interruptNarration(f.db, 'Interrupted after retained progress was finalized');
-      };
     const id = f.submit();
     await f.game.idle();
     if (repair === 'provider rejection') {
@@ -2591,14 +2595,16 @@ it.each(['repaired', 'malformed', 'rewrites retained facts', 'oversized response
       expect(failed.turn?.phase).toBe('failed');
       expect(failed.turn?.error).toContain('ChatGPT is temporarily unavailable');
       expect(f.draft(id).adjudication).toBeUndefined();
+      expect(f.draft(id).partialAdjudication.actions[0].status).toBe('success');
       expect(f.narrate).toHaveBeenCalledTimes(narrationCalls);
       expect(fetcher).toHaveBeenCalledTimes(2);
       return;
     }
-    if (repair === 'malformed') {
+    if (repair !== 'repaired') {
       expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('failed');
-      expect(f.draft(id).adjudication.actions[0].status).toBe('success');
-      f.provider.narrate = narrate;
+      expect(f.draft(id).adjudication).toBeUndefined();
+      expect(f.draft(id).partialAdjudication.actions[0].status).toBe('success');
+      expect(f.narrate).toHaveBeenCalledTimes(narrationCalls);
       f.game.retry(f.c.id, f.host.id);
       await f.game.idle();
     }
@@ -2606,20 +2612,15 @@ it.each(['repaired', 'malformed', 'rewrites retained facts', 'oversized response
     expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
     const done = snapshot.history.at(-1)!;
     expect(done.id).toBe(id);
-    expect(done.resolution!.actions.map((action) => action.status)).toEqual([
-      'success',
-      repair === 'repaired' ? 'success' : 'blocked',
-    ]);
+    expect(done.resolution!.actions.map((action) => action.status)).toEqual(['success', 'success']);
     expect(done.result!.narration).toContain('unlocks the recessed closure');
-    expect(done.result!.narration.includes('bronze sun disk')).toBe(repair === 'repaired');
+    expect(done.result!.narration).toContain('bronze sun disk');
     expect(done.result!.narration).not.toContain('different action');
     expect(f.draft(id).adjudicationFallback).toBeUndefined();
     expect(f.narrate).toHaveBeenCalledTimes(narrationCalls + 1);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(repair === 'repaired' ? 2 : 3);
     expect(f.draw).not.toHaveBeenCalled();
-    expect(snapshot.members.map((member) => member.state.xp)).toEqual(
-      repair === 'repaired' ? [10, 10] : [0, 0],
-    );
+    expect(snapshot.members.map((member) => member.state.xp)).toEqual([10, 10]);
   },
 );
 
@@ -2894,6 +2895,169 @@ it.each(['revived non-roster', 'injured inactive'] as const)(
     ).not.toContain('Downed');
   },
 );
+
+it.each(['multiple', 'area'] as const)(
+  'persists %s combat damage and one charge across a narration retry',
+  async (targeting) => {
+    const f = fixture();
+    await f.start();
+    const [actor, ally] = f.game.members(f.c.id);
+    actor.state.level = 2;
+    const ability = Object.assign(actor.character.abilities[0], {
+      name: 'Crossbow volley',
+      targeting,
+      dice: '1d4' as const,
+    });
+    f.db
+      .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+      .run(JSON.stringify(actor.character), JSON.stringify(actor.state), actor.id);
+    const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+    const enemies = Array.from({ length: 5 }, (_, i) => ({
+      ...enemySchema.parse({
+        id: `foe-${i}`,
+        name: `Foe ${i}`,
+        tier: 'normal',
+        hp: 50,
+        defense: 10,
+        attack: 0,
+        damage: '1d4',
+        description: 'A saved opponent.',
+        tactic: 'Attack',
+      }),
+      maxHp: 50,
+      initiative: 1,
+      withdrawn: i === 4,
+    }));
+    scene.encounter = {
+      enemies,
+      initiative: [
+        { id: actor.id, total: 20 },
+        { id: ally.id, total: 15 },
+        ...enemies.map((enemy) => ({ id: enemy.id, total: 1 })),
+      ],
+      round: 1,
+      victory: false,
+      escaped: false,
+    };
+    f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
+    f.provider.planCombat = async (context) => normalizeCombatInput(context);
+    f.provider.adjudicate = async (context) => ({
+      ...proposal(context),
+      rewards: { xp: 0, currency: 0, reason: 'Combat rewards come from the engine.' },
+    });
+    const narrate = f.provider.narrate!;
+    f.provider.narrate = async () => interruptNarration(f.db, 'Narration interrupted.');
+    f.draw.mockImplementation((sides) => (sides === 20 ? 15 : 2));
+    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Use Crossbow volley', false);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.error).toContain('narration:');
+    const saved = f.draft(turn.id);
+    expect(saved.scene.encounter.enemies.map((enemy: Enemy) => enemy.hp)).toEqual([
+      48,
+      48,
+      48,
+      targeting === 'area' ? 48 : 50,
+      50,
+    ]);
+    expect(saved.members[0].state.abilityUses[ability.name]).toBe(1);
+    const draws = f.draw.mock.calls.length;
+    f.provider.narrate = narrate;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('collecting');
+    const done = f.game.snapshot(f.c.id, f.host.id).history.at(-1)!;
+    expect(done.id).toBe(turn.id);
+    expect(
+      done.resolution!.events.filter((event) => event.memberId === actor.id && /hits Foe/.test(event.fact)),
+    ).toHaveLength(targeting === 'area' ? 4 : 3);
+    expect(f.game.members(f.c.id)[0].state.abilityUses?.[ability.name]).toBe(1);
+    expect(f.draw).toHaveBeenCalledTimes(draws);
+  },
+);
+
+it('saves every group-healing recipient, excludes distant allies and resumes narration without repeating healing', async () => {
+  const databasePath = temporaryDatabasePath();
+  const f = fixture({}, databasePath);
+  const distantPlayer = f.game.identify();
+  const distantSheet = f.game.saveCharacter(distantPlayer.id, templateCharacter('Distant ally'));
+  f.game.join(f.c.inviteCode!, distantPlayer.id, distantSheet.id);
+  const distant = f.game.members(f.c.id).find((member) => member.playerId === distantPlayer.id)!;
+  f.game.manageCharacter(f.c.id, distantPlayer.id, {
+    type: 'starter',
+    itemIds: distant.state.starterEquipment.slice(0, 2).map((item) => item.id),
+  });
+  await f.start();
+  const [actor, target] = f.game.members(f.c.id);
+  const ability = {
+    ...actor.character.abilities[0],
+    name: 'Restoring pulse',
+    effect: 'restoration' as const,
+    targeting: 'party' as const,
+    stat: 'INT' as const,
+  };
+  actor.character.abilities.push(ability);
+  actor.state.level = 2;
+  actor.state.hp -= 4;
+  target.state.hp = 0;
+  target.state.conditions.push('Downed');
+  applyCondition(target.state, 'Burning');
+  distant.state.hp = 10;
+  for (const member of [actor, target, distant])
+    f.db
+      .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+      .run(JSON.stringify(member.character), JSON.stringify(member.state), member.id);
+  f.game.setActive(f.c.id, f.host.id, distant.id, false);
+  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+  const remoteId = randomUUID();
+  scene.places![remoteId] = {
+    location: { ...scene.location, id: remoteId, name: 'Remote room' },
+    encounter: null,
+    loot: [],
+    encounterRisk: { danger: 'safe', reason: 'Empty room.' },
+  };
+  scene.memberLocations![distant.id] = remoteId;
+  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
+  const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+  f.db.prepare('UPDATE turns SET roster = ? WHERE id = ?').run(JSON.stringify([actor.id]), turn.id);
+  f.draw.mockReturnValue(4);
+  f.provider.adjudicate = vi.fn(async (context, tools) => {
+    const input = { memberId: actor.id, itemId: null, abilityName: ability.name, targetId: null };
+    const receipt = tools.useResource!(input);
+    expect(receipt.targets).toMatchObject([
+      { targetId: actor.id, restored: 4, cured: [] },
+      { targetId: target.id, restored: 4, cured: ['Burning'] },
+    ]);
+    expect(tools.useResource!(input)).toEqual(receipt);
+    return proposal(context);
+  });
+  const narrate = f.provider.narrate!;
+  f.provider.narrate = vi.fn(async () => interruptNarration(f.db, 'Narration interrupted.'));
+  f.game.submit(f.c.id, f.p1.id, turn.id, 'Use Restoring pulse to heal our group', false);
+  await f.game.idle();
+  const saved = f.draft(turn.id);
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.error).toContain('narration:');
+  const healing = saved.resolution.events.find((event: { id: string }) => event.id.startsWith('resource:'));
+  expect(healing.fact).toContain('Amon-Sah recovers 4 HP');
+  expect(healing.fact).toContain('Zafir al-Raml recovers 4 HP');
+  expect(healing.fact).not.toContain('Distant ally');
+  const draws = f.draw.mock.calls.length;
+  f.provider.narrate = narrate;
+  f.db.close();
+  const reopened = openDatabase(databasePath);
+  cleanup.push(() => reopened.close());
+  const restarted = new Game(reopened, f.factory, f.draw);
+  restarted.retry(f.c.id, f.host.id);
+  await restarted.idle();
+  const done = restarted.snapshot(f.c.id, f.host.id).history.at(-1)!;
+  expect(done.id).toBe(turn.id);
+  expect(done.result!.narration).toContain('Zafir al-Raml recovers 4 HP');
+  expect(restarted.members(f.c.id).map((member) => member.state.hp)).toEqual([20, 4, 10]);
+  expect(restarted.members(f.c.id)[0].state.abilityUses?.[ability.name]).toBe(1);
+  expect(f.provider.adjudicate).toHaveBeenCalledTimes(1);
+  expect(f.draw).toHaveBeenCalledTimes(draws);
+});
 
 it.each(['failure', 'blocked'] as const)(
   'keeps a %s main action separate from a successful minor potion',

@@ -1,6 +1,7 @@
 import { Compass, LocateFixed, Maximize2, Minimize2, Minus, Plus, Scan } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { Member, Scene, WorldMap as SavedMap } from '../shared/schema';
+import { locationHazard } from '../shared/locations';
 import { worldMapPositions, type MapPoint } from '../shared/world-map-layout';
 import { CharacterPortrait } from './CharacterSheet';
 
@@ -224,6 +225,10 @@ function MapView({
       (member) => member.active && (scene.memberLocations?.[member.id] ?? scene.location.id) === id,
     );
   const selectedNode = map.nodes[selected];
+  const selectedLocation =
+    selected === scene.location.id ? scene.location : scene.places?.[selected]?.location;
+  const selectedHazard = locationHazard(selectedLocation?.hazard);
+  const selectedRoutes = connections.filter((route) => route.from === selected || route.to === selected);
   const labels = new Map<string, MapPoint>();
   if (overview) {
     const placed: MapPoint[] = [];
@@ -588,14 +593,34 @@ function MapView({
       </div>
       {selectedNode && (
         <div
+          key={selected}
           className="world-map-selection"
+          role="region"
           aria-label={dutch ? 'Geselecteerde locatie' : 'Selected location'}
+          tabIndex={0}
         >
           <b>{selectedNode.name}</b>
           <span>
             {selectedNode.visited ? (dutch ? 'Bezocht' : 'Visited') : dutch ? 'Niet bezocht' : 'Unvisited'}
             {selected === scene.location.id && (dutch ? ' · Huidige scène' : ' · Current scene')}
           </span>
+          <div className="world-map-description">
+            <p>
+              {selectedLocation?.atmosphere?.trim() ||
+                (selectedNode.visited
+                  ? dutch
+                    ? 'Er is nog geen beschrijving van deze locatie vastgelegd.'
+                    : 'No description has been recorded for this location yet.'
+                  : dutch
+                    ? 'Deze locatie is nog niet verkend.'
+                    : 'This location has not been explored yet.')}
+            </p>
+            {selectedHazard && (
+              <p>
+                <b>{dutch ? 'Bekend gevaar' : 'Known hazard'}:</b> {selectedHazard}
+              </p>
+            )}
+          </div>
           {occupants(selected).length > 0 && (
             <p>
               {occupants(selected)
@@ -603,13 +628,16 @@ function MapView({
                 .join(' · ')}
             </p>
           )}
-          <ul>
-            {connections
-              .filter((route) => route.from === selected || route.to === selected)
-              .map((route) => (
-                <li key={routeKey(route.from, route.to)}>{routeText(route)}</li>
-              ))}
-          </ul>
+          {selectedRoutes.length > 0 && (
+            <>
+              <h4>{dutch ? 'Verbindingen' : 'Routes'}</h4>
+              <ul>
+                {selectedRoutes.map((route) => (
+                  <li key={routeKey(route.from, route.to)}>{routeText(route)}</li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
       <details className="world-map-connections">

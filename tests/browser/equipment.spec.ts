@@ -44,6 +44,8 @@ test('shared-screen item inspection exposes types and mechanics without changing
     characterId: saved.id,
   });
   const before = structuredClone(snapshot.members[0].state);
+  snapshot.scene.currencyName = 'ash crowns';
+  snapshot.members[0].state.currency = 42;
   snapshot.members[0].state.conditions = ['Weakened', 'Stunned', 'Burning', 'Custom curse'];
   // Include a stowed weapon to verify that backpack items can also be inspected.
   snapshot.members[0].state.inventory.push({
@@ -75,6 +77,7 @@ test('shared-screen item inspection exposes types and mechanics without changing
   await page.route(`**/api/campaigns/${campaign.id}`, (route) => route.fulfill({ json: snapshot }));
   await page.goto(`/screen/${campaign.id}#${campaign.displayToken}`);
   const card = page.locator('.member-card');
+  await expect(card.locator('.hud-line')).toContainText('42 ash crowns');
   const weakened = card.locator('.conditions span').filter({ hasText: 'Weakened' });
   await weakened.hover();
   await expect(weakened).toHaveText('Weakened · 2 turns');
@@ -449,7 +452,8 @@ test('Legendary gear exposes equipped abilities with the correct combat scope an
   await expect(bootAbility).toContainText('Utility');
   await expect(bootAbility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
   await expect(focusAbility).toContainText('Combat');
-  await expect(focusAbility).toContainText('Noncombat obstacle');
+  await expect(focusAbility).toContainText('Roll to hit');
+  await expect(focusAbility).not.toContainText('Noncombat obstacle');
   await expect(focusAbility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
   await focusAbility.getByRole('button', { name: 'Use ability' }).click();
   await expect(focusAbility.getByRole('button', { name: 'Selected for your action' })).toHaveAttribute(
@@ -460,12 +464,12 @@ test('Legendary gear exposes equipped abilities with the correct combat scope an
     const healing = page
       .locator('.character-controls .ability-card')
       .filter({ hasText: `${kind} field mend` });
-    await expect(healing).toContainText('In or out of combat');
+    await expect(healing).toContainText('In / out of combat');
     await expect(healing.getByRole('button', { name: 'Use ability' })).toBeEnabled();
   }
   member.state.abilityUses = { 'equipment:legendary-boots': 1 };
   await page.reload();
-  await expect(bootAbility).toContainText('0/1 uses remaining');
+  await expect(bootAbility).toContainText('0/1 available');
   await expect(bootAbility.getByRole('button', { name: 'Use ability' })).toBeDisabled();
   member.state.equipment.boots = null;
   member.state.inventory.push({ ...boots, quantity: 1 });
@@ -474,7 +478,7 @@ test('Legendary gear exposes equipped abilities with the correct combat scope an
   await expect(bootAbility).toHaveCount(0);
   await expect(focusAbility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
   const utility = page.locator('.character-controls .ability-card').filter({ hasText: 'Keen observation' });
-  await expect(utility).toContainText('Advantage and +2');
+  await expect(utility).toContainText('Advantage +4');
   await expect(utility.getByRole('button', { name: 'Use ability' })).toBeEnabled();
   for (const kind of ['combat', 'utility']) {
     const healing = page

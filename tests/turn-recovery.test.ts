@@ -42,7 +42,7 @@ async function fixture() {
   const adjudicate = vi.fn(async (context: GMContext, tools: GameTools) => {
     const result = await practice.adjudicate(context, tools);
     if (context.turn.number) {
-      result.rewards = { xp: 10, gold: 0, reason: 'A new sanctuary clue is established.' };
+      result.rewards = { xp: 10, currency: 0, reason: 'A new sanctuary clue is established.' };
       result.events.push({
         id: 'world:clue',
         sequence: result.events.length,
@@ -495,7 +495,7 @@ it('retains an accepted routine success when finalization later incapacitates th
       ],
       journal: [],
       location: null,
-      rewards: { xp: 0, gold: 0, reason: 'No discovery.' },
+      rewards: { xp: 0, currency: 0, reason: 'No discovery.' },
     };
   });
   pauseNarration(f);

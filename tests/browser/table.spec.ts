@@ -149,7 +149,7 @@ test('a shared screen follows two players and advances only after both submit', 
     .locator('.character-controls .ability-card')
     .filter({ hasText: 'Keen observation' });
   await first.page.getByRole('button', { name: 'Open abilities', exact: true }).click();
-  await expect(observation.locator('.ability-mechanics')).toContainText('Advantage');
+  await expect(observation.locator('.ability-effect')).toContainText('Advantage');
   await observation.getByRole('button', { name: 'Use ability', exact: true }).click();
   await expect(first.page.locator('.selected-ability')).toContainText('Keen observation');
   await first.page.getByLabel('Your action').fill('Mira examines the brass key.');
@@ -184,7 +184,7 @@ test('a shared screen follows two players and advances only after both submit', 
   await expect(first.page.getByText('1 encounters completed', { exact: true })).toBeVisible();
   await first.page.getByRole('button', { name: 'Collapse action input', exact: true }).click();
   await first.page.getByRole('button', { name: 'Open abilities', exact: true }).click();
-  await expect(observation.locator('.ability-uses')).toContainText('1/1 uses remaining');
+  await expect(observation.locator('.ability-uses')).toContainText('1/1 available');
   await expect(observation.getByRole('button', { name: 'Use ability', exact: true })).toBeEnabled();
   await first.page.reload();
   await expect(
@@ -192,7 +192,7 @@ test('a shared screen follows two players and advances only after both submit', 
       .locator('.character-controls .ability-card')
       .filter({ hasText: 'Keen observation' })
       .locator('.ability-uses'),
-  ).toContainText('1/1 uses remaining');
+  ).toContainText('1/1 available');
   await expect(display.getByRole('button', { name: 'Submit action' })).toHaveCount(0);
   await display.screenshot({ path: 'test-results/shared-screen.png', fullPage: true });
   await first.page.setViewportSize({ width: 390, height: 844 });

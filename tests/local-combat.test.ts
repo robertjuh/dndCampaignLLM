@@ -337,7 +337,7 @@ it('keeps victory loot and recovery local while an absent investigator ticks ail
       changes: [],
       journal: [],
       xp: 10,
-      gold: 2,
+      currency: 2,
     });
   };
   const id = await f.submit(['Attack ravine-raider.', '', 'Read the map.']);
@@ -347,7 +347,7 @@ it('keeps victory loot and recovery local while an absent investigator ticks ail
   expect(after[1].state.hp).toBe(caveScout.state.hp);
   expect(after[2].state.hp).toBeLessThan(investigator.state.hp);
   expect(after[2].state.xp).toBe(10);
-  expect(after[2].state.gold).toBe(investigator.state.gold + 2);
+  expect(after[2].state.currency).toBe(investigator.state.currency + 2);
   expect(placeScene(f.snapshot().scene, ravine).loot.map((item) => item.id)).toContain('raider-knife');
   expect(f.snapshot().scene.loot).toEqual([]);
   const saved = JSON.parse(

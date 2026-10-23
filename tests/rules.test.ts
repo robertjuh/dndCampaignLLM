@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   blankTrait,
   characterSchema,
+  abilitySchema,
   combatSchema,
   enemySchema,
   templateCharacter,
@@ -46,10 +47,14 @@ import {
   equipmentBonus,
   resetAbilities,
   abilityMechanics,
+  abilityPowerSummary,
+  availableAbilities,
   RuleError,
   applyCondition,
   tickConditions,
   matchingCures,
+  mendWithAbilityTargets,
+  availableAbility,
 } from '../shared/rules';
 import { localDice } from '../server/random';
 import { conditionDuration } from '../shared/ailments';
@@ -192,6 +197,207 @@ function input(m: Member, overrides = {}) {
   });
 }
 
+it.each(['multiple', 'area'] as const)(
+  'resolves %s strikes with independent hits, criticals and ailments for one charge',
+  (targeting) => {
+    const hero = member();
+    hero.state.level = 2;
+    const ability = Object.assign(hero.character.abilities[0], {
+      targeting,
+      dice: '1d4' as const,
+      inflicts: 'Bleeding' as const,
+    });
+    const fight = encounter([hero]);
+    fight.enemies = Array.from({ length: 5 }, (_, i) => ({
+      ...structuredClone(fight.enemies[0]),
+      id: i ? `enemy-${i}` : 'adversary',
+      name: `Enemy ${i}`,
+      withdrawn: i === 4,
+    }));
+    fight.initiative = [{ id: hero.id, total: 15 }];
+    const hits = [15, 2, 20, 15];
+    const roll = vi.fn((sides: number) => (sides === 20 ? hits.shift()! : 2));
+    const logs = runCombat(
+      [hero],
+      fight,
+      input(hero, {
+        main: 'ability',
+        abilityName: ability.name,
+        ...(targeting === 'multiple' ? { targetIds: ['adversary', 'enemy-1', 'enemy-2'] } : {}),
+      }),
+      roll,
+    );
+    // A successful hit also applies this turn's one-point Bleeding tick.
+    expect(fight.enemies.map((enemy) => enemy.hp)).toEqual([27, 30, 25, targeting === 'area' ? 27 : 30, 30]);
+    expect(fight.enemies.map((enemy) => enemy.conditions?.includes('Bleeding') ?? false)).toEqual([
+      true,
+      false,
+      true,
+      targeting === 'area',
+      false,
+    ]);
+    expect(logs.filter((log) => log.includes('its encounter use is spent'))).toHaveLength(1);
+    expect(hero.state.abilityUses?.[ability.name]).toBe(1);
+    expect(hero.state.hp).toBe(hero.state.maxHp);
+    expect(abilityMechanics(ability)).toContain(
+      targeting === 'multiple' ? 'Up to 3 enemies' : 'All enemies here',
+    );
+    expect(abilityPowerSummary(ability, hero.state.stats)).toContain('per target');
+  },
+);
+
+it('selects at most three enemies by default and redirects fallen multi-targets without hitting anyone twice', () => {
+  const hero = member();
+  hero.state.level = 2;
+  const ability = Object.assign(hero.character.abilities[0], {
+    targeting: 'multiple' as const,
+    dice: '1d4' as const,
+  });
+  const fight = encounter([hero]);
+  fight.enemies = Array.from({ length: 4 }, (_, i) => ({
+    ...structuredClone(fight.enemies[0]),
+    id: i ? `enemy-${i}` : 'adversary',
+    name: `Enemy ${i}`,
+  }));
+  fight.initiative = [{ id: hero.id, total: 15 }];
+  const roll = (sides: number) => (sides === 20 ? 15 : 2);
+  const plan = input(hero, { main: 'ability', abilityName: ability.name, targetId: null });
+  runCombat([hero], fight, plan, roll);
+  expect(fight.enemies.map((enemy) => enemy.hp)).toEqual([28, 28, 28, 30]);
+
+  hero.state.abilityUses = {};
+  fight.initiative.unshift({ id: 'killer', total: 20 });
+  const killer = member('Earlier attacker');
+  fight.initiative[0].id = killer.id;
+  fight.enemies[0].hp = 1;
+  plan.actions[0].targetIds = ['adversary', 'enemy-1', 'enemy-2'];
+  plan.actions.unshift(input(killer).actions[0]);
+  const logs = runCombat([hero, killer], fight, plan, roll);
+  expect(fight.enemies.map((enemy) => enemy.hp)).toEqual([0, 26, 26, 28]);
+  expect(logs.some((log) => log.includes('redirects') && log.includes('Enemy 3'))).toBe(true);
+});
+
+it('preserves advanced strike charges when no enemies remain and stops a volley if backlash downs its caster', () => {
+  const hero = member();
+  hero.state.level = 2;
+  hero.state.hp = 1;
+  const ability = Object.assign(hero.character.abilities[0], { targeting: 'area' as const });
+  const fight = encounter([hero]);
+  fight.enemies.push({ ...fight.enemies[0], id: 'other', name: 'Other' });
+  fight.initiative = [{ id: hero.id, total: 15 }];
+  const roll = vi.fn(() => 1);
+  const plan = input(hero, { main: 'ability', abilityName: ability.name });
+  runCombat([hero], fight, plan, roll);
+  expect(isDowned(hero.state)).toBe(true);
+  expect(roll).toHaveBeenCalledTimes(2);
+  expect(fight.enemies.map((enemy) => enemy.hp)).toEqual([30, 30]);
+  expect(hero.state.abilityUses?.[ability.name]).toBe(1);
+
+  const fresh = member();
+  fresh.state.level = 2;
+  fresh.character.abilities[0].targeting = 'area';
+  const empty = encounter([fresh]);
+  empty.enemies[0].withdrawn = true;
+  const logs = runCombat(
+    [fresh],
+    empty,
+    input(fresh, { main: 'ability', abilityName: fresh.character.abilities[0].name }),
+    roll,
+  );
+  expect(logs.join(' ')).toContain('the use is preserved');
+  expect(roll).toHaveBeenCalledTimes(2);
+});
+
+it('rejects injected multi-target lists for ordinary attacks, duplicate targets and unknown enemies before rolling', () => {
+  const hero = member();
+  const fight = encounter([hero]);
+  const roll = vi.fn(() => 15);
+  expect(() => runCombat([hero], fight, input(hero, { targetIds: ['adversary'] }), roll)).toThrow(
+    'saved multi-target',
+  );
+  hero.state.level = 2;
+  hero.character.abilities[0].targeting = 'multiple';
+  expect(() =>
+    input(hero, {
+      main: 'ability',
+      abilityName: hero.character.abilities[0].name,
+      targetIds: ['adversary', 'adversary'],
+    }),
+  ).toThrow('distinct');
+  expect(() =>
+    runCombat(
+      [hero],
+      fight,
+      input(hero, { main: 'ability', abilityName: hero.character.abilities[0].name, targetIds: ['missing'] }),
+      roll,
+    ),
+  ).toThrow('unknown enemy');
+  expect(roll).not.toHaveBeenCalled();
+});
+
+it.each(['mend', 'restoration'] as const)(
+  'group %s heals and cures each living local combat ally for one charge',
+  (effect) => {
+    const party = ['Healer', 'Injured', 'Downed', 'Dead', 'Escaped'].map((name) => member(name));
+    const [hero, ally, downed, dead, escaped] = party;
+    hero.state.level = 2;
+    const ability = Object.assign(hero.character.abilities[0], {
+      effect,
+      targeting: 'party' as const,
+      dice: '1d4' as const,
+      cures: ['Burning' as const],
+    });
+    hero.state.hp = ally.state.hp = escaped.state.hp = 10;
+    damage(downed.state, downed.state.hp, 'Downed');
+    dead.state.hp = 0;
+    applyCondition(escaped.state, 'Escaped');
+    for (const target of [hero, ally, downed]) applyCondition(target.state, 'Burning');
+    const fight = encounter(party);
+    fight.initiative = [{ id: hero.id, total: 15 }];
+    runCombat(
+      party,
+      fight,
+      input(hero, { main: 'ability', abilityName: ability.name, targetId: null }),
+      () => 2,
+    );
+    const amount = effect === 'mend' ? 4 : 2;
+    expect(party.map((target) => target.state.hp)).toEqual([10 + amount, 10 + amount, amount, 0, 10]);
+    expect([hero, ally, downed].every((target) => !target.state.conditions.includes('Burning'))).toBe(true);
+    expect(downed.state.conditions).not.toContain('Downed');
+    expect(hero.state.abilityUses?.[ability.name]).toBe(1);
+  },
+);
+
+it('preserves a group heal when nobody needs it and permits full-health Restoration cures', () => {
+  const hero = member();
+  hero.state.level = 2;
+  const ability = Object.assign(hero.character.abilities[0], {
+    effect: 'restoration' as const,
+    targeting: 'party' as const,
+  });
+  const roll = vi.fn(() => 2);
+  expect(() => mendWithAbilityTargets(hero.character, hero.state, ability.name, [hero], roll)).toThrow(
+    'No nearby',
+  );
+  expect(roll).not.toHaveBeenCalled();
+  expect(hero.state.abilityUses).toEqual({});
+  applyCondition(hero.state, 'Weakened');
+  expect(mendWithAbilityTargets(hero.character, hero.state, ability.name, [hero], roll)).toMatchObject([
+    { restored: 0, cured: ['Weakened'] },
+  ]);
+  expect(hero.state.abilityUses?.[ability.name]).toBe(1);
+});
+
+it('enforces the character-level unlock even for a forged high-level ability', () => {
+  const hero = member();
+  const ability = Object.assign(hero.character.abilities[0], { level: 5, targeting: 'area' as const });
+  expect(() => availableAbility(hero.character, hero.state, ability.name)).toThrow('character level 2');
+  hero.state.level = 2;
+  expect(availableAbility(hero.character, hero.state, ability.name).targeting).toBe('area');
+  for (const effect of ['guard', 'rally', 'cleanse', 'assist', 'barrier'] as const)
+    expect(abilitySchema.safeParse({ ...ability, effect, targeting: 'party' }).success).toBe(false);
+});
+
 it.each([false, true])(
   'uses saved strike dice and bonus, doubling only dice on a critical (%s)',
   (critical) => {
@@ -206,7 +412,7 @@ it.each([false, true])(
     runCombat([hero], e, input(hero, { main: 'ability', abilityName: ability.name }), roll);
     expect(e.enemies[0].hp).toBe(100 - ((critical ? 4 : 2) * 8 + 4));
     expect(roll.mock.calls.filter(([sides]) => sides === 8)).toHaveLength(critical ? 4 : 2);
-    expect(abilityMechanics(ability)).toContain('2d8 + STR modifier + 4 damage');
+    expect(abilityMechanics(ability)).toContain('2d8 + STR + 4 damage');
   },
 );
 
@@ -217,13 +423,13 @@ it('uses saved Mend dice and compensation when helping up a Downed ally', () => 
   Object.assign(ability, { effect: 'mend', dice: '1d8', bonus: 2, level: 2 });
   damage(ally.state, ally.state.hp, 'First injury');
   const roll = vi.fn((sides: number) => sides);
-  expect(mendWithAbility(hero.character, hero.state, ability.name, ally, roll)).toBe(12);
+  expect(mendWithAbility(hero.character, hero.state, ability.name, ally, roll)).toBe(14);
   expect(roll.mock.calls).toEqual([[8, `${ability.name}: healing`, hero.character.name, ability.stat]]);
   expect(isDowned(ally.state)).toBe(false);
   expect(hero.state.abilityUses?.[ability.name]).toBe(1);
 });
 
-it.each(['guard', 'assist'] as const)('applies a saved %s bonus to an ally', (effect) => {
+it.each(['guard', 'rally', 'assist'] as const)('applies a saved %s bonus to an ally', (effect) => {
   const hero = member();
   const ally = member('Ally');
   const ability = hero.character.abilities[0];
@@ -237,7 +443,7 @@ it.each(['guard', 'assist'] as const)('applies a saved %s bonus to an ally', (ef
     () => 1,
   );
   expect(effect === 'guard' ? ally.state.abilityGuard : ally.state.abilityAssist).toBe(
-    effect === 'guard' ? 6 : 3,
+    effect === 'guard' ? 6 : 5,
   );
 });
 
@@ -1086,7 +1292,7 @@ it('heals any living ally and preserves mend uses for unavailable or full-health
     targetId: ally.id,
   });
   runCombat([caster, ally], e, action, () => 4);
-  expect(ally.state.hp).toBe(17); // d6=4, modifier=1, upgrade=2.
+  expect(ally.state.hp).toBe(19); // d6=4, modifier=1, Mend=2, upgrade=2.
   resetAbilities(caster.character, caster.state, 'combat');
   ally.state.hp = 0;
   expect(runCombat([caster, ally], e, action, () => 4).some((log) => log.includes('living ally'))).toBe(true);
@@ -1095,7 +1301,7 @@ it('heals any living ally and preserves mend uses for unavailable or full-health
   expect(caster.state.abilityUses?.[caster.character.abilities[0].name]).toBeUndefined();
 });
 
-it('guards an ally against exactly one enemy attack and assists their next attack', () => {
+it('preserves Guard across misses until a hit and rallies the party for independent next attacks', () => {
   const caster = member('Protector');
   const ally = member('Fighter');
   caster.character.abilities[0] = { ...caster.character.abilities[0], effect: 'guard', level: 2 };
@@ -1108,9 +1314,13 @@ it('guards an ally against exactly one enemy attack and assists their next attac
   action.enemyTargets = [{ enemyId: 'adversary', memberId: ally.id }];
   runCombat([caster, ally], e, action, (sides) => (sides === 20 ? 13 : 3));
   expect(ally.state.hp).toBe(20); // Defense 10+4 stops the enemy's 13.
-  expect(ally.state.abilityGuard).toBeUndefined();
+  expect(ally.state.abilityGuard).toBe(4);
   runCombat([caster, ally], e, { ...action, actions: [] }, (sides) => (sides === 20 ? 13 : 3));
+  expect(ally.state.hp).toBe(20);
+  expect(ally.state.abilityGuard).toBe(4);
+  runCombat([caster, ally], e, { ...action, actions: [] }, (sides) => (sides === 20 ? 15 : 3));
   expect(ally.state.hp).toBe(17);
+  expect(ally.state.abilityGuard).toBeUndefined();
   resetAbilities(caster.character, caster.state, 'combat');
   caster.character.abilities[0].effect = 'assist';
   e.initiative = e.initiative.filter((entry) => entry.id !== 'adversary');
@@ -1120,6 +1330,7 @@ it('guards an ally against exactly one enemy attack and assists their next attac
   expect(e.enemies[0].hp).toBe(24);
   expect(ally.state.hp).toBe(17); // Advantage avoids the natural-one backlash.
   expect(ally.state.abilityAssist).toBeUndefined();
+  expect(caster.state.abilityAssist).toBe(3);
   expect(dice).toEqual([]);
 });
 
@@ -1141,6 +1352,157 @@ it('applies focus and assistance to creative attack rolls without increasing the
   expect(hero.state.hp).toBe(20);
   expect(hero.state.abilityAssist).toBeUndefined();
   expect(dice).toEqual([]);
+});
+
+it('migrates combat Assist to Rally while preserving utility Assist and saved charges', () => {
+  const hero = member();
+  const legacy = { ...hero.character.abilities[0], effect: 'assist' as const };
+  expect(abilitySchema.parse(legacy).effect).toBe('rally');
+  expect(abilitySchema.parse({ ...legacy, kind: 'utility' }).effect).toBe('assist');
+  hero.character.abilities[0] = legacy;
+  hero.state.abilityUses = { [legacy.name]: 1 };
+  expect(availableAbilities(hero.character, hero.state)[0]).toMatchObject({
+    name: legacy.name,
+    effect: 'rally',
+  });
+  expect(hero.state.abilityUses[legacy.name]).toBe(1);
+});
+
+it.each(['combat', 'utility'] as const)(
+  'uses %s Restoration to heal, revive and clear every active ailment',
+  (kind) => {
+    const caster = member('Restorer');
+    const ally = member('Afflicted ally');
+    const ability = {
+      ...caster.character.abilities[0],
+      effect: 'restoration' as const,
+      kind,
+      dice: '1d6' as const,
+      stat: 'WIS' as const,
+    };
+    caster.character.abilities = [ability];
+    damage(ally.state, ally.state.hp, 'First injury');
+    for (const ailment of ['Burning', 'Poisoned', 'Frozen', 'Weakened']) applyCondition(ally.state, ailment);
+    const fight = encounter([caster, ally]);
+    fight.initiative = fight.initiative.filter((entry) => entry.id === caster.id);
+    runCombat(
+      [caster, ally],
+      fight,
+      input(caster, { main: 'ability', abilityName: ability.name, targetId: ally.id }),
+      () => 4,
+    );
+    expect(ally.state.hp).toBe(4);
+    expect(ally.state.conditions).toEqual([]);
+    expect(ally.state.conditionTurns).toEqual({});
+    expect(caster.state.abilityUses?.[ability.name]).toBe(1);
+    resetAbilities(caster.character, caster.state, kind);
+    ally.state.hp = ally.state.maxHp;
+    applyCondition(ally.state, 'Stunned');
+    expect(mendWithAbility(caster.character, caster.state, ability.name, ally, () => 4)).toBe(0);
+    expect(ally.state.conditions).toEqual([]);
+    resetAbilities(caster.character, caster.state, kind);
+    damage(ally.state, ally.state.hp, 'Second injury is permanent');
+    expect(isDead(ally.state)).toBe(true);
+    expect(() => mendWithAbility(caster.character, caster.state, ability.name, ally, () => 4)).toThrow(
+      'dead',
+    );
+  },
+);
+
+it('depletes Barrier across hits after shields, preserves ailments, and expires at the caster’s next turn', () => {
+  const caster = member('Barrier caster');
+  const ally = member('Protected ally');
+  const ability = { ...caster.character.abilities[0], effect: 'barrier' as const, dice: '1d6' as const };
+  caster.character.abilities = [ability];
+  ally.state.equipment.left = baseItem('shield', 'Buckler', 'shield');
+  const fight = encounter([caster, ally], { attack: 2, damage: '1d6', onHit: 'Poisoned' });
+  const enemy = fight.enemies[0];
+  const second = { ...structuredClone(enemy), id: 'second' };
+  fight.enemies.push(second);
+  fight.initiative.push({ id: second.id, total: 0 });
+  const plan = input(caster, { main: 'ability', abilityName: ability.name, targetId: ally.id });
+  plan.enemyTargets = fight.enemies.map((enemy) => ({ enemyId: enemy.id, memberId: ally.id }));
+  const logs = runCombat([caster, ally], fight, plan, (sides) => (sides === 20 ? 15 : sides === 6 ? 4 : 2));
+  // Barrier=4+3=7; each hit=4+2, shield=2, so the two attacks exhaust 7 and deal 1 HP.
+  expect(logs.filter((line) => line.includes('barrier absorbs'))).toHaveLength(2);
+  expect(ally.state.hp).toBe(ally.state.maxHp - 2); // One hit damage and one Poisoned tick.
+  expect(ally.state.conditions).toContain('Poisoned');
+  expect(ally.state.abilityBarrier).toBeUndefined();
+  expect(caster.state.abilityUses?.[ability.name]).toBe(1);
+  ally.state.abilityBarrier = { amount: 7, sourceId: caster.id };
+  runCombat([caster, ally], fight, { ...plan, actions: [] }, (sides) => (sides === 20 ? 2 : 1));
+  expect(ally.state.abilityBarrier).toBeUndefined();
+});
+
+it('rallies only living allies in the same combat and never stacks attack bonuses', () => {
+  const caster = member('Rallier');
+  const ally = member('Ally');
+  const escaped = member('Escaped');
+  const downed = member('Downed');
+  applyCondition(escaped.state, 'Escaped');
+  damage(downed.state, downed.state.hp, 'Injury');
+  caster.character.abilities[0].effect = 'rally';
+  ally.state.abilityAssist = 6;
+  const party = [caster, ally, escaped, downed];
+  const fight = encounter(party);
+  fight.initiative = fight.initiative.filter((entry) => entry.id === caster.id);
+  runCombat(
+    party,
+    fight,
+    input(caster, { main: 'ability', abilityName: caster.character.abilities[0].name, targetId: ally.id }),
+    () => 4,
+  );
+  expect(caster.state.abilityAssist).toBe(2);
+  expect(ally.state.abilityAssist).toBe(6);
+  expect(escaped.state.abilityAssist).toBeUndefined();
+  expect(downed.state.abilityAssist).toBeUndefined();
+  ally.state.abilityBarrier = { amount: 8, sourceId: caster.id };
+  recoverAfterEncounter(party);
+  expect(ally.state.abilityBarrier).toBeUndefined();
+  expect(ally.state.abilityAssist).toBeUndefined();
+});
+
+it('consumes Guard on a critical hit even when a shield absorbs all damage', () => {
+  const hero = member();
+  hero.state.abilityGuard = 3;
+  hero.state.equipment.left = baseItem('shield', 'Shield', 'shield');
+  const fight = encounter([hero]);
+  const hp = hero.state.hp;
+  runCombat([hero], fight, { ...input(hero), actions: [] }, (sides, label) =>
+    sides === 20 ? 20 : label.includes('shield block') ? 4 : 1,
+  );
+  expect(hero.state.hp).toBe(hp);
+  expect(hero.state.abilityGuard).toBeUndefined();
+});
+
+it('keeps a stronger Barrier’s amount and original caster expiry when a weaker barrier is cast', () => {
+  const caster = member('New caster');
+  const ally = member('Original caster');
+  caster.character.abilities[0].effect = 'barrier';
+  ally.state.abilityBarrier = { amount: 12, sourceId: ally.id };
+  const fight = encounter([caster, ally]);
+  fight.initiative = [{ id: caster.id, total: 15 }];
+  runCombat(
+    [caster, ally],
+    fight,
+    input(caster, { main: 'ability', abilityName: caster.character.abilities[0].name, targetId: ally.id }),
+    () => 2,
+  );
+  expect(ally.state.abilityBarrier).toEqual({ amount: 12, sourceId: ally.id });
+  expect(caster.state.abilityUses?.[caster.character.abilities[0].name]).toBe(1);
+  runCombat([caster, ally], fight, { ...input(caster), actions: [] }, () => 2);
+  expect(ally.state.abilityBarrier?.amount).toBe(12);
+  fight.initiative = [{ id: ally.id, total: 15 }];
+  runCombat([caster, ally], fight, { ...input(caster), actions: [] }, () => 2);
+  expect(ally.state.abilityBarrier).toBeUndefined();
+});
+
+it('shows compact formulas and correct support ranges without obstacle-check boilerplate', () => {
+  const hero = member();
+  const mend = { ...hero.character.abilities[0], effect: 'mend' as const, dice: '1d6' as const };
+  expect(abilityPowerSummary(mend, hero.state.stats)).toBe('3–8 HP');
+  expect(abilityMechanics(hero.character.abilities[0])).not.toMatch(/modifier|Noncombat obstacle|vs defense/);
+  expect(abilityMechanics(hero.character.abilities[1])).toContain('advantage +4');
 });
 
 it('gives every rolled focus and relic a usable bonus and scales loot power with rarity', () => {
@@ -1810,7 +2172,7 @@ it('lets a saved mend ability help up a downed ally and spends the healer’s co
     input(healer, { main: 'ability', abilityName: ability.name, targetId: ally.id }),
     () => 4,
   );
-  expect(ally.state.hp).toBe(4);
+  expect(ally.state.hp).toBe(6);
   expect(isDowned(ally.state)).toBe(false);
   expect(healer.state.abilityUses?.[ability.name]).toBe(1);
   expect(ally.state.abilityUses).toEqual({});
@@ -2125,8 +2487,8 @@ describe('turn-based ailments and cures', () => {
     ability.cures = ['Shocked'];
     target.state.hp = 10;
     applyCondition(target.state, 'Shocked');
-    expect(mendWithAbility(caster.character, caster.state, ability.name, target, () => 4)).toBe(4);
-    expect(target.state.hp).toBe(14);
+    expect(mendWithAbility(caster.character, caster.state, ability.name, target, () => 4)).toBe(6);
+    expect(target.state.hp).toBe(16);
     expect(target.state.conditions).not.toContain('Shocked');
     caster.state.abilityUses = {};
     target.state.hp = target.state.maxHp;
@@ -2215,8 +2577,8 @@ it.each(['normal', 'repair', 'necrotic'])(
     expect(healer.state.inventory).toHaveLength(0);
     expect(
       mendWithAbility(healer.character, healer.state, healer.character.abilities[0].name, ally, () => 4),
-    ).toBe(4);
-    expect(ally.state.hp).toBe(11);
+    ).toBe(6);
+    expect(ally.state.hp).toBe(13);
     expect(healer.state.abilityUses?.[healer.character.abilities[0].name]).toBe(1);
     expect(abilityMechanics(healer.character.abilities[0])).not.toMatch(/normal|repair|necrotic/);
   },

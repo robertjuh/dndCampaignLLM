@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import { combatSchema, lootSchema, type CombatInput, type Member } from '../shared/schema';
-import { isDowned, naturalWeapon } from '../shared/rules';
+import { isDowned, isHealingAbility, naturalWeapon } from '../shared/rules';
 import type { GMContext } from './game';
 import { requestedAbility, requestedConsumable } from './action-resources';
 import { validateEnvironmentalAction } from './environment';
@@ -131,6 +131,7 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       const chosen: Record<string, unknown> = {
         ...suggestion,
         targetId: targetId(suggestion.targetId),
+        targetIds: Array.isArray(suggestion.targetIds) ? suggestion.targetIds.map(targetId) : undefined,
         backupTargetId: targetId(suggestion.backupTargetId),
       };
       const text = submitted.text.toLowerCase();
@@ -242,7 +243,7 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       if (neutral) effect = undefined;
       const support = ability && !utilityCheck && ability.effect !== 'strike';
       const allyTargets = (
-        ability && ['mend', 'cleanse'].includes(ability.effect)
+        ability && isHealingAbility(ability)
           ? healingTargets
           : context.members.filter((ally) => ally.state.hp > 0 && context.turn.roster.includes(ally.id))
       ).map((ally) => ({
@@ -281,7 +282,7 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         ) ??
         (support
           ? targets.find((target) => target.id === member.id)
-          : neutral || main === 'attack'
+          : neutral || main === 'attack' || ability?.targeting === 'multiple' || ability?.targeting === 'area'
             ? undefined
             : enemies[0]);
       const fallbackText =
@@ -295,6 +296,9 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       const backup = fallbackText
         ? (backups.find((enemy) => enemy.id === chosen.backupTargetId) ?? backups[0])
         : undefined;
+      const namedPrimaryTargets = namedTargets.filter(
+        (enemy) => !backups.some((backup) => backup.id === enemy.id),
+      );
       let minor = parse(fields.minor, chosen.minor, 'none');
       const healingItem = requestedConsumable(
         member,
@@ -326,10 +330,23 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
             main === 'attack' ||
             main === 'defend' ||
             main === 'creative' ||
-            (!!ability && ability.kind === 'combat' && !['mend', 'cleanse'].includes(ability.effect)) ||
+            (!!ability && ability.kind === 'combat' && !isHealingAbility(ability)) ||
             minor === 'offhand'),
         abilityName: ability?.name ?? null,
         targetId: target?.id ?? null,
+        ...(ability?.targeting === 'multiple'
+          ? {
+              targetIds: [
+                ...new Set(
+                  namedPrimaryTargets.length
+                    ? namedPrimaryTargets.map((enemy) => enemy.id)
+                    : (parse(fields.targetIds, chosen.targetIds, []) ?? []),
+                ),
+              ]
+                .filter((id) => encounterEnemies.some((enemy) => enemy.id === id))
+                .slice(0, 3),
+            }
+          : {}),
         allowRetarget,
         backupTargetId: !support && !neutral && allowRetarget ? (backup?.id ?? null) : null,
         stat:

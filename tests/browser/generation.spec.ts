@@ -2,6 +2,67 @@ import { test, expect } from '@playwright/test';
 import { baseItem, rollCharacterCreation } from '../../shared/rules';
 import { templateCharacter } from '../../shared/schema';
 
+test('ability cards show compact results and strip repeated mechanics from saved descriptions on phones', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const sheet = templateCharacter('Katooluman');
+  sheet.stats.INT = 9;
+  sheet.abilities[1].description =
+    'Gain advantage and +2 on an INT check to inspect buried machinery. Main action.';
+  sheet.abilities[0] = {
+    name: 'Spiral-Script Strike',
+    kind: 'combat',
+    effect: 'strike',
+    level: 1,
+    stat: 'INT',
+    dice: '1d12',
+    inflicts: 'Burning',
+    description:
+      'Katooluman fixes a fragment of forbidden insight on a nearby threat and lashes out with a pattern that burns into the target. Make an attack roll against defense; on a hit, deal 1d12 + INT modifier damage and inflict Burning for 3 turns. As a noncombat obstacle check, use INT. Main action.',
+  };
+  sheet.abilityOptions = [
+    sheet.abilities[0],
+    {
+      ...sheet.abilities[0],
+      name: 'Script Barrier',
+      effect: 'barrier',
+      inflicts: undefined,
+      description: 'A ribbon of script shields a companion.',
+    },
+    sheet.abilities[1],
+    {
+      ...sheet.abilities[1],
+      name: 'Restoring Insight',
+      effect: 'restoration',
+      description: 'Forbidden insight restores a companion’s strength.',
+    },
+  ];
+  sheet.abilities = [];
+  await page.route('**/api/characters/generate', (route) => route.fulfill({ json: sheet }));
+  await page.goto('/characters');
+  await page.getByRole('button', { name: 'Create a character', exact: true }).click();
+  await page.getByLabel('Character concept').fill('An insightful scholar');
+  await page.getByRole('button', { name: 'Generate from my concept' }).click();
+  const card = page.locator('.ability-card').filter({ hasText: 'Spiral-Script Strike' });
+  await expect(card).toContainText('3–14 damage');
+  await expect(card).toContainText('1d12 + 2 · INT');
+  await expect(card).toContainText('Burning on hit · 3 turns');
+  await expect(card).toContainText('Katooluman fixes a fragment');
+  await expect(card).not.toContainText(/modifier|noncombat obstacle|attack roll against defense/);
+  await expect(card.getByRole('list', { name: 'Ability mechanics' })).toBeVisible();
+  const utility = page.locator('.ability-card').filter({ hasText: sheet.abilityOptions![2].name });
+  await expect(utility).toContainText('inspect buried machinery');
+  await expect(utility).not.toContainText('advantage and +2');
+  await expect(page.locator('.ability-card').filter({ hasText: 'Restoring Insight' })).toContainText(
+    'Clears all ailments',
+  );
+  await card.click();
+  await expect(card).toHaveAttribute('aria-pressed', 'true');
+  const fits = await card.evaluate((element) => element.scrollWidth <= element.clientWidth);
+  expect(fits).toBe(true);
+});
+
 test('a generated portrait survives saving, reloading, and joining the party', async ({ page }) => {
   const sheet = templateCharacter('Portrait traveller');
   sheet.portraitId = 'ed912aaf-a6a0-4fb9-a189-d79c64dd7627';
@@ -276,11 +337,11 @@ test('character generation shows progress, populates the draft, and keeps failur
   await expect(page.locator('.character-sheet input, .character-sheet select')).toHaveCount(0);
   await expect(page.locator('.equipment-choices button')).toHaveCount(5);
   await expect(page.locator('.ability-choices button')).toHaveCount(4);
-  await expect(page.locator('.ability-mechanics').nth(0)).toContainText('2d6 + STR modifier');
-  await expect(page.locator('.ability-power').first()).toHaveText('4–14 damage');
+  await expect(page.locator('.ability-effect small').first()).toContainText('2d6 + 2 · STR');
+  await expect(page.locator('.ability-effect strong').first()).toHaveText('4–14 damage');
   await expect(page.locator('.creation-compensation')).toContainText('Cannot wear body armour (major)');
   await expect(page.locator('.creation-compensation')).toContainText('+4 STR (+2 STR modifier)');
-  await expect(page.locator('.ability-mechanics').nth(2)).toContainText('Advantage');
+  await expect(page.locator('.ability-effect').nth(2)).toContainText('Advantage +4');
   await expect(page.locator('.equipment-choices button').nth(0)).toContainText(
     '+1 INT attack rolls while equipped',
   );

@@ -289,6 +289,63 @@ it('keeps combat order when passages combine events', () => {
   expect(() => assembleResolvedNarration(r, input)).toThrow('initiative');
 });
 
+it.each([false, true])(
+  'transfers a successful utility helper bonus without stacking personal power (own ability=%s)',
+  async (ownAbility) => {
+    const f = await fixture();
+    const helper = f.game.members(f.campaign.id)[0];
+    const loader = f.game.members(f.campaign.id)[1];
+    const support = {
+      ...helper.character.abilities[1],
+      name: 'Steady hands',
+      stat: 'STR' as const,
+      bonus: 1,
+      level: 2,
+    };
+    const personal = {
+      ...loader.character.abilities[1],
+      name: 'Precise handling',
+      stat: 'STR' as const,
+      bonus: 3,
+    };
+    helper.character.abilities[1] = support;
+    loader.character.abilities[1] = personal;
+    for (const member of [helper, loader])
+      f.db
+        .prepare('UPDATE members SET sheet = ? WHERE id = ?')
+        .run(JSON.stringify(member.character), member.id);
+    let assisted: ReturnType<GameTools> | undefined;
+    f.provider.adjudicate = vi.fn(async (context: GMContext, tools: GameTools) => {
+      tools(check(helper.id, { abilityName: support.name, assistsMemberId: loader.id }));
+      assisted = tools(
+        check(loader.id, { dc: 15, abilityName: ownAbility ? personal.name : null, assistedBy: [helper.id] }),
+      );
+      return f.adjudicateSaved(context, tools);
+    });
+    f.submit([
+      `Use ${support.name} to help Loader load the mounting.`,
+      ownAbility ? `Use ${personal.name} to load the mounting.` : 'Load the mounting.',
+    ]);
+    await f.game.idle();
+    expect(f.game.snapshot(f.campaign.id, f.host.id).turn!.phase).toBe('collecting');
+    expect(assisted).toMatchObject({
+      modifier: ownAbility ? 7 : 6,
+      mode: 'advantage',
+      success: true,
+    });
+    expect(assisted?.assistanceBonus ?? 0).toBe(ownAbility ? 0 : 6);
+    // Practice adjudication completes this successful challenge and restores the spent charge.
+    expect(f.game.members(f.campaign.id)[0].state.abilityUses?.[support.name]).toBe(0);
+    const reloaded = new Game(f.db, () => f.practice);
+    expect(
+      reloaded
+        .snapshot(f.campaign.id, f.host.id)
+        .history.at(-1)
+        ?.rolls.find((roll) => roll.memberId === loader.id),
+    ).toEqual(assisted);
+  },
+);
+
 it('gives successful checked assistance advantage and preserves its causal receipt across restart', async () => {
   const f = await fixture();
   let assisted: ReturnType<GameTools>;
@@ -729,7 +786,7 @@ it('does not create the requested search item after a failed check or allow a di
       changes: [],
       journal: [],
       location: null,
-      rewards: { xp: 0, gold: 0, reason: 'Routine discovery.' },
+      rewards: { xp: 0, currency: 0, reason: 'Routine discovery.' },
     };
   };
   f.submit(['Pick up the visible key.', 'Watch the deck.']);
@@ -892,7 +949,7 @@ it('persists a new consequence of failure without changing the failed check or d
         detail: 'An old maintenance hatch is exposed under the mounting.',
       },
     ];
-    result.rewards = { xp: 10, gold: 0, reason: 'A useful new maintenance access was discovered.' };
+    result.rewards = { xp: 10, currency: 0, reason: 'A useful new maintenance access was discovered.' };
     return result;
   };
   const publish = vi.spyOn(f.game as unknown as { publish: () => void }, 'publish').mockImplementation(() => {

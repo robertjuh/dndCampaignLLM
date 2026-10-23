@@ -1,0 +1,606 @@
+{
+  "source": "akoedabar playtest turn 7, 2026-10-22: recorded compound movement/search rejection and saved tool results.",
+  "scene": {
+    "location": {
+      "name": "Akuda Bar",
+      "atmosphere": "A lively canal-side tavern where hovercraft pilots, workers, reporters and uniformed officers share neutral ground amid music, food and salt air.",
+      "hazard": "",
+      "id": "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6"
+    },
+    "encounters": 0,
+    "encounter": null,
+    "loot": [],
+    "lethalWarning": null,
+    "places": {
+      "5de41eae-5967-495c-863b-51b08d1b96a6": {
+        "location": {
+          "name": "Mammago Garage",
+          "atmosphere": "A busy salvage workshop filled with half-repaired hovercraft, clattering tools, and the sharp tang of sea spray.",
+          "hazard": "",
+          "id": "5de41eae-5967-495c-863b-51b08d1b96a6"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The garage is an active public workshop, with no immediate danger established."
+        }
+      },
+      "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e": {
+        "location": {
+          "name": "Hillys City Landing Docks",
+          "atmosphere": "A working waterfront of cargo skiffs, container stacks, wet planks, and busy crews beneath the city's hovercraft lanes.",
+          "hazard": "",
+          "id": "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The docks are busy and under routine public security, with no immediate danger established."
+        }
+      },
+      "5f9d65b5-e071-48b6-a975-0efd1b6f7af3": {
+        "location": {
+          "name": "Outer Piers",
+          "atmosphere": "A wind-bright fringe of Hillys City's waterfront, lined with low salvage skiffs, wet pilings, and shallow turquoise water.",
+          "hazard": "",
+          "id": "5f9d65b5-e071-48b6-a975-0efd1b6f7af3"
+        },
+        "encounter": null,
+        "loot": [],
+        "searches": {
+          "outer piers · wet pilings and skiff gear": {
+            "information": "Lobsterano finds no sign of the tool case among the pilings and skiff gear he searched. A nearby salvage hand points out a different place to check: the shallow wreck itself lies beyond the outer edge of the piers.",
+            "rewardRolled": false
+          }
+        },
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The public pier is active and no immediate danger has been established."
+        }
+      },
+      "0627d09e-3ad3-460a-bcba-d49e3ff99a83": {
+        "location": {
+          "name": "Hillys City Canal Walk",
+          "atmosphere": "Canal water flashes beneath bridges and stairways as pedestrians, delivery carts, and hovercraft traffic thread through Hillys City.",
+          "hazard": "",
+          "id": "0627d09e-3ad3-460a-bcba-d49e3ff99a83"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "This is an active public city route; no immediate danger has been established."
+        }
+      },
+      "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f": {
+        "location": {
+          "name": "Shallow Wreck",
+          "atmosphere": "Clear turquoise water ripples over a small, half-submerged craft resting just beyond the Outer Piers. Sunlight wavers across its bent hull and a dark opening near the stern.",
+          "hazard": "Slippery wreckage and shifting water around the partly submerged hull.",
+          "id": "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f"
+        },
+        "encounter": null,
+        "loot": [],
+        "encounterRisk": {
+          "danger": "safe",
+          "reason": "The wreck lies in shallow water near the working piers; no immediate danger has been established."
+        }
+      }
+    },
+    "worldMap": {
+      "nodes": {
+        "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6": {
+          "id": "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6",
+          "name": "Akuda Bar",
+          "visited": true
+        },
+        "0627d09e-3ad3-460a-bcba-d49e3ff99a83": {
+          "id": "0627d09e-3ad3-460a-bcba-d49e3ff99a83",
+          "name": "Hillys City Canal Walk",
+          "visited": true
+        },
+        "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e": {
+          "id": "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e",
+          "name": "Hillys City Landing Docks",
+          "visited": true
+        },
+        "5de41eae-5967-495c-863b-51b08d1b96a6": {
+          "id": "5de41eae-5967-495c-863b-51b08d1b96a6",
+          "name": "Mammago Garage",
+          "visited": true
+        },
+        "5f9d65b5-e071-48b6-a975-0efd1b6f7af3": {
+          "id": "5f9d65b5-e071-48b6-a975-0efd1b6f7af3",
+          "name": "Outer Piers",
+          "visited": true
+        },
+        "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f": {
+          "id": "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f",
+          "name": "Shallow Wreck",
+          "visited": true
+        },
+        "45055e61-526c-4968-bf6b-af1db594ea47": {
+          "id": "45055e61-526c-4968-bf6b-af1db594ea47",
+          "name": "Wreck Interior",
+          "visited": false
+        }
+      },
+      "connections": [
+        {
+          "from": "0627d09e-3ad3-460a-bcba-d49e3ff99a83",
+          "to": "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6",
+          "label": "A crowded street leads toward Akuda Bar.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e",
+          "to": "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6",
+          "label": "The covered walkway rises back toward Akuda Bar.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "5de41eae-5967-495c-863b-51b08d1b96a6",
+          "to": "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6",
+          "label": "The signed canal-side route leads back to Akuda Bar.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "5f9d65b5-e071-48b6-a975-0efd1b6f7af3",
+          "to": "5de41eae-5967-495c-863b-51b08d1b96a6",
+          "label": "The service lane returns to Mammago Garage.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "5f9d65b5-e071-48b6-a975-0efd1b6f7af3",
+          "to": "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e",
+          "label": "The quay runs back toward Hillys City Landing Docks.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "0627d09e-3ad3-460a-bcba-d49e3ff99a83",
+          "to": "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e",
+          "label": "The stairway descends to the Hillys City Landing Docks.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "5f9d65b5-e071-48b6-a975-0efd1b6f7af3",
+          "to": "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f",
+          "label": "Lobsterano follows the salvage hand’s directions into the shallow water beyond the Outer Piers.",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f",
+          "to": "45055e61-526c-4968-bf6b-af1db594ea47",
+          "label": "A dark gap in the stern opens into the wreck’s flooded interior.",
+          "blocked": false,
+          "bidirectional": true
+        }
+      ],
+      "positions": {
+        "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6": {
+          "x": 0,
+          "y": 0
+        },
+        "0627d09e-3ad3-460a-bcba-d49e3ff99a83": {
+          "x": 180,
+          "y": 0
+        },
+        "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e": {
+          "x": -89.99999999999996,
+          "y": 155.88457268119896
+        },
+        "5de41eae-5967-495c-863b-51b08d1b96a6": {
+          "x": -180,
+          "y": 2.2043642384652358e-14
+        },
+        "5f9d65b5-e071-48b6-a975-0efd1b6f7af3": {
+          "x": 45.00000000000006,
+          "y": -233.82685902179844
+        },
+        "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f": {
+          "x": -134.99999999999994,
+          "y": -233.8268590217984
+        },
+        "45055e61-526c-4968-bf6b-af1db594ea47": {
+          "x": -314.99999999999994,
+          "y": -233.82685902179838
+        }
+      }
+    },
+    "memberLocations": {
+      "9180f114-7fcd-4ce8-9c9a-e3d300a7473d": "0627d09e-3ad3-460a-bcba-d49e3ff99a83",
+      "9a9512bd-8eaa-4a96-99a4-325f7d1ed645": "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f"
+    },
+    "currencyName": "Units",
+    "encounterRisk": {
+      "danger": "safe",
+      "reason": "Akuda Bar's established neutrality custom is enforced by the people present; no immediate danger is evident."
+    },
+    "npcs": {},
+    "worldProgression": {
+      "version": 1,
+      "places": {
+        "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6": {
+          "stalledTurns": 0,
+          "lastTurnId": "d706d433-f9c1-47d3-b528-54e78b779c5a",
+          "recentFacts": [
+            "a dockworker named tavi has been missing since a late shift their coworker saw an official cargo inspection divert them from the landing docks but does not know where they were taken a firsthand witness to tavi s disappearance is around the hillys city landing docks",
+            "a mammago mechanic has been asking around for a lost tool case from a shallow wreck and the garage can confirm whether the job remains open mammago garage is the place to confirm the salvage crew s current work"
+          ]
+        },
+        "5de41eae-5967-495c-863b-51b08d1b96a6": {
+          "stalledTurns": 2,
+          "lastTurnId": "13747a40-15a1-4acd-9204-d57343a4c89a",
+          "recentFacts": []
+        },
+        "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e": {
+          "stalledTurns": 3,
+          "lastTurnId": "0b2fc526-70a8-4f3e-96f9-cf615a68e9f6",
+          "recentFacts": []
+        },
+        "5f9d65b5-e071-48b6-a975-0efd1b6f7af3": {
+          "stalledTurns": 2,
+          "lastTurnId": "3759ae70-6b0d-4058-84af-aa85f06da08b",
+          "recentFacts": []
+        },
+        "0627d09e-3ad3-460a-bcba-d49e3ff99a83": {
+          "stalledTurns": 2,
+          "lastTurnId": "160db0c7-812e-47e2-959b-260a93757027",
+          "recentFacts": []
+        },
+        "d47c66b7-9683-43c5-82ff-6ebb40f7ae9f": {
+          "stalledTurns": 1,
+          "lastTurnId": "160db0c7-812e-47e2-959b-260a93757027",
+          "recentFacts": []
+        }
+      }
+    },
+    "searches": {
+      "c3f7fe1e-e4ef-4210-81e9-e1bc9f969ac6": {
+        "information": "A Mammago mechanic has been asking around for a lost tool case from a shallow wreck, and the garage can confirm whether the job remains open.\nMammago Garage is the place to confirm the salvage crew’s current work.",
+        "investigation": {
+          "hookId": "bartender-local-news",
+          "answer": 0,
+          "signature": "e63203f19d23bd18f52767ec63a90f70cabdb48d01b5c181f952ab596434449c:ordinary",
+          "success": true,
+          "question": "Ask the bartender about any news",
+          "text": "The bartender polishes a glass and says a Mammago mechanic has been asking around for a tool case lost in a shallow wreck. “Nothing heroic required, unless you count keeping your boots dry,” he adds. “The garage can tell you if the job’s still open.”",
+          "lead": "Mammago Garage is the place to confirm the salvage crew’s current work.",
+          "leadLocationId": "5de41eae-5967-495c-863b-51b08d1b96a6"
+        },
+        "attempts": {
+          "2c1d94e76b487d215aae4cdfdb90ec54d21d7026e5143dc0b4550439121615cf": {
+            "information": "A dockworker named Tavi has been missing since a late shift; their coworker saw an official cargo inspection divert them from the landing docks, but does not know where they were taken.\nA firsthand witness to Tavi’s disappearance is around the Hillys City Landing Docks.",
+            "investigation": {
+              "hookId": "bar-missing-residents",
+              "answer": 0,
+              "signature": "e63203f19d23bd18f52767ec63a90f70cabdb48d01b5c181f952ab596434449c:ordinary",
+              "success": true,
+              "question": "Ask the residents about the people not coming home",
+              "text": "At the bar, the music dips beneath a burst of earnest gossip. A tired fishmonger says a dockworker named Tavi never came home after a late shift. Tavi’s coworker saw an official cargo inspection divert them from the landing docks, but could not say where they were taken. A nearby porter adds that the account is firsthand, not another canal-side rumor.",
+              "lead": "A firsthand witness to Tavi’s disappearance is around the Hillys City Landing Docks.",
+              "leadLocationId": "c5fcbc87-cd8a-4e52-a087-d9dc1b43885e"
+            }
+          },
+          "c1065400db0cb901e01b7e1820ba4741fa75754fcb5f97affbe27aab9c556821": {
+            "information": "A Mammago mechanic has been asking around for a lost tool case from a shallow wreck, and the garage can confirm whether the job remains open.\nMammago Garage is the place to confirm the salvage crew’s current work.",
+            "investigation": {
+              "hookId": "bartender-local-news",
+              "answer": 0,
+              "signature": "e63203f19d23bd18f52767ec63a90f70cabdb48d01b5c181f952ab596434449c:ordinary",
+              "success": true,
+              "question": "Ask the bartender about any news",
+              "text": "The bartender polishes a glass and says a Mammago mechanic has been asking around for a tool case lost in a shallow wreck. “Nothing heroic required, unless you count keeping your boots dry,” he adds. “The garage can tell you if the job’s still open.”",
+              "lead": "Mammago Garage is the place to confirm the salvage crew’s current work.",
+              "leadLocationId": "5de41eae-5967-495c-863b-51b08d1b96a6"
+            }
+          }
+        },
+        "rewardRolled": false
+      }
+    }
+  },
+  "members": [
+    {
+      "id": "9180f114-7fcd-4ce8-9c9a-e3d300a7473d",
+      "name": "Sofa king",
+      "stats": {
+        "STR": 7,
+        "DEX": 7,
+        "INT": 6,
+        "CHA": 8,
+        "CON": 7,
+        "WIS": 6
+      }
+    },
+    {
+      "id": "9a9512bd-8eaa-4a96-99a4-325f7d1ed645",
+      "name": "Lobsterano",
+      "stats": {
+        "STR": 9,
+        "DEX": 7,
+        "INT": 5,
+        "CHA": 6,
+        "CON": 7,
+        "WIS": 7
+      }
+    }
+  ],
+  "turn": {
+    "id": "392e768a-9f17-4ba8-a1c6-e6626c249905",
+    "number": 7,
+    "actions": [
+      {
+        "memberId": "9180f114-7fcd-4ce8-9c9a-e3d300a7473d",
+        "text": "Ask the pilot for more about tavi, he seems to be a popular guy",
+        "passed": false,
+        "submittedAt": "2026-10-22T15:47:41.285Z",
+        "acceptsLethalRisk": false
+      },
+      {
+        "memberId": "9a9512bd-8eaa-4a96-99a4-325f7d1ed645",
+        "text": "Go into the wreck interior and search around",
+        "passed": false,
+        "submittedAt": "2026-10-22T15:48:13.259Z",
+        "acceptsLethalRisk": false
+      }
+    ],
+    "rolls": [
+      {
+        "memberId": "9a9512bd-8eaa-4a96-99a4-325f7d1ed645",
+        "stat": "WIS",
+        "dc": 10,
+        "reason": "Lobsterano searches the wreck’s flooded interior for the missing tool case, working around shifting water and slippery metal.",
+        "mode": "disadvantage",
+        "circumstances": {
+          "favorable": false,
+          "adverse": true
+        },
+        "lethal": false,
+        "abilityName": null,
+        "assistsMemberId": null,
+        "assistedBy": [],
+        "id": "2c5c16e5-b6a0-4dd6-8555-22c16dd19a4b",
+        "dice": [
+          18,
+          9
+        ],
+        "modifier": 1,
+        "equipmentBonuses": [],
+        "total": 10,
+        "success": true,
+        "source": "Local OS cryptographic randomness"
+      }
+    ]
+  },
+  "journal": [
+    {
+      "kind": "fact",
+      "name": "Akuda Bar · Ask the bartender about any news",
+      "detail": "A Mammago mechanic has been asking around for a lost tool case from a shallow wreck, and the garage can confirm whether the job remains open.\nMammago Garage is the place to confirm the salvage crew’s current work."
+    },
+    {
+      "kind": "fact",
+      "name": "Akuda Bar · Ask the residents about the people not coming",
+      "detail": "A dockworker named Tavi has been missing since a late shift; their coworker saw an official cargo inspection divert them from the landing docks, but does not know where they were taken.\nA firsthand witness to Tavi’s disappearance is around the Hillys City Landing Docks."
+    },
+    {
+      "kind": "fact",
+      "name": "Outer Piers · wet pilings and skiff gear",
+      "detail": "Lobsterano finds no sign of the tool case among the pilings and skiff gear he searched. A nearby salvage hand points out a different place to check: the shallow wreck itself lies beyond the outer edge of the piers."
+    },
+    {
+      "kind": "faction",
+      "name": "Alpha Sections",
+      "detail": "The Alpha Sections are Hillys' uniformed security force, presenting themselves as the planet's shield against DomZ attacks. Their visible patrols, checkpoints and public briefings are a familiar part of city life."
+    },
+    {
+      "kind": "faction",
+      "name": "IRIS Network",
+      "detail": "The IRIS Network is known as a clandestine circle of reporters and allies investigating disappearances and suspicious official claims. They rely on discreet contacts and careful reporting; residents differ on whether their questions help or endanger sources."
+    },
+    {
+      "kind": "faction",
+      "name": "Mammago Salvage Crew",
+      "detail": "The Mammago Salvage Crew is a group of independent mechanics and salvage workers who maintain vehicles and recover useful parts from Hillys' waters and wrecks. Their garage is a familiar source of repairs and salvage business."
+    },
+    {
+      "kind": "location",
+      "name": "Akuda Bar",
+      "detail": "Akuda Bar is a crowded, famously neutral tavern in Hillys City, where civilians, smugglers, reporters, mechanics and Alpha Sections personnel share space under a strict custom: anyone who starts violence faces the united opposition of everyone present. The bar's salt-stained windows look over a bustling coastal city built around canals and hovercraft lanes. Its dockside position makes it a natural meeting place for people arriving from across Hillys, and the mix of species and professions is ordinary here. The party is present as strangers, with no shared commitment established. The public identities and roles of the Alpha Sections, IRIS Network, and Mammago Salvage Crew are discussed and recognized here."
+    },
+    {
+      "kind": "location",
+      "name": "Akuda Bar: a neutral meeting place in Hillys City",
+      "detail": "Akuda Bar is a crowded, famously neutral tavern in Hillys City, where civilians, smugglers, reporters, mechanics and Alpha Sections personnel share space under a strict custom: anyone who starts violence faces the united opposition of everyone present. The bar's salt-stained windows look over a bustling coastal city built around canals and hovercraft lanes. Its dockside position makes it a natural meeting place for people arriving from across Hillys, and the mix of species and professions is ordinary here. The party is present as strangers, with no shared commitment established. The public identities and roles of the Alpha Sections, IRIS Network, and Mammago Salvage Crew are discussed and recognized here."
+    },
+    {
+      "kind": "location",
+      "name": "Hillys City Canal Walk",
+      "detail": "Hillys City Canal Walk. Canal water flashes beneath bridges and stairways as pedestrians, delivery carts, and hovercraft traffic thread through Hillys City. "
+    },
+    {
+      "kind": "location",
+      "name": "Hillys City Landing Docks",
+      "detail": "Hillys City Landing Docks. A working waterfront of cargo skiffs, container stacks, wet planks, and busy crews beneath the city's hovercraft lanes. "
+    },
+    {
+      "kind": "location",
+      "name": "Mammago Garage",
+      "detail": "Mammago Garage. A busy salvage workshop filled with half-repaired hovercraft, clattering tools, and the sharp tang of sea spray. "
+    },
+    {
+      "kind": "location",
+      "name": "Outer Piers",
+      "detail": "Outer Piers. A wind-bright fringe of Hillys City's waterfront, lined with low salvage skiffs, wet pilings, and shallow turquoise water. "
+    },
+    {
+      "kind": "location",
+      "name": "Shallow Wreck",
+      "detail": "Shallow Wreck. Clear turquoise water ripples over a small, half-submerged craft resting just beyond the Outer Piers. Sunlight wavers across its bent hull and a dark opening near the stern. Slippery wreckage and shifting water around the partly submerged hull."
+    }
+  ],
+  "gmMemory": [
+    {
+      "id": "canal-pilot-tavi",
+      "locationId": "0627d09e-3ad3-460a-bcba-d49e3ff99a83",
+      "cause": "A delivery-skiff pilot on the Canal Walk heard dockside accounts of Tavi's disappearance while moving cargo between city quays.",
+      "discoveries": [
+        "The pilot knows Tavi's coworker and says the witness is still working at the Landing Docks; the official inspection used a blue-striped cargo skiff, but its destination was not recorded.",
+        "The pilot recognizes the inspection skiff's markings as belonging to a routine cargo contractor, not a security patrol, and can point out the contractor's quay office on the Canal Walk."
+      ],
+      "actors": "A delivery-skiff pilot on Hillys City Canal Walk, plus dock crews at the Landing Docks.",
+      "nextChange": "The pilot continues the delivery route through the canal district; dock crews remain at the Landing Docks.",
+      "dueTurn": null,
+      "status": "open"
+    }
+  ],
+  "receipts": {
+    "investigation:9180f114-7fcd-4ce8-9c9a-e3d300a7473d": {
+      "memberId": "9180f114-7fcd-4ce8-9c9a-e3d300a7473d",
+      "source": {
+        "kind": "place",
+        "id": "0627d09e-3ad3-460a-bcba-d49e3ff99a83",
+        "name": "Hillys City Canal Walk",
+        "locationId": "0627d09e-3ad3-460a-bcba-d49e3ff99a83"
+      },
+      "question": "Ask the pilot for more about Tavi, he seems to be a popular guy",
+      "thread": "premise",
+      "hookId": "canal-pilot-tavi",
+      "answer": 0,
+      "signature": "bcea3040ce5156ad378395753234dd5448bd5eb1703567051077a44386728381:ordinary",
+      "success": true,
+      "reused": false,
+      "finding": {
+        "fact": "The pilot knows Tavi's coworker and says the witness is still working at the Landing Docks; the official inspection used a blue-striped cargo skiff, but its destination was not recorded.",
+        "text": "The pilot laughs softly at the suggestion that Tavi is popular. “Popular enough to be missed, anyway. I know the coworker who saw the diversion—they’re still on shift down at the Landing Docks. They said the inspection used a blue-striped cargo skiff, not a uniformed patrol boat. Nobody logged where it went.”",
+        "lead": "Tavi’s firsthand coworker witness remains among the crews at the Landing Docks; the blue-striped skiff is a new detail to check.",
+        "leadLocationId": "0627d09e-3ad3-460a-bcba-d49e3ff99a83"
+      },
+      "actionFact": "Sofa king investigates Hillys City Canal Walk: The pilot knows Tavi's coworker and says the witness is still working at the Landing Docks; the official inspection used a blue-striped cargo skiff, but its destination was not recorded."
+    },
+    "executionEvents": [
+      {
+        "id": "investigation:9180f114-7fcd-4ce8-9c9a-e3d300a7473d",
+        "sequence": 0,
+        "kind": "mechanics",
+        "phase": "main",
+        "result": "success",
+        "memberId": "9180f114-7fcd-4ce8-9c9a-e3d300a7473d",
+        "actionId": "392e768a-9f17-4ba8-a1c6-e6626c249905:action:9180f114-7fcd-4ce8-9c9a-e3d300a7473d",
+        "fact": "Sofa king investigates Hillys City Canal Walk: The pilot knows Tavi's coworker and says the witness is still working at the Landing Docks; the official inspection used a blue-striped cargo skiff, but its destination was not recorded.",
+        "receiptRefs": [
+          "tool:investigation:9180f114-7fcd-4ce8-9c9a-e3d300a7473d"
+        ],
+        "dependsOn": []
+      },
+      {
+        "id": "check:2c5c16e5-b6a0-4dd6-8555-22c16dd19a4b",
+        "sequence": 1,
+        "kind": "mechanics",
+        "phase": "main",
+        "result": "success",
+        "memberId": "9a9512bd-8eaa-4a96-99a4-325f7d1ed645",
+        "actionId": "392e768a-9f17-4ba8-a1c6-e6626c249905:action:9a9512bd-8eaa-4a96-99a4-325f7d1ed645",
+        "fact": "Lobsterano: the WIS check succeeds.",
+        "receiptRefs": [
+          "roll:2c5c16e5-b6a0-4dd6-8555-22c16dd19a4b"
+        ],
+        "dependsOn": []
+      },
+      {
+        "id": "loot",
+        "sequence": 2,
+        "kind": "mechanics",
+        "phase": null,
+        "result": null,
+        "memberId": null,
+        "actionId": null,
+        "fact": "Scene loot is available: Mammago Salvage Tool Case.",
+        "receiptRefs": [
+          "tool:loot"
+        ],
+        "dependsOn": []
+      }
+    ],
+    "loot": {
+      "item": {
+        "id": "a47126a5-afeb-4e60-be72-b2324293f356",
+        "name": "Mammago Salvage Tool Case",
+        "kind": "tool",
+        "rarity": "Common",
+        "scaling": [],
+        "requirements": {
+          "STR": 0,
+          "DEX": 0,
+          "INT": 0,
+          "CHA": 0,
+          "CON": 0,
+          "WIS": 0
+        },
+        "hands": 1,
+        "light": false,
+        "damage": "1d4",
+        "defense": 0,
+        "initiativePenalty": 0,
+        "healing": 0,
+        "attackBonus": 0,
+        "checkBonus": 0,
+        "description": "A sealed, buoyant case containing a mechanic’s compact diagnostic tools and salvage implements, identifiable by Mammago’s workshop stencil.",
+        "sourceId": "wreck-interior:tool-case"
+      },
+      "reason": "Lobsterano thoroughly searches the wreck’s flooded interior and finds the lost Mammago tool case wedged behind a loose maintenance panel.",
+      "locationId": "45055e61-526c-4968-bf6b-af1db594ea47",
+      "sourceId": "wreck-interior:tool-case",
+      "memberId": "9a9512bd-8eaa-4a96-99a4-325f7d1ed645",
+      "pendingPlacement": true
+    }
+  },
+  "response": {
+    "version": 3,
+    "currencyName": "Units",
+    "beats": [
+      {
+        "kind": "investigate",
+        "actor": "actor:1"
+      },
+      {
+        "kind": "move",
+        "actor": "actor:2",
+        "to": "place:7",
+        "fact": "Lobsterano enters the Wreck Interior through the dark gap in the stern and searches the flooded compartment. He finds the Mammago Salvage Tool Case wedged behind a loose maintenance panel.",
+        "text": "Lobsterano squeezes through the stern gap into the wreck’s flooded interior. Shifting water tugs at him as he searches the slick, cramped compartment. Behind a loose maintenance panel, he finds a buoyant case stamped with Mammago’s workshop mark; the diagnostic tools and salvage implements inside appear intact.",
+        "place": {
+          "name": "Wreck Interior",
+          "atmosphere": "A cramped, flooded compartment of bent ribs and loose panels, wavering with filtered turquoise light.",
+          "hazard": "Shifting water and slippery metal make footing uncertain.",
+          "danger": "safe",
+          "riskReason": "The search is difficult, but no immediate threat has been established."
+        },
+        "route": "A dark gap in the stern opens into the wreck’s flooded interior.",
+        "checked": false,
+        "exits": [
+          {
+            "to": "place:6",
+            "label": "The stern gap leads back out to the Shallow Wreck."
+          }
+        ]
+      }
+    ],
+    "summary": "Sofa king hears the delivery-skiff pilot’s account of Tavi’s disappearance and the blue-striped cargo skiff involved. Lobsterano searches inside the Shallow Wreck and finds the missing Mammago tool case in the flooded compartment.",
+    "notes": [],
+    "rewards": {
+      "xp": 10,
+      "reason": "Lobsterano locates the lost tool case in the wreck’s flooded interior."
+    }
+  }
+}

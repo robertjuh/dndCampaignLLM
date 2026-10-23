@@ -159,7 +159,7 @@ function splitCombat() {
     changes: [],
     journal: [],
     location: null,
-    rewards: { xp: 0, gold: 0, reason: 'Combat rewards are already applied.' },
+    rewards: { xp: 0, currency: 0, reason: 'Combat rewards are already applied.' },
   };
   return { context, proposal, ravine, tower };
 }
@@ -341,7 +341,7 @@ it('checks the actors own local combat plan before accepting an orientation answ
 it('preserves a separated investigator in narration and permits rewards for that local success', () => {
   const { context, proposal } = splitCombat();
   expect(narrationBeats(context).map((beat) => beat.id)).toEqual(['combat:0', 'combat:1', 'action:actor-2']);
-  proposal.rewards = { xp: 10, gold: 0, reason: 'The innkeeper identifies the caravan route.' };
+  proposal.rewards = { xp: 10, currency: 0, reason: 'The innkeeper identifies the caravan route.' };
   expect(() => validateAdjudication(context, proposal)).not.toThrow();
   proposal.actions.pop();
   context.turn.actions.pop();

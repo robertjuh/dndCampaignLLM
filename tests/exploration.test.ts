@@ -156,7 +156,7 @@ async function table({
       changes: [],
       journal: [],
       location: null,
-      rewards: { xp: 0, gold: 0, reason: 'No automatic reward.' },
+      rewards: { xp: 0, currency: 0, reason: 'No automatic reward.' },
     };
     lastContext = structuredClone(context);
     lastValue = structuredClone(value);

@@ -1,4 +1,5 @@
 import { validateFactionEffects } from './factions';
+import { planQuests } from './quests';
 import { validateNPCUpdates } from './npcs';
 import { validateFeatureUpdates } from './scene-state';
 import { isDeepStrictEqual } from 'node:util';
@@ -22,9 +23,11 @@ import { memberScene, knownLocations, occupiedPlaces } from '../shared/locations
 import { orderRouteOpenings, validateWorldMap } from './world-map';
 import { validateExploration } from './exploration';
 import { validateWorldProgression } from './world-progression';
+import { updateGMMemory } from '../shared/gm-memory';
 import { resolvePickups } from './turn-pickups';
 import { prepareEncounterChecks, type EncounterChecks } from './encounters';
 import type { NPCReactionReceipt } from './npc-reactions';
+import { investigationResults } from './investigations';
 
 export function receiptReferences(context: GMContext) {
   return new Set([
@@ -194,6 +197,20 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
     }
   }
   for (const [key, receipt] of Object.entries(context.receipts ?? {})) {
+    if (key.startsWith('investigation:')) {
+      const investigation = investigationResults(context).find(
+        (result) => key === `investigation:${result.memberId}`,
+      )!;
+      add(
+        key,
+        investigation.actionFact,
+        investigation.memberId,
+        [`tool:${key}`],
+        'mechanics',
+        'main',
+        investigation.success ? 'success' : 'failure',
+      );
+    }
     if (key.startsWith('check-effect:')) {
       const effect = receipt as { memberId: string; fact: string };
       add(key, effect.fact, effect.memberId, [`tool:${key}`], 'mechanics', 'aftermath');
@@ -213,9 +230,17 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
       const resource = receipt as ResourceReceipt;
       const actor = identity(context, resource.memberId);
       const target = identity(context, resource.targetId ?? resource.memberId);
+      const effects = resource.targets
+        ? resource.targets
+            .map(
+              (result) =>
+                `${identity(context, result.targetId).character.name} recovers ${result.restored} HP.${result.cured.length ? ` Removes ${result.cured.join(', ')}.` : ''}`,
+            )
+            .join(' ')
+        : `${target.character.name} recovers ${resource.restored} HP.${resource.cured?.length ? ` Removes ${resource.cured.join(', ')}.` : ''}`;
       add(
         key,
-        `${actor.character.name} uses ${resource.sourceName}, consuming its item or ability use; ${target.character.name} recovers ${resource.restored} HP.${resource.cured?.length ? ` Removes ${resource.cured.join(', ')}.` : ''}`,
+        `${actor.character.name} uses ${resource.sourceName}, consuming its item or ability use; ${effects}`,
         resource.memberId,
         [`tool:${key}`],
         'mechanics',
@@ -309,6 +334,9 @@ export function engineComponents(context: GMContext, memberId: string): EngineCo
   };
   const roll = context.turn.rolls.find((roll) => roll.memberId === memberId && !roll.notation);
   if (roll) assign('main', { status: roll.success ? 'success' : 'failure', basis: 'check' });
+  const investigation = investigationResults(context).find((result) => result.memberId === memberId);
+  if (investigation && !roll)
+    assign('main', { status: investigation.success ? 'success' : 'failure', basis: 'routine' });
   const support = (
     context.supportResults ?? (context.receipts?.support as GMContext['supportResults'])
   )?.find((receipt) => receipt.memberId === memberId);
@@ -354,7 +382,8 @@ export function adjudicationOutcome(value: SavedTurnAdjudication) {
     sceneFocus: value.sceneFocus,
     separations: value.separations,
     xp: value.rewards.xp,
-    gold: value.rewards.gold,
+    currencyName: value.currencyName,
+    currency: value.rewards.currency,
     lethalWarning: null,
   });
 }
@@ -443,6 +472,63 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
     : [];
   const engine = engineEvents(context);
   const resolve = adjudicationPlaceRef(context, output);
+  // A saved Join gathering already identifies the actor, route and full-action cost.
+  // Repair its wire format only; world-map validation still decides how far it can go.
+  for (const action of output.actions.filter(record)) {
+    const owners = context.turn.actions.filter(
+      (submitted) =>
+        submitted.memberId === action.memberId ||
+        actionId(context.turn.id, submitted.memberId) === action.actionId,
+    );
+    const submitted = owners.length === 1 ? owners[0] : undefined;
+    if (
+      !submitted?.gathering ||
+      action.search ||
+      ['search', 'orientation'].includes(action.intent) ||
+      !record(action.components) ||
+      action.components.minor ||
+      (action.components.main && action.components.movement)
+    )
+      continue;
+    const part = action.components.main ?? action.components.movement;
+    const positions = proposedPositions.filter((position) => position.memberId === submitted.memberId);
+    const proofs = events.filter((event) => event.id === positions[0]?.movementEventId);
+    const proof = proofs.length === 1 ? proofs[0] : undefined;
+    const id = actionId(context.turn.id, submitted.memberId);
+    if (
+      !record(part) ||
+      part.processingFailure ||
+      part.status !== 'success' ||
+      part.basis !== 'routine' ||
+      (part.receiptRefs !== undefined && (!Array.isArray(part.receiptRefs) || part.receiptRefs.length)) ||
+      positions.length !== 1 ||
+      !proof ||
+      proof.kind !== 'action' ||
+      proof.result !== 'success' ||
+      !['main', 'movement'].includes(proof.phase) ||
+      (proof.effect !== undefined && proof.effect !== 'movement') ||
+      (proof.memberId !== submitted.memberId && proof.actionId !== id) ||
+      context.members.some(
+        (other) =>
+          other.id !== submitted.memberId &&
+          (action.memberId === other.id ||
+            action.actionId === actionId(context.turn.id, other.id) ||
+            proof.memberId === other.id ||
+            proof.actionId === actionId(context.turn.id, other.id)),
+      ) ||
+      (part.eventIds !== undefined &&
+        (!Array.isArray(part.eventIds) || part.eventIds.length !== 1 || part.eventIds[0] !== proof.id)) ||
+      typeof proof.locationRef !== 'string' ||
+      resolve(proof.locationRef) !== resolve(positions[0].locationId) ||
+      !submitted.gathering.route.slice(1).includes(resolve(proof.locationRef))
+    )
+      continue;
+    action.memberId = submitted.memberId;
+    action.actionId = id;
+    action.components.main = part;
+    if (action.components.movement) action.components.movement = null;
+    Object.assign(proof, { memberId: submitted.memberId, actionId: id, phase: 'main', effect: 'movement' });
+  }
   for (const submitted of context.turn.actions.filter((action) => action.passed)) {
     const id = actionId(context.turn.id, submitted.memberId);
     if (!output.actions.some((action: any) => action?.actionId === id))
@@ -613,6 +699,11 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
       if (
         proof &&
         main &&
+        !investigationResults(context).some(
+          (finding) =>
+            finding.memberId === action.memberId &&
+            finding.source.locationId === memberScene(context.scene, action.memberId).location.id,
+        ) &&
         proof.actionId === action.actionId &&
         proof.memberId === action.memberId &&
         proof.kind === 'action' &&
@@ -775,6 +866,7 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
     turnAdjudicationSchema.parse(normalizeAdjudicationStructure(context, input)),
   );
   const value = parsed.pickups?.length ? resolvePickups(context, parsed).value : parsed;
+  updateGMMemory(context.gmMemory ?? [], value.gmNotes ?? []);
   const updates = value.placeUpdates ?? [];
   const refs = new Set(updates.map((update) => update.ref));
   if (refs.size !== updates.length) throw new Error('Place update references must be unique.');
@@ -807,6 +899,15 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
   }
   const combatPlaces = occupiedPlaces(combatScene);
   assertCombatClaims(combatPlaces, [
+    ...(value.sceneDraft
+      ? [
+          { text: value.sceneDraft.summary },
+          ...value.sceneDraft.passages.map((passage) => ({
+            text: passage.text,
+            locationId: value.events.find((event) => event.id === passage.eventIds[0])?.locationRef,
+          })),
+        ]
+      : []),
     ...value.actions.flatMap((action) => [
       {
         text: `${action.fact} ${action.reason}`,
@@ -841,7 +942,7 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
   const positions = value.memberLocations ?? [];
   const informationOnly = value.actions.filter((action) => action.status !== 'passed');
   if (informationOnly.length && informationOnly.every((action) => action.intent === 'orientation')) {
-    if (value.rewards.xp || value.rewards.gold) throw new Error('Orientation alone earns no reward.');
+    if (value.rewards.xp || value.rewards.currency) throw new Error('Orientation alone earns no reward.');
     if (value.factionEffects?.some((effect) => effect.type === 'discover'))
       throw new Error(
         'GM orientation may hint at known or observable facts, without revealing undiscovered faction identities.',
@@ -961,6 +1062,7 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
       throw new Error('Separated characters need distinct saved places and a world event.');
   }
   validateFactionEffects(context, value);
+  planQuests(context, value);
   const itemIds = new Set([
     ...context.members.flatMap((member) =>
       [
@@ -1086,8 +1188,14 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
       const mainExecution = authoritative.find(
         (event) => event.actionId === result.actionId && event.phase === 'main',
       );
+      const investigationAtOrigin = investigationResults(context).some(
+        (finding) =>
+          finding.memberId === result.memberId &&
+          resultingRef(finding.source.locationId) === memberScene(context.scene, result.memberId).location.id,
+      );
       if (
         mainExecution &&
+        !investigationAtOrigin &&
         !unperformed &&
         movement.eventIds.some(
           (id) =>
@@ -1170,11 +1278,11 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
   }
   if (!value.events.length)
     throw new Error('Adjudication must establish at least one resolved scene or action event.');
-  if (!context.turn.number && (value.rewards.xp || value.rewards.gold))
+  if (!context.turn.number && (value.rewards.xp || value.rewards.currency))
     throw new Error('Opening scenes cannot grant rewards.');
   if (
     context.combatResult &&
-    (value.rewards.xp || value.rewards.gold) &&
+    (value.rewards.xp || value.rewards.currency) &&
     !value.actions.some(
       (action) =>
         !combatReceiptForMember(context, action.memberId) &&

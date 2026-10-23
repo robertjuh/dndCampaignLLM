@@ -148,7 +148,7 @@ it.each(['assist', 'mend'] as const)(
     expect(f.draw.mock.calls.length).toBe(draws);
     expect(result.members[0].state.abilityUses?.[ability.name]).toBe(1);
     if (effect === 'mend') {
-      expect(result.members[1].state.hp).toBe(16);
+      expect(result.members[1].state.hp).toBe(18);
       expect(result.members[1].state.conditions).not.toContain('Shocked');
     } else expect(result.scene.encounter!.enemies[0].stunned).toBe(true);
   },
@@ -270,7 +270,7 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
   const f = fixture(undefined, filename);
   const turn = await start(f);
   const members = f.game.members(f.c.id);
-  Object.assign(members[0].state, { hp: 7, level: 3, maxHp: 30, xp: 42, gold: 9 });
+  Object.assign(members[0].state, { hp: 7, level: 3, maxHp: 30, xp: 42, currency: 9 });
   const legacyScene = {
     floor: {
       number: 4,
@@ -335,12 +335,12 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
   cleanup.unshift(() => db.close());
   const game = new Game(db, () => ({ resolve: async () => outcome() }));
   const restored = game.snapshot(f.c.id, f.host.id);
-  expect(db.pragma('user_version', { simple: true })).toBe(20);
+  expect(db.pragma('user_version', { simple: true })).toBe(22);
   expect(restored.members[0].state).toMatchObject({
     hp: 7,
     level: 3,
     xp: 42,
-    gold: 9,
+    currency: 9,
     stats: { CHA: 5, CON: 5, WIS: 5 },
   });
   expect(restored.scene).toMatchObject({
@@ -813,19 +813,31 @@ describe('downing and allied recovery', () => {
     expect(f.game.snapshot(f.c.id, f.host.id).turn!.number).toBe(4);
   });
 
-  it.each(['combat', 'utility'] as const)(
-    'uses a saved %s Mend ability outside combat to revive an ally and records its use and roll',
-    async (kind) => {
+  it.each([
+    { kind: 'combat', effect: 'mend' },
+    { kind: 'utility', effect: 'mend' },
+    { kind: 'combat', effect: 'restoration' },
+    { kind: 'utility', effect: 'restoration' },
+  ] as const)(
+    'uses saved $kind $effect outside combat to revive an ally and records its use and roll',
+    async ({ kind, effect }) => {
       const f = await downFirst();
       const [downed, healer] = f.game.members(f.c.id);
       const ability = {
         ...healer.character.abilities[0],
-        name: 'Field mend',
+        name: `Field ${effect}`,
         kind,
-        effect: 'mend' as const,
+        effect,
         stat: 'INT' as const,
       };
       healer.character.abilities.push(ability);
+      if (effect === 'restoration') {
+        downed.state.conditions.push('Burning', 'Frozen');
+        Object.assign(downed.state.conditionTurns, { Burning: 3, Frozen: 1 });
+        f.db
+          .prepare('UPDATE members SET state = ? WHERE id = ?')
+          .run(JSON.stringify(downed.state), downed.id);
+      }
       f.db
         .prepare('UPDATE members SET sheet = ? WHERE id = ?')
         .run(JSON.stringify(healer.character), healer.id);
@@ -837,7 +849,8 @@ describe('downing and allied recovery', () => {
       });
       await f.game.idle();
       const restored = f.game.snapshot(f.c.id, f.host.id);
-      expect(restored.members[0].state.hp).toBe(4);
+      expect(restored.members[0].state.hp).toBe(effect === 'mend' ? 6 : 4);
+      expect(restored.members[0].state.conditions).toEqual([]);
       expect(restored.members[1].state.abilityUses?.[ability.name]).toBe(1);
       expect(restored.history.at(-1)!.rolls.at(-1)).toMatchObject({
         memberId: healer.id,
@@ -1600,6 +1613,8 @@ it.each(['new-combat', 'new-utility', 'upgrade-combat', 'upgrade-utility', 'attr
     await start(f);
     const before = f.game.members(f.c.id)[0];
     before.state.pendingLevelUps = 2;
+    before.state.level = 5;
+    before.state.hp = before.state.maxHp = 40;
     before.character.abilities.push({ ...before.character.abilities[0], name: 'Second combat technique' });
     f.db
       .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
@@ -1628,7 +1643,7 @@ it.each(['new-combat', 'new-utility', 'upgrade-combat', 'upgrade-utility', 'attr
       expect(after.character.abilities).toHaveLength(4);
       expect(after.character.abilities.at(-1)).toMatchObject({
         kind: choice === 'new-combat' ? 'combat' : 'utility',
-        level: 1,
+        level: 5,
       });
     }
     expect(f.game.characters(before.playerId)[0].abilities).toHaveLength(2);
@@ -1799,8 +1814,8 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   await f.game.idle();
   expect(receipts[0]).toMatchObject({
     dice: [4, 12],
-    modifier: 6,
-    total: 18,
+    modifier: 8,
+    total: 20,
     success: true,
     mode: 'advantage',
     abilityName: ability.name,
@@ -2236,7 +2251,7 @@ it.each(['combat', 'utility'] as const)(
           };
           const receipt = tools.useResource!(input);
           expect(tools.useResource!(input)).toEqual(receipt);
-          expect(receipt).toMatchObject({ targetId: target.id, restored: 4 });
+          expect(receipt).toMatchObject({ targetId: target.id, restored: 6 });
         }
         return outcome();
       },
@@ -2273,7 +2288,7 @@ it.each(['combat', 'utility'] as const)(
     await f.game.idle();
     const restored = f.game.snapshot(f.c.id, f.host.id);
     expect(restored.turn!.phase).toBe('collecting');
-    expect(restored.members[0].state.hp).toBe(4);
+    expect(restored.members[0].state.hp).toBe(6);
     expect(isDowned(restored.members[0].state)).toBe(false);
     expect(restored.members[1].state.abilityUses?.['Field mend']).toBe(1);
     expect(restored.history.at(-1)!.rolls.at(-1)).toMatchObject({
@@ -2813,7 +2828,7 @@ it('adds real powers to existing saved and equipped off-hand items while preserv
   const legacyState = {
     ...member.state,
     xp: 42,
-    gold: 9,
+    currency: 9,
     equipment: { ...member.state.equipment, right: focus, left: relic },
   };
   const scene = f.game.snapshot(f.c.id, f.host.id).scene;
@@ -2839,7 +2854,7 @@ it('adds real powers to existing saved and equipped off-hand items while preserv
   cleanup.push(() => restoredDb.close());
   const restored = new Game(restoredDb, () => new PracticeGM());
   const after = restored.members(f.c.id)[0];
-  expect(after.state).toMatchObject({ xp: 42, gold: 9, equipmentChosen: true });
+  expect(after.state).toMatchObject({ xp: 42, currency: 9, equipmentChosen: true });
   expect(after.state.equipment.right).toMatchObject({ id: focus.id, attackBonus: 1, scaling: ['INT'] });
   expect(after.state.equipment.relic).toMatchObject({ id: relic.id, checkBonus: 1, scaling: ['INT'] });
   expect(after.character.selectedEquipmentIds).toEqual([focus.id, relic.id]);
@@ -3187,7 +3202,7 @@ it('removes saved healing types from templates, gear, replacements and pending t
     ...member.state,
     hp: 7,
     xp: 42,
-    gold: 9,
+    currency: 9,
     abilityUses: { [member.character.abilities[0].name]: 1 },
     inventory: [item, gear],
     equipment: { ...member.state.equipment, head: gear },
@@ -3221,7 +3236,7 @@ it('removes saved healing types from templates, gear, replacements and pending t
   expect(migrated.character.creationBonuses).toEqual(legacySheet.creationBonuses);
   expect(game.characters(member.playerId)[0]).toEqual({ ...migrated.character, id: member.characterId });
   expect(migrated.replacement?.character).toEqual(migrated.character);
-  expect(migrated.state).toMatchObject({ hp: 7, xp: 42, gold: 9, abilityUses: state.abilityUses });
+  expect(migrated.state).toMatchObject({ hp: 7, xp: 42, currency: 9, abilityUses: state.abilityUses });
   expect(migrated.state.inventory[0]).toMatchObject({
     healing: 6,
     quantity: 1,
@@ -3239,5 +3254,41 @@ it('removes saved healing types from templates, gear, replacements and pending t
     (db.prepare('SELECT draft FROM turns WHERE id = ?').get('old-healing-history') as { draft: string })
       .draft,
   ).toBe(draft);
-  expect(db.pragma('user_version', { simple: true })).toBe(20);
+  expect(db.pragma('user_version', { simple: true })).toBe(22);
+});
+
+it('migrates saved gold balances, collectible payments and nested receipts without losing value', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gather-currency-'));
+  cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+  const filename = join(directory, 'game.sqlite');
+  const f = fixture(undefined, filename);
+  const member = f.game.members(f.c.id)[0];
+  const { currency: _currency, ...state } = member.state;
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(
+    JSON.stringify({ ...state, gold: 37 }), member.id,
+  );
+  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+  scene.currencyName = 'imperial crowns';
+  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify({
+    ...scene,
+    loot: [{ ...baseItem('legacy-payment', 'Gold pouch', 'tool'), goldValue: 25, quantity: 1 }],
+  }), f.c.id);
+  f.db.prepare('INSERT INTO events(campaign_id, kind, payload) VALUES(?, ?, ?)').run(
+    f.c.id, 'legacy-payment', JSON.stringify({ reward: { gold: 25 }, description: 'Old gold payment.' }),
+  );
+  f.db.pragma('user_version = 21');
+  f.db.close();
+
+  const db = openDatabase(filename);
+  cleanup.push(() => { if (db.open) db.close(); });
+  const game = new Game(db, () => new PracticeGM());
+  const restored = game.snapshot(f.c.id, f.host.id);
+  expect(restored.members[0].state.currency).toBe(37);
+  expect(restored.members[0].state).not.toHaveProperty('gold');
+  expect(restored.scene.loot[0].currencyValue).toBe(25);
+  expect(restored.scene.currencyName).toBe('imperial crowns');
+  const event = db.prepare("SELECT payload FROM events WHERE kind = 'legacy-payment'").get() as { payload: string };
+  expect(JSON.parse(event.payload)).toEqual({ reward: { currency: 25 }, description: 'Old gold payment.' });
+  game.manageCharacter(f.c.id, member.playerId, { type: 'take', itemId: 'legacy-payment' });
+  expect(game.members(f.c.id)[0].state.currency).toBe(62);
 });

@@ -140,7 +140,7 @@ function failedMainWithPotion(): TurnAdjudication {
     changes: [],
     journal: [],
     location: null,
-    rewards: { xp: 0, gold: 0, reason: 'No progress.' },
+    rewards: { xp: 0, currency: 0, reason: 'No progress.' },
   };
 }
 

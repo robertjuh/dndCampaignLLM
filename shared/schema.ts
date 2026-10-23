@@ -1,8 +1,10 @@
 import type { FactionAffiliation, PublicFaction, ReputationReceipt } from './factions';
 import type { SceneFeature } from './scene-state';
 import { z } from 'zod';
+import type { WorldProgressionState } from './world-progression';
 import { ailments } from './ailments';
 import type { TurnResolution } from './turn-resolution';
+import type { Quest } from './quests';
 
 export const ailmentSchema = z.enum(ailments);
 
@@ -25,13 +27,25 @@ const discardHealingType = (input: unknown) => {
   return input;
 };
 export const abilitySchema = z.preprocess(
-  discardHealingType,
+  (input) => {
+    const value = discardHealingType(input);
+    // Saved combat Assist becomes Rally; utility Assist keeps its scoped check effect.
+    return value &&
+      typeof value === 'object' &&
+      'kind' in value &&
+      'effect' in value &&
+      value.kind === 'combat' &&
+      value.effect === 'assist'
+      ? { ...value, effect: 'rally' }
+      : value;
+  },
   z
     .object({
       name: z.string().min(1).max(80),
       description: z.string().min(1).max(500),
       kind: z.enum(['combat', 'utility']),
-      effect: z.enum(['strike', 'mend', 'assist', 'guard', 'cleanse']),
+      effect: z.enum(['strike', 'mend', 'restoration', 'barrier', 'rally', 'assist', 'guard', 'cleanse']),
+      targeting: z.enum(['single', 'multiple', 'area', 'party']).optional(),
       level: z.number().int().min(1).default(1),
       stat: statSchema.default('INT'),
       dice: z.enum(['1d4', '1d6', '1d8', '1d12', '2d4', '2d6', '2d8']).optional(),
@@ -41,6 +55,18 @@ export const abilitySchema = z.preprocess(
     })
     .strict()
     .superRefine((ability, ctx) => {
+      if (
+        (['multiple', 'area'].includes(ability.targeting ?? '') && ability.effect !== 'strike') ||
+        (ability.targeting === 'party' && !['mend', 'restoration'].includes(ability.effect))
+      )
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            'Multiple and area targeting require a strike; party targeting requires Mend or Restoration.',
+          path: ['targeting'],
+        });
+      if (ability.effect === 'strike' && ability.kind !== 'combat')
+        ctx.addIssue({ code: 'custom', message: 'Strikes must be combat abilities.', path: ['effect'] });
       if (ability.inflicts && (ability.kind !== 'combat' || ability.effect !== 'strike'))
         ctx.addIssue({
           code: 'custom',
@@ -60,16 +86,19 @@ export const abilitySchema = z.preprocess(
         ctx.addIssue({ code: 'custom', message: 'Cleanse must cure at least one ailment.', path: ['cures'] });
       if (new Set(ability.cures).size !== (ability.cures?.length ?? 0))
         ctx.addIssue({ code: 'custom', message: 'Cures must be distinct.', path: ['cures'] });
-      if (ability.dice && !['strike', 'mend'].includes(ability.effect))
+      if (ability.dice && !['strike', 'mend', 'restoration', 'barrier'].includes(ability.effect))
         ctx.addIssue({
           code: 'custom',
-          message: 'Only strike and mend abilities roll effect dice.',
+          message: 'Only strike, mend, restoration and barrier abilities roll effect dice.',
           path: ['dice'],
         });
-      if (ability.kind === 'utility' && !['assist', 'mend', 'cleanse'].includes(ability.effect))
+      if (
+        ability.kind === 'utility' &&
+        !['assist', 'mend', 'restoration', 'cleanse'].includes(ability.effect)
+      )
         ctx.addIssue({
           code: 'custom',
-          message: 'Utility abilities assist a relevant check, Mend, or Cleanse.',
+          message: 'Utility abilities assist a relevant check, Mend, Restore, or Cleanse.',
           path: ['effect'],
         });
     }),
@@ -97,6 +126,8 @@ export const itemSchema = z
     defense: z.number().int().min(0).max(3),
     initiativePenalty: z.number().int().min(-3).max(0),
     healing: z.number().int().min(0).max(12),
+    currencyValue: z.number().int().positive().max(10000).optional(),
+    sourceId: z.string().min(1).max(200).optional(),
     attackBonus: z.number().int().min(0).max(3).default(0),
     checkBonus: z.number().int().min(0).max(3).default(0),
     immunities: z.array(ailmentSchema).max(2).optional(),
@@ -109,6 +140,8 @@ export const itemSchema = z
   })
   .strict()
   .superRefine((item, ctx) => {
+    if (item.currencyValue && item.kind !== 'tool')
+      ctx.addIssue({ code: 'custom', message: 'Collectible currency must be a currency pouch.' });
     if (
       item.kind === 'tool' &&
       (item.scaling.length ||
@@ -272,6 +305,7 @@ export type AbilityChoiceStats = {
   }[];
 };
 export const campaignLanguageSchema = z.enum(['English', 'Nederlands']);
+export const currencyNameSchema = z.string().trim().min(1).max(80);
 export const campaignSchema = z
   .object({
     ruleset: z.literal('roguelike-v1').default('roguelike-v1'),
@@ -394,12 +428,13 @@ export const placeUpdateSchema = z
   .strict();
 export const outcomeSchema = z
   .object({
+    currencyName: currencyNameSchema.optional(),
     narration: z.string().min(1).max(maxNarrationLength),
     summary: z.string().min(1).max(2000),
     choices: z.array(z.string().min(1).max(500)).max(5),
     changes: z.array(changeSchema).max(30),
     xp: z.number().int().min(0).max(40).default(0),
-    gold: z.number().int().min(0).max(100).default(0),
+    currency: z.number().int().min(0).max(100).default(0),
     lethalWarning: z.string().max(1000).nullable().default(null),
     location: z
       .object({
@@ -478,7 +513,7 @@ export type CharacterState = {
   xp: number;
   pendingLevelUps: number;
   lastLevelUp?: string;
-  gold: number;
+  currency: number;
   inventory: (Item & { quantity: number })[];
   conditions: string[];
   conditionTurns: Record<string, number>;
@@ -494,11 +529,13 @@ export type CharacterState = {
   abilityUses?: Record<string, number>;
   abilityGuard?: number;
   abilityAssist?: number;
+  abilityBarrier?: { amount: number; sourceId: string };
 };
 export const enemySchema = z
   .object({
     id: z.string().min(1).max(100),
     name: z.string().min(1).max(100),
+    tags: z.array(z.string().trim().min(1).max(100)).max(12).optional(),
     tier: z.enum(['minor', 'normal', 'elite', 'boss']),
     hp: z.number().int().min(1).max(300),
     defense: z.number().int().min(5).max(30),
@@ -511,6 +548,9 @@ export const enemySchema = z
   })
   .strict();
 export type Enemy = z.infer<typeof enemySchema> & {
+  // Server-owned limits for freshly generated routine encounters; older profiles retain their mechanics.
+  onHitChance?: number;
+  maxAilmentsPerHit?: number;
   equipment?: Item[];
   maxHp: number;
   initiative: number;
@@ -534,10 +574,25 @@ export type NPCState = {
   locationId: string | null;
   status: 'alive' | 'withdrawn' | 'surrendered' | 'dead';
   allegiance: string | null;
+  factionId?: string | null;
+  followingMemberId?: string | null;
   fact: string;
   enemy?: Enemy;
 };
+export type InvestigationRecord = {
+  hookId: string;
+  answer: number;
+  signature: string;
+  success: boolean;
+  question: string;
+  text: string;
+  narrativeVersion?: 1;
+  lead: string;
+  leadLocationId: string;
+};
 export type Scene = {
+  currencyName?: string;
+  quests?: Record<string, Quest>;
   features?: Record<string, SceneFeature>;
   npcs?: Record<string, NPCState>;
   gathering?: { id: string; memberId: string; locationId: string };
@@ -553,13 +608,18 @@ export type Scene = {
   lethalWarning: string | null;
   // Stable, location-qualified discovery sources prevent replenishing the same searched cache.
   searchedLoot?: Record<string, string>;
-  searches?: Record<string, { information: string; rewardRolled: boolean }>;
+  searches?: Record<
+    string,
+    {
+      information: string;
+      rewardRolled: boolean;
+      investigation?: InvestigationRecord;
+      attempts?: Record<string, { information: string; investigation: InvestigationRecord }>;
+    }
+  >;
   environment?: EnvironmentalState;
   encounterRisk?: { danger: 'safe' | 'dangerous'; reason: string };
-  worldProgression?: {
-    version: 1;
-    places: Record<string, { stalledTurns: number; lastTurnId?: string; recentFacts: string[] }>;
-  };
+  worldProgression?: WorldProgressionState;
   places?: Record<string, PlaceState>;
   memberLocations?: Record<string, string>;
   worldMap?: WorldMap;
@@ -632,6 +692,11 @@ export const combatSchema = z
             reengage: z.boolean().optional(),
             abilityName: z.string().min(1).max(80).nullable().optional(),
             targetId: z.string().nullable(),
+            targetIds: z
+              .array(z.string())
+              .max(3)
+              .refine((ids) => new Set(ids).size === ids.length, 'Targets must be distinct.')
+              .optional(),
             allowRetarget: z.boolean().optional(),
             backupTargetId: z.string().nullable().optional(),
             mainItemId: z.string().nullable().default(null),
@@ -690,6 +755,7 @@ export type Roll = Check & {
   modifier: number;
   // Freeze passive check contributions with the dice; legacy rolls omit this evidence.
   equipmentBonuses?: { itemId: string; name: string; bonus: number }[];
+  assistanceBonus?: number;
   total: number;
   success: boolean;
   source: string;

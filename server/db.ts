@@ -22,7 +22,7 @@ export function openDatabase(filename: string) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 20) throw new Error('This database was created by a newer Gather version.');
+  if (version > 22) throw new Error('This database was created by a newer Gather version.');
   if (version === 0)
     db.transaction(() => {
       db.exec(`
@@ -488,6 +488,40 @@ export function openDatabase(filename: string) {
     db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS character_portraits (id TEXT PRIMARY KEY, image BLOB NOT NULL);
       PRAGMA user_version = 20;`);
+    })();
+  if (version < 21)
+    db.transaction(() => {
+      const columns = db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[];
+      if (!columns.some((column) => column.name === 'gm_memory'))
+        db.exec("ALTER TABLE campaigns ADD COLUMN gm_memory TEXT NOT NULL DEFAULT '[]';");
+      db.pragma('user_version = 21');
+    })();
+  if (version < 22)
+    db.transaction(() => {
+      // Rename saved balances, quest rewards and collectible values without changing story text.
+      const migrate = (input: unknown): unknown => {
+        if (Array.isArray(input)) return input.map(migrate);
+        if (!input || typeof input !== 'object') return input;
+        const value = input as Record<string, unknown>;
+        return Object.fromEntries(Object.entries(value)
+          .filter(([key]) => !(key === 'gold' && 'currency' in value) && !(key === 'goldValue' && 'currencyValue' in value))
+          .map(([key, entry]) => [key === 'gold' ? 'currency' : key === 'goldValue' ? 'currencyValue' : key, migrate(entry)]));
+      };
+      for (const [table, fields] of [
+        ['characters', ['sheet']],
+        ['members', ['sheet', 'state', 'replacement']],
+        ['campaigns', ['scene']],
+        ['turns', ['draft', 'result']],
+        ['events', ['payload']],
+      ] as const)
+        for (const row of db.prepare(`SELECT id, ${fields.join(', ')} FROM ${table}`).all() as Record<string, string>[])
+          for (const field of fields)
+            if (row[field]) {
+              const migrated = JSON.stringify(migrate(JSON.parse(row[field])));
+              if (migrated !== row[field])
+                db.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).run(migrated, row.id);
+            }
+      db.pragma('user_version = 22');
     })();
   // A model may have been interrupted after a roll. Keep its receipts and require a deliberate retry.
   db.prepare(

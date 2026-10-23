@@ -5,14 +5,43 @@ import type { Scene } from '../shared/schema';
 import { gatheringProgress } from '../shared/gathering';
 import { isInCombat } from '../shared/rules';
 
-export function gatheringOptions(context: GMContext) {
+export function gatheringOptions(
+  context: GMContext,
+  value?: TurnAdjudication,
+  resolve = (id: string) => id,
+  beforeEventId?: string,
+) {
+  const boundary = value?.events.find((event) => event.id === beforeEventId)?.sequence ?? Infinity;
+  const risks = new Map(
+    (value?.encounterRisks ?? [])
+      .filter(
+        (risk) => (value?.events.find((event) => event.id === risk.eventId)?.sequence ?? Infinity) < boundary,
+      )
+      .map((risk) => [resolve(risk.locationId), { danger: risk.danger, reason: risk.reason }]),
+  );
+  const scene = value
+    ? {
+        ...context.scene,
+        encounterRisk: risks.get(context.scene.location.id!) ?? context.scene.encounterRisk,
+        places: Object.fromEntries(
+          Object.entries(context.scene.places ?? {}).map(([id, place]) => [
+            id,
+            { ...place, encounterRisk: risks.get(id) ?? place.encounterRisk },
+          ]),
+        ),
+        worldMap: {
+          nodes: context.scene.worldMap?.nodes ?? {},
+          connections: turnConnections(context.scene, value, resolve, beforeEventId),
+        },
+      }
+    : context.scene;
   const introduced = Object.keys(context.receipts?.startCombatByLocation ?? {});
   if (context.receipts?.startCombat && !context.receipts.startCombatByLocation)
     introduced.push(context.scene.location.id!);
   return Object.fromEntries(
     context.turn.actions.flatMap((action) =>
       action.gathering
-        ? [[action.memberId, gatheringProgress(context.scene, action.gathering.route, introduced)]]
+        ? [[action.memberId, gatheringProgress(scene, action.gathering.route, introduced)]]
         : [],
     ),
   );
@@ -82,6 +111,52 @@ export function travelOptions(context: GMContext) {
         ];
       }),
   );
+}
+
+/** ponytail: guard explicit English/Dutch journeys; ambiguous movement stays with the GM. */
+export function submittedTravel(context: GMContext, memberId: string) {
+  const action = context.turn.actions.find((action) => action.memberId === memberId);
+  if (!action || action.passed || action.gathering) return;
+  const origin = memberScene(context.scene, memberId).location.id!;
+  const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const matches = (target: string, name: string) =>
+    target === name || target.startsWith(`${name} `);
+  const parts = action.text
+    .replace(/"[^"]*"|“[^”]*”/gu, ' ')
+    .split(/[.;!\n]|\b(?:and|while|but|en|terwijl|maar)\b/iu)
+    .filter((part) => !/\b(?:not|never|don't|don’t|won't|won’t|would|could|might|if|niet|nooit|als)\b/iu.test(part));
+  for (const raw of parts) {
+    if (/\b(?:stop following|stop travelling|stop traveling|abandon|cancel|stop met volgen|annuleer|verlaat de karavaan)\b/iu.test(raw)) continue;
+    const part = normalize(raw);
+    const joining = part.match(/\b(?:join|rejoin|follow|meet up with|volg|sluit me aan bij)\s+(.+)/u)?.[1];
+    if (joining) {
+      const companions = context.members.filter((member) =>
+        member.id !== memberId && member.active &&
+        [normalize(member.character.name), normalize(member.character.name).split(' ')[0]]
+          .some((name) => matches(joining, name)),
+      );
+      if (companions.length === 1) {
+        const companionId = companions[0].id;
+        const goalId = memberScene(context.scene, companionId).location.id!;
+        if (goalId !== origin) return { goalId, companionId };
+      }
+    }
+    const directed = part.match(/\b(?:go|walk|head|travel|move|return|ga|loop|reis|keer)\s+(?:(?:back|over|straight|terug)\s+)*(?:(?:to|towards?|naar|richting)\s+)?(.+)/u)?.[1];
+    if (directed) {
+      const target = directed.replace(/^(?:the|de|het)\s+/u, '');
+      const goals = Object.entries(knownLocations(context.scene)).filter(([, name]) => {
+        const full = normalize(name).replace(/^(?:the|de|het)\s+/u, '');
+        return matches(target, full) || matches(target, full.split(' ').at(-1)!);
+      });
+      if (goals.length === 1 && goals[0][0] !== origin) return { goalId: goals[0][0] };
+    }
+    if (
+      !/\b(?:same|current|dezelfde|huidige)\s+(?:area|place|room|location|plek|ruimte|locatie)\b/u.test(part) &&
+      (/\b(?:follow|following|volg|volgen)\s+(?:(?:the|a|my|moving|loaded|de|het|een)\s+){0,3}(?:cart|caravan|wagon|kar|wagen|karavaan)\b(?!['’]s|\s+\w+['’]s)/iu.test(raw) ||
+        (/\b(?:go|walk|head|travel|move|follow|ga|loop|reis|volg)\b/u.test(part) &&
+          /\b(?:next|new|another|volgende|nieuwe|andere)\s+(?:area|place|location|room|gebied|plek|locatie|ruimte)\b/u.test(part)))
+    ) return { onward: true as const };
+  }
 }
 
 /** Witnesses use the character's position at the event, not both ends of a later move. */
@@ -337,14 +412,7 @@ export function validateWorldMap(
     const from = memberScene(context.scene, member.id).location.id!;
     const position = value.memberLocations?.find((entry) => entry.memberId === member.id);
     const to = position ? resultingRef(position.locationId) : from;
-    const gatheringScene = {
-      ...context.scene,
-      worldMap: {
-        nodes: context.scene.worldMap?.nodes ?? {},
-        connections: turnConnections(context.scene, value, resultingRef, position?.movementEventId),
-      },
-    };
-    const progress = gatheringOptions({ ...context, scene: gatheringScene })[member.id];
+    const progress = gatheringOptions(context, value, resultingRef, position?.movementEventId)[member.id];
     if (
       submitted.gathering.route[0] !== from ||
       submitted.gathering.route.at(-1) !== submitted.gathering.locationId ||
@@ -434,6 +502,15 @@ export function locationReferences(context: GMContext) {
   );
 }
 
+export function actorReferences(context: GMContext) {
+  return Object.fromEntries(
+    context.members.map((member, index) => [
+      `actor:${index + 1}`,
+      { id: member.id, name: member.character.name },
+    ]),
+  );
+}
+
 /** Repair only unambiguous reference spelling and existing movement proofs, never outcomes. */
 export function normalizeAdjudicationReferences(context: GMContext, input: unknown): unknown {
   const record = (value: unknown): value is Record<string, unknown> =>
@@ -446,7 +523,22 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
   for (const [id, name] of Object.entries(known)) names.set(key(name), [...(names.get(key(name)) ?? []), id]);
   const declared = new Set<string>();
   const namedReferences = new Map<string, string>();
-  for (const list of [input.placeUpdates, record(input.mapUpdates) ? input.mapUpdates.locations : []])
+  const beats = input.version === 3 && Array.isArray(input.beats) ? input.beats : [];
+  const scenePlaces = beats
+    .filter(record)
+    .flatMap((beat) => [
+      ...(record(beat.place)
+        ? [{ ref: beat.kind === 'move' ? beat.to : beat.at, name: beat.place.name }]
+        : []),
+      ...(Array.isArray(beat.exits)
+        ? beat.exits.filter(record).map((exit) => ({ ref: exit.to, name: exit.name }))
+        : []),
+    ]);
+  for (const list of [
+    input.placeUpdates,
+    record(input.mapUpdates) ? input.mapUpdates.locations : [],
+    scenePlaces,
+  ])
     if (Array.isArray(list))
       for (const place of list)
         if (record(place) && typeof place.ref === 'string' && /^new:[a-zA-Z0-9_-]{1,80}$/.test(place.ref)) {
@@ -457,7 +549,8 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
               : record(place.location)
                 ? place.location.name
                 : undefined;
-          if (typeof name === 'string') names.set(key(name), [...(names.get(key(name)) ?? []), place.ref]);
+          if (typeof name === 'string')
+            names.set(key(name), [...new Set([...(names.get(key(name)) ?? []), place.ref])]);
         } else if (
           record(place) &&
           typeof place.ref === 'string' &&
@@ -474,14 +567,21 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
           if (matches?.length === 1 && Object.hasOwn(known, matches[0])) {
             const previous = namedReferences.get(place.ref);
             if (previous && previous !== matches[0])
-              throw new Error('Conflicting named location references.');
+              throw new Error(
+                `Conflicting named location references for ${JSON.stringify(place.ref)}: ${JSON.stringify(known[previous])} and ${JSON.stringify(known[matches[0]])}. Use their distinct supplied location aliases.`,
+              );
             namedReferences.set(place.ref, matches[0]);
           }
         }
   const problems: string[] = [];
   const resolve = (value: unknown, path: string): unknown => {
     if (typeof value !== 'string') return value;
-    if (['current', 'destination'].includes(value) || Object.hasOwn(known, value) || declared.has(value))
+    if (
+      value === 'current' ||
+      (value === 'destination' && input.version !== 3) ||
+      Object.hasOwn(known, value) ||
+      declared.has(value)
+    )
       return value;
     const alias = Object.hasOwn(references, value) ? references[value] : undefined;
     if (alias) return alias.id;
@@ -504,6 +604,55 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
   const list = (value: unknown, keys: string[], path: string) =>
     Array.isArray(value) ? value.map((item, index) => fields(item, keys, `${path}[${index}]`)) : value;
   const output = { ...input };
+  const questOperation = (operation: unknown, path: string): unknown => {
+    if (!record(operation) || !record(operation.quest)) return operation;
+    const quest = { ...operation.quest };
+    if (Array.isArray(quest.objectives)) quest.objectives = quest.objectives.map((objective, i) =>
+      record(objective) && record(objective.condition)
+        ? { ...objective, condition: fields(objective.condition, ['locationId'], `${path}.objectives[${i}].condition`) }
+        : objective);
+    if (record(quest.reward)) quest.reward = {
+      ...quest.reward,
+      ...(Array.isArray(quest.reward.access) ? { access: list(quest.reward.access, ['from', 'to'], `${path}.reward.access`) } : {}),
+    };
+    return { ...operation, quest };
+  };
+  if (input.version === 3) {
+    const actors = actorReferences(context);
+    output.beats = beats.map((beat, index) => {
+      if (!record(beat)) return beat;
+      const path = `beats[${index}]`;
+      const next = fields(beat, beat.kind === 'move' ? ['to'] : ['at'], path) as Record<string, unknown>;
+      if (typeof beat.actor === 'string') next.actor = actors[beat.actor]?.id ?? beat.actor;
+      if (record(beat.stop)) next.stop = fields(beat.stop, ['at'], `${path}.stop`);
+      if (Array.isArray(beat.quests)) next.quests = beat.quests.map((operation, i) => questOperation(operation, `${path}.quests[${i}].quest`));
+      if (Array.isArray(beat.factions))
+        next.factions = beat.factions.map((effect) =>
+          record(effect) && typeof effect.memberId === 'string'
+            ? { ...effect, memberId: actors[effect.memberId]?.id ?? effect.memberId }
+            : effect,
+        );
+      if (Array.isArray(beat.exits)) next.exits = list(beat.exits, ['to'], `${path}.exits`);
+      if (Array.isArray(beat.npcs)) next.npcs = list(beat.npcs, ['locationId'], `${path}.npcs`);
+      const companion = (item: unknown) =>
+        record(item) && typeof item.followingMemberId === 'string'
+          ? { ...item, followingMemberId: actors[item.followingMemberId]?.id ?? item.followingMemberId }
+          : item;
+      if (Array.isArray(next.npcs)) next.npcs = next.npcs.map(companion);
+      if (record(beat.person)) next.person = companion(beat.person);
+      if (Array.isArray(beat.features))
+        next.features = beat.features.map((feature, i) =>
+          record(feature) && record(feature.route)
+            ? { ...feature, route: fields(feature.route, ['from', 'to'], `${path}.features[${i}].route`) }
+            : feature,
+        );
+      return next;
+    });
+    if (Array.isArray(input.notes)) output.notes = (list(input.notes, ['locationId'], 'notes') as unknown[]).map((note) =>
+      record(note) && record(note.journey) && typeof note.journey.memberId === 'string'
+        ? { ...note, journey: { ...note.journey, memberId: actors[note.journey.memberId]?.id ?? note.journey.memberId } }
+        : note);
+  }
   for (const [name, keys] of Object.entries({
     memberLocations: ['locationId'],
     placeUpdates: ['ref'],
@@ -516,6 +665,8 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
   }))
     if (name in output) output[name] = list(output[name], keys, name);
   if ('sceneFocus' in output) output.sceneFocus = resolve(output.sceneFocus, 'sceneFocus');
+  if (Array.isArray(output.questUpdates)) output.questUpdates = output.questUpdates.map((update, i) =>
+    record(update) ? { ...update, operation: questOperation(update.operation, `questUpdates[${i}].operation.quest`) } : update);
   if (Array.isArray(output.featureUpdates))
     output.featureUpdates = output.featureUpdates.map((update, index) =>
       record(update) && record(update.route)
@@ -553,7 +704,7 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     });
   if (problems.length)
     throw new Error(
-      `Unknown location references: ${problems.join('; ')}. Reuse these supplied aliases or their exact IDs: ${JSON.stringify(references)}. Declare a genuinely new arrival in placeUpdates with a new: reference; never invent an ID for an existing place.`,
+      `Unknown location references: ${problems.join('; ')}. Reuse these supplied aliases or their exact IDs: ${JSON.stringify(input.version === 3 ? Object.fromEntries(Object.entries(references).map(([alias, place]) => [alias, place.name])) : references)}. ${input.version === 3 ? 'Declare a genuinely new arrival with new: and move.place, or a new preview with new: and exits[].name.' : 'Declare a genuinely new arrival in placeUpdates with a new: reference;'} never invent an ID for an existing place.`,
     );
   // A unique already-declared actor-owned movement proof is safe to reference automatically.
   if (Array.isArray(output.memberLocations) && Array.isArray(output.events)) {

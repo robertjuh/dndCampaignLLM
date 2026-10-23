@@ -29,6 +29,8 @@ import {
   spendAbility,
   tickConditions,
   unequip,
+  grantEquipmentPowers,
+  validateAbilityTheme,
 } from '../shared/rules';
 
 function gear(kind: Item['kind'], rarity: Item['rarity'] = 'Legendary', id: string = kind) {
@@ -99,6 +101,38 @@ function fixture() {
   });
   return { member, encounter, enemy, action };
 }
+
+it('keeps newly generated explosive weapon abilities thematic without rewriting saved powers', () => {
+  for (const draw of [1, 2]) {
+    const weapon = randomLoot(
+      'explosive-crossbow',
+      2,
+      () => draw,
+      {
+        name: 'Explosive crossbow',
+        kind: 'weapon',
+        scaling: ['DEX'],
+        hands: 2,
+        light: false,
+        description: 'Bolts burst into flame and shrapnel.',
+      },
+      'Legendary',
+    );
+    expect(['Burning', 'Bleeding']).toContain(weapon.grantedAbility!.inflicts);
+    expect(() => validateAbilityTheme(weapon.grantedAbility!)).not.toThrow();
+  }
+  const saved = gear('weapon');
+  saved.name = 'Explosive crossbow';
+  saved.onHit = { ailment: 'Weakened', chance: 25 };
+  const ability = structuredClone(saved.grantedAbility);
+  grantEquipmentPowers(saved, () => 1);
+  expect(saved.grantedAbility).toEqual(ability);
+  expect(saved.onHit.ailment).toBe('Weakened');
+  delete saved.grantedAbility;
+  grantEquipmentPowers(saved, () => 1);
+  expect(saved.grantedAbility!.inflicts).toBe('Burning');
+  expect(saved.onHit.ailment).toBe('Weakened');
+});
 
 it('guarantees rarity powers on all equippable kinds and keeps consumables separate', () => {
   for (const kind of [
@@ -405,7 +439,7 @@ it('routes a Legendary utility through the game and publishes its check and char
       abilityName: ability.name,
       stat: 'DEX',
       mode: 'advantage',
-      modifier: 4,
+      modifier: 6,
     });
     expect(result.members[0].state.abilityUses?.[abilityUseKey(ability)]).toBe(1);
     expect(draws.mock.calls).toHaveLength(before);
