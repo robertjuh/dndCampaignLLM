@@ -1,0 +1,325 @@
+{
+  "turnId": "0e6a093e-9a79-4178-b6bc-4131bb243e94",
+  "number": 20,
+  "members": [
+    {
+      "id": "a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+      "name": "Glerron",
+      "personality": "Nieuwsgierig en vindingrijk; Glerron bekijkt een obstakel graag vanuit meerdere hoeken voordat hij beslist hoe het open moet.",
+      "appearance": "Glerron draagt een met stof en steengruis bestoven expeditiejas, met koperen gespen en een gereedschapsriem vol zorgvuldig opgeborgen lonten en ontstekers. Een groene kristallen lamp aan zijn schouder werpt licht over zijn met rotsstof besmeurde gezicht; achter zijn bril glinsteren oplettende ogen. Zijn handschoenen zijn verstevigd voor het hanteren van explosieven en het beklimmen van ruwe tunnelwanden."
+    },
+    {
+      "id": "3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+      "name": "Kristalkwal",
+      "personality": "Nieuwsgierig en opmerkzaam; ze houdt van slimme plannen, theatrale spionageverhalen en sportieve uitdagingen. Ze blijft graag in beweging en observeert eerst voordat ze zich in een situatie mengt.",
+      "appearance": "Een zwevende kwal met een doorschijnende koepel van hoekige kristallen, waarin groene lichtaders zacht pulseren. Haar lange, lintvormige tentakels glinsteren als geslepen glas en bewegen door de lucht alsof ze door water glijdt."
+    }
+  ],
+  "scene": {
+    "location": {
+      "name": "Gang achter de bocht",
+      "atmosphere": "Een nauwe, vochtige gang daalt achter de bocht verder de diepte in. Water sijpelt langs donkere rotswanden; gruis en het levenloze lichaam van Rotsvreter liggen op de stenen. Een lage spleet loopt omlaag.",
+      "hazard": "Natte, gladde rots; de lage spleet is krap en de gang loopt verder buiten zicht.",
+      "id": "5537288f-d174-49c5-93c2-d85545eb2bb1"
+    },
+    "encounters": 2,
+    "encounter": {
+      "enemies": [
+        {
+          "id": "rock-reefer-1",
+          "name": "Rotsvreter",
+          "tier": "normal",
+          "hp": 0,
+          "defense": 12,
+          "attack": 3,
+          "damage": "1d8",
+          "description": "Een gedrongen rotswezen met brede kaken en groene kristalsplinters langs zijn rug; het steekt uit een spleet en blokkeert een deel van de nauwe doorgang.",
+          "tactic": "Verdedigt de spleet door naar de dichtstbijzijnde indringer te happen en blijft dicht bij de rotswand.",
+          "equipmentBlueprints": [
+            {
+              "name": "Rotsbijter",
+              "kind": "weapon",
+              "scaling": ["STR"],
+              "hands": 1,
+              "light": false,
+              "description": "Een ruwe stenen bijl met een zware, gekristalliseerde snede."
+            },
+            {
+              "name": "Kristalgruis",
+              "kind": "consumable",
+              "scaling": [],
+              "hands": 1,
+              "light": true,
+              "description": "Een handvol dofgroen kristalgruis, bruikbaar als kleine genezende voorraad."
+            }
+          ],
+          "onHit": null,
+          "equipment": [],
+          "maxHp": 12,
+          "initiative": 10,
+          "conditions": [],
+          "conditionTurns": {}
+        }
+      ],
+      "round": 5,
+      "initiative": [
+        {
+          "id": "3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+          "total": 19
+        },
+        {
+          "id": "rock-reefer-1",
+          "total": 10
+        },
+        {
+          "id": "a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+          "total": 7
+        }
+      ],
+      "victory": true,
+      "escaped": false
+    },
+    "loot": [],
+    "lethalWarning": null,
+    "memberLocations": {
+      "a2abd5a2-6c8a-4619-b0a9-8a4611c634ab": "5537288f-d174-49c5-93c2-d85545eb2bb1",
+      "3eaf083f-09b8-4c0f-98ff-e95b576b3170": "5537288f-d174-49c5-93c2-d85545eb2bb1"
+    },
+    "places": {},
+    "worldMap": {
+      "nodes": {
+        "5537288f-d174-49c5-93c2-d85545eb2bb1": {
+          "id": "5537288f-d174-49c5-93c2-d85545eb2bb1",
+          "name": "Gang achter de bocht",
+          "visited": true
+        }
+      },
+      "connections": []
+    },
+    "encounterRisk": {
+      "danger": "safe",
+      "reason": "The former defender is dead; the submitted passage remains uncertain."
+    }
+  },
+  "actions": [
+    {
+      "memberId": "3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+      "text": "Volg de spleet lager glip erdoorheen als een sidder aal",
+      "passed": false,
+      "submittedAt": "2026-10-19T22:18:11.973Z",
+      "acceptsLethalRisk": false
+    },
+    {
+      "memberId": "a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+      "text": "Ik ga naar de nieuwe doorgang",
+      "passed": false,
+      "submittedAt": "2026-10-19T22:18:28.865Z",
+      "acceptsLethalRisk": false
+    }
+  ],
+  "rolls": [
+    {
+      "memberId": "3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+      "stat": "DEX",
+      "dc": 10,
+      "reason": "Kristalkwal probeert de lage, natte spleet in te glijden; de krappe opening is zichtbaar, maar de gladde rots maakt de doorgang onzeker.",
+      "mode": "disadvantage",
+      "circumstances": {
+        "favorable": false,
+        "adverse": true
+      },
+      "lethal": false,
+      "abilityName": null,
+      "assistsMemberId": null,
+      "assistedBy": [],
+      "id": "7f07e2b0-2ed9-4aab-b674-c6d78fd0eddf",
+      "dice": [20, 20],
+      "modifier": 2,
+      "equipmentBonuses": [],
+      "total": 22,
+      "success": true,
+      "critical": "success",
+      "source": "Local OS cryptographic randomness"
+    },
+    {
+      "memberId": "a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+      "stat": "DEX",
+      "dc": 10,
+      "reason": "Glerron volgt de lage spleet die Kristalkwal zojuist is doorgegaan; de natte, nauwe passage blijft glad onder zijn laarzen.",
+      "mode": "normal",
+      "circumstances": {
+        "favorable": true,
+        "adverse": true
+      },
+      "lethal": false,
+      "abilityName": null,
+      "assistsMemberId": null,
+      "assistedBy": [],
+      "id": "9686921f-97d9-4650-a2a2-05d25c700acb",
+      "dice": [20],
+      "modifier": 1,
+      "equipmentBonuses": [],
+      "total": 21,
+      "success": true,
+      "critical": "success",
+      "source": "Local OS cryptographic randomness"
+    }
+  ],
+  "adjudication": {
+    "version": 2,
+    "turnId": "0e6a093e-9a79-4178-b6bc-4131bb243e94",
+    "actions": [
+      {
+        "actionId": "0e6a093e-9a79-4178-b6bc-4131bb243e94:action:3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+        "memberId": "3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+        "components": {
+          "main": {
+            "status": "success",
+            "basis": "check",
+            "fact": "Kristalkwal glijdt door de lage spleet naar een lager gangdeel.",
+            "reason": "Haar behendige beweging brengt haar langs de natte, nauwe rotsrand.",
+            "receiptRefs": ["roll:7f07e2b0-2ed9-4aab-b674-c6d78fd0eddf"],
+            "eventIds": ["check:7f07e2b0-2ed9-4aab-b674-c6d78fd0eddf", "move:kwal"]
+          },
+          "minor": null,
+          "movement": null
+        },
+        "intent": "action",
+        "search": null,
+        "travel": null
+      },
+      {
+        "actionId": "0e6a093e-9a79-4178-b6bc-4131bb243e94:action:a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+        "memberId": "a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+        "components": {
+          "main": {
+            "status": "success",
+            "basis": "check",
+            "fact": "Glerron volgt Kristalkwal door de lage spleet naar het lagere gangdeel.",
+            "reason": "Hij klautert behoedzaam over het natte gesteente en komt veilig achter haar aan.",
+            "receiptRefs": ["roll:9686921f-97d9-4650-a2a2-05d25c700acb"],
+            "eventIds": ["check:9686921f-97d9-4650-a2a2-05d25c700acb", "move:glerron"]
+          },
+          "minor": null,
+          "movement": null
+        },
+        "intent": "action",
+        "search": null,
+        "travel": null
+      }
+    ],
+    "events": [
+      {
+        "id": "move:kwal",
+        "sequence": 2,
+        "kind": "action",
+        "actionId": "0e6a093e-9a79-4178-b6bc-4131bb243e94:action:3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+        "phase": "main",
+        "result": "success",
+        "locationRef": "new:lagere-spleetgang",
+        "dependsOn": [
+          {
+            "eventId": "check:7f07e2b0-2ed9-4aab-b674-c6d78fd0eddf",
+            "requires": "success"
+          }
+        ],
+        "fact": "Kristalkwal glijdt door de spleet en bereikt het lagere gangdeel."
+      },
+      {
+        "id": "move:glerron",
+        "sequence": 3,
+        "kind": "action",
+        "actionId": "0e6a093e-9a79-4178-b6bc-4131bb243e94:action:a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+        "phase": "main",
+        "result": "success",
+        "locationRef": "new:lagere-spleetgang",
+        "dependsOn": [
+          {
+            "eventId": "check:9686921f-97d9-4650-a2a2-05d25c700acb",
+            "requires": "success"
+          }
+        ],
+        "fact": "Glerron volgt door de spleet en bereikt Kristalkwal in het lagere gangdeel."
+      },
+      {
+        "id": "arrival:lagere-spleetgang",
+        "sequence": 4,
+        "kind": "world",
+        "actionId": null,
+        "phase": null,
+        "result": null,
+        "locationRef": "new:lagere-spleetgang",
+        "fact": "Achter de spleet ligt een lage, vochtige nis waar de gang verder omlaag helt. Dunne waterstroompjes glanzen op de donkere vloer; een zwakke groene gloed pulseert verderop achter een rotsbocht. De nauwe spleet terug naar de Gang achter de bocht blijft open. Verder is geen uitgang vanaf hier zichtbaar."
+      }
+    ],
+    "changes": [],
+    "journal": [],
+    "location": null,
+    "sceneFocus": "new:lagere-spleetgang",
+    "memberLocations": [
+      {
+        "memberId": "3eaf083f-09b8-4c0f-98ff-e95b576b3170",
+        "locationId": "new:lagere-spleetgang",
+        "movementEventId": "move:kwal"
+      },
+      {
+        "memberId": "a2abd5a2-6c8a-4619-b0a9-8a4611c634ab",
+        "locationId": "new:lagere-spleetgang",
+        "movementEventId": "move:glerron"
+      }
+    ],
+    "rewards": {
+      "xp": 0,
+      "currency": 0,
+      "reason": "De geslaagde doorgang is voortgang, maar levert op zichzelf geen XP op."
+    },
+    "placeUpdates": [
+      {
+        "ref": "new:lagere-spleetgang",
+        "location": {
+          "name": "Lage spleetgang",
+          "atmosphere": "Een lage, vochtige nis achter de spleet; water glanst op de donkere vloer en een zwakke groene gloed pulseert voorbij een rotsbocht.",
+          "hazard": "De vloer is nat en glad; de gang helt verder omlaag en verdwijnt buiten zicht."
+        }
+      }
+    ],
+    "mapUpdates": {
+      "locations": [
+        {
+          "ref": "new:lagere-spleetgang",
+          "name": "Lage spleetgang"
+        }
+      ],
+      "connections": [
+        {
+          "from": "place:1",
+          "to": "new:lagere-spleetgang",
+          "label": "Nauwe spleet terug naar de Gang achter de bocht",
+          "blocked": false,
+          "bidirectional": true,
+          "eventId": "arrival:lagere-spleetgang"
+        }
+      ]
+    },
+    "separations": [],
+    "factionEffects": [],
+    "arrivals": [
+      {
+        "locationId": "new:lagere-spleetgang",
+        "eventId": "arrival:lagere-spleetgang"
+      }
+    ],
+    "worldProgress": [],
+    "encounterRisks": [
+      {
+        "locationId": "new:lagere-spleetgang",
+        "danger": "dangerous",
+        "reason": "De onbekende, natte gang helt verder omlaag en de zwakke gloed ligt voorbij een rotsbocht.",
+        "eventId": "arrival:lagere-spleetgang"
+      }
+    ],
+    "pickups": [],
+    "npcUpdates": [],
+    "featureUpdates": []
+  }
+}

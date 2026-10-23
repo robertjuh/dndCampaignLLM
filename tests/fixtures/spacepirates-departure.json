@@ -1,0 +1,288 @@
+{
+  "turnId": "37e8535b-72d4-4234-836b-3748dda7e09d",
+  "actorId": "b1bffff0-9675-4aea-8a7a-c2eeb2aabe8c",
+  "passengerId": "20003122-288a-4ad1-8636-c774f4f70ffb",
+  "bridgeId": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+  "deckId": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f",
+  "dockId": "92b0718e-e4bd-4398-9382-df10a3c8afce",
+  "scene": {
+    "location": {
+      "name": "Stuurhut van De Scheve Lepel",
+      "atmosphere": "Koelmotoren brommen achter de panelen; zoutnevel tekent strepen op de voorruit boven de stuurconsole.",
+      "hazard": "Geen directe dreiging zichtbaar in de stuurhut; het dek daarbuiten blijft vanaf de kade zichtbaar.",
+      "id": "462340c6-4fa6-477e-9017-bf587f6d2ff6"
+    },
+    "encounterRisk": {
+      "danger": "safe",
+      "reason": "In de stuurhut is geen directe dreiging zichtbaar; het bestaande toezicht kijkt uit op het dek."
+    },
+    "encounters": 0,
+    "encounter": null,
+    "loot": [],
+    "places": {
+      "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f": {
+        "location": {
+          "name": "Dek van De Scheve Lepel",
+          "atmosphere": "Koelmotoren trillen onder het dek; zoutnevel trekt langs vastgesjorde koelwagens en de open laadgang. De kapitein ligt dood op het dek.",
+          "hazard": "De confrontatie met de kapitein is voorbij, maar het dek blijft vanaf de kade zichtbaar voor toezichthouders.",
+          "id": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f"
+        },
+        "encounterRisk": {
+          "danger": "dangerous",
+          "reason": "De kapitein is dood, maar toezichthouders kunnen het dek vanaf de kade nog zien na de gewelddadige confrontatie."
+        },
+        "encounter": null,
+        "loot": []
+      },
+      "92b0718e-e4bd-4398-9382-df10a3c8afce": {
+        "location": {
+          "name": "Laadkade van Salsaria",
+          "atmosphere": "Zoutnevel en warme koelmotors hangen rond de aangemeerde De Scheve Lepel; hijskranen ratelen boven deinende pontons.",
+          "hazard": "Rijdend laadverkeer en zichtbaar toezicht bij de schepen; bij de open laadgang ligt de gedode lader.",
+          "id": "92b0718e-e4bd-4398-9382-df10a3c8afce"
+        },
+        "encounterRisk": {
+          "danger": "dangerous",
+          "reason": "Bij de open laadgang ligt de gedode lader; de kapitein heeft het lichaam gezien. Het laadverkeer rijdt door en vanaf de ligplaatsen is zichtbaar toezicht op de schepen."
+        },
+        "encounter": null,
+        "loot": []
+      }
+    },
+    "memberLocations": {
+      "b1bffff0-9675-4aea-8a7a-c2eeb2aabe8c": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+      "20003122-288a-4ad1-8636-c774f4f70ffb": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f"
+    },
+    "worldMap": {
+      "nodes": {
+        "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f": {
+          "id": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f",
+          "name": "Dek van De Scheve Lepel",
+          "visited": true
+        },
+        "462340c6-4fa6-477e-9017-bf587f6d2ff6": {
+          "id": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+          "name": "Stuurhut van De Scheve Lepel",
+          "visited": true
+        },
+        "92b0718e-e4bd-4398-9382-df10a3c8afce": {
+          "id": "92b0718e-e4bd-4398-9382-df10a3c8afce",
+          "name": "Laadkade van Salsaria",
+          "visited": true
+        }
+      },
+      "connections": [
+        {
+          "from": "92b0718e-e4bd-4398-9382-df10a3c8afce",
+          "to": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f",
+          "label": "Open laadgang",
+          "blocked": false,
+          "bidirectional": true
+        },
+        {
+          "from": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f",
+          "to": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+          "label": "Vrije doorgang naar de stuurhut",
+          "blocked": false,
+          "bidirectional": true
+        }
+      ]
+    },
+    "worldProgression": {
+      "version": 1,
+      "places": {
+        "462340c6-4fa6-477e-9017-bf587f6d2ff6": {
+          "stalledTurns": 1,
+          "lastTurnId": "b5da208d-959a-4986-b9d7-861b4da3b617",
+          "recentFacts": [
+            "in de stuurhut staan een stuurconsole en een navigatiescherm het scherm toont de scheve lepel als aangemeerd schip en de ijzerkeel als ingevoerde bestemming naast de twaalf koelcontainers wacht een aftekenveld op bevestiging vanuit de stuurhut de open doorgang leidt terug naar het dek waar rustbeard achterblijft hier is geen directe dreiging zichtbaar de bediening en de scheepsregistratie zijn nog niet onderzocht ragmans binnenkomst draagt het schip niet aan hem over"
+          ]
+        }
+      }
+    }
+  },
+  "journal": [
+    {
+      "kind": "fact",
+      "name": "De Scheve Lepel",
+      "detail": "De Scheve Lepel is een geregistreerd vrachtschip aan de laadkade; zijn open laadgang sluit aan op het koelcontainerspoor. De kapitein bood na Ragmans bedreiging aan over vrachtvervoer te praten, niet om zijn schip af te staan. Rustbeards aanbod van een winstaandeel overtuigde hem niet; de ampullen liggen nog in de laadnis. Ragman doodde de lader bij de laadgang in combat. De lader ligt naast de koelwagen en zijn achtergelaten uitrusting was daar beschikbaar. De kapitein zag het lichaam. Het schip bleef aangemeerd en is niet overgedragen; laadverkeer en toezicht bleven zichtbaar. De loopbrug naar de laadnis en de kadegang naar de scheepsregistratiebalie zijn begaanbaar. Rustbeard en Ragman zijn via de open laadgang op het dek gekomen, waar vastgesjorde koelwagens staan en een vrije doorgang naar de stuurhut loopt. De kapitein trekt zich richting de open stuurhutdoorgang terug en roept door de boordmicrofoon: ‘Iedereen van mijn dek af, nu!’ De laadgang blijft open; op de kade kijken toezichthouders naar het schip.\nDe kapitein bezwijkt op het dek aan Burning van de eerdere treffer, niet aan Ragmans laatste schot. De confrontatie is voorbij. Zijn Laserpistool van de kapitein blijft hier als loot liggen. De stuurhutdoorgang en de laadgang blijven open; vanaf de kade blijft het dek zichtbaar voor toezichthouders. De Scheve Lepel ligt nog aangemeerd en is niet overgedragen."
+    }
+  ],
+  "rolls": [
+    {
+      "memberId": "b1bffff0-9675-4aea-8a7a-c2eeb2aabe8c",
+      "stat": "DEX",
+      "dc": 10,
+      "reason": "Ragman probeert De Scheve Lepel vanaf de klaargezette stuurconsole tussen het zichtbare laadverkeer van de kade los te manoeuvreren; de koelmotoren zijn bereikbaar, maar hij heeft de scheepsbediening nog niet tijdens een afvaart beproefd.",
+      "mode": "normal",
+      "circumstances": {
+        "favorable": false,
+        "adverse": false
+      },
+      "lethal": false,
+      "abilityName": null,
+      "assistsMemberId": null,
+      "assistedBy": [],
+      "id": "eb45e89d-5fda-482b-a631-ac84fdfac8d5",
+      "dice": [18],
+      "modifier": 2,
+      "equipmentBonuses": [],
+      "total": 20,
+      "success": true,
+      "source": "Local OS cryptographic randomness"
+    }
+  ],
+  "adjudication": {
+    "version": 2,
+    "turnId": "37e8535b-72d4-4234-836b-3748dda7e09d",
+    "actions": [
+      {
+        "actionId": "37e8535b-72d4-4234-836b-3748dda7e09d:action:b1bffff0-9675-4aea-8a7a-c2eeb2aabe8c",
+        "memberId": "b1bffff0-9675-4aea-8a7a-c2eeb2aabe8c",
+        "components": {
+          "main": {
+            "status": "success",
+            "basis": "check",
+            "reason": "Ragman manoeuvreert het schip los van de kade; de geslaagde DEX check bepaalt de afvaart tussen het laadverkeer.",
+            "receiptRefs": ["roll:eb45e89d-5fda-482b-a631-ac84fdfac8d5"],
+            "eventIds": ["check:eb45e89d-5fda-482b-a631-ac84fdfac8d5", "afvaart-1"]
+          },
+          "minor": null,
+          "movement": null
+        },
+        "intent": "action",
+        "search": null,
+        "travel": null
+      }
+    ],
+    "events": [
+      {
+        "id": "afvaart-1",
+        "sequence": 1,
+        "kind": "action",
+        "actionId": "37e8535b-72d4-4234-836b-3748dda7e09d:action:b1bffff0-9675-4aea-8a7a-c2eeb2aabe8c",
+        "memberId": "b1bffff0-9675-4aea-8a7a-c2eeb2aabe8c",
+        "phase": "main",
+        "result": "success",
+        "locationRef": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+        "effect": "movement",
+        "fact": "Ragman stuurt De Scheve Lepel tussen het laadverkeer los van de kade. Het schip is onderweg door de haven van Salsaria, nog niet bij de IJzerkeel.",
+        "dependsOn": [
+          {
+            "eventId": "check:eb45e89d-5fda-482b-a631-ac84fdfac8d5",
+            "requires": "success"
+          }
+        ]
+      },
+      {
+        "id": "afvaart-2",
+        "sequence": 2,
+        "kind": "world",
+        "actionId": null,
+        "phase": null,
+        "result": null,
+        "locationRef": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+        "fact": "Door de voorruit ziet Ragman de laadkade achter het varende schip terugvallen. De open uitvaartgeul voert weg van de ligplaatsen; de IJzerkeel blijft de ingevoerde bestemming. Het lege aftekenveld bevestigt nog altijd geen eigendom of vervoerder.",
+        "dependsOn": [
+          {
+            "eventId": "afvaart-1",
+            "requires": "success"
+          }
+        ]
+      },
+      {
+        "id": "afvaart-3",
+        "sequence": 3,
+        "kind": "world",
+        "actionId": null,
+        "phase": null,
+        "result": null,
+        "locationRef": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f",
+        "fact": "De laadgang maakt geen verbinding meer met de kade nu De Scheve Lepel wegvaart. Rustbeard blijft op het dek; het dek en de stuurhut blijven onderling bereikbaar.",
+        "dependsOn": [
+          {
+            "eventId": "afvaart-1",
+            "requires": "success"
+          }
+        ]
+      }
+    ],
+    "changes": [],
+    "journal": [
+      {
+        "kind": "fact",
+        "name": "De Scheve Lepel",
+        "detail": "Ragman heeft De Scheve Lepel vanaf de klaargezette stuurconsole tussen het laadverkeer los van de kade gemanoeuvreerd. Het schip vaart door de haven van Salsaria, met de IJzerkeel nog als ingevoerde bestemming; het is daar niet aangekomen. De laadgang sluit niet langer op de kade aan. Rustbeard blijft op het dek en de doorgang naar de stuurhut is vrij. Het aftekenveld voor de twaalf koelcontainers is leeg; de afvaart draagt het schip niet aan Ragman over."
+      }
+    ],
+    "location": null,
+    "sceneFocus": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+    "memberLocations": [],
+    "rewards": {
+      "xp": 20,
+      "currency": 0,
+      "reason": "Ragman krijgt De Scheve Lepel daadwerkelijk los van de kade en brengt de reis naar de IJzerkeel op gang."
+    },
+    "placeUpdates": [
+      {
+        "ref": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+        "location": {
+          "name": "Stuurhut van De Scheve Lepel",
+          "atmosphere": "Koelmotoren brommen achter de panelen; door de zoutbestreepte voorruit glijdt de laadkade achter het varende schip weg.",
+          "hazard": "Geen directe dreiging in de stuurhut; vanuit de haven blijft de afvaart zichtbaar."
+        }
+      },
+      {
+        "ref": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f",
+        "location": {
+          "name": "Dek van De Scheve Lepel",
+          "atmosphere": "Koelmotoren trillen onder het varende dek; zoutnevel trekt langs de vastgesjorde koelwagens en de open laadgang.",
+          "hazard": "De laadgang sluit niet meer op de kade aan; de afvaart blijft vanuit de haven zichtbaar."
+        }
+      }
+    ],
+    "mapUpdates": {
+      "locations": [
+        {
+          "ref": "new:uitvaartgeul-salsaria",
+          "name": "Uitvaartgeul van Salsaria"
+        }
+      ],
+      "connections": [
+        {
+          "from": "92b0718e-e4bd-4398-9382-df10a3c8afce",
+          "to": "479a8a9a-72d7-43d9-bd8f-d05cecf2cd5f",
+          "label": "Laadgang los van de kade",
+          "blocked": true,
+          "bidirectional": true,
+          "eventId": "afvaart-3"
+        },
+        {
+          "from": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+          "to": "new:uitvaartgeul-salsaria",
+          "label": "Open vaarroute door de uitvaartgeul",
+          "blocked": false,
+          "bidirectional": true,
+          "eventId": "afvaart-2"
+        }
+      ]
+    },
+    "separations": [],
+    "factionEffects": [],
+    "arrivals": [],
+    "worldProgress": [
+      {
+        "locationId": "462340c6-4fa6-477e-9017-bf587f6d2ff6",
+        "eventId": "afvaart-2",
+        "kind": "resolution",
+        "thread": "fact:De Scheve Lepel",
+        "journal": {
+          "kind": "fact",
+          "name": "De Scheve Lepel"
+        }
+      }
+    ],
+    "encounterRisks": [],
+    "pickups": []
+  }
+}
