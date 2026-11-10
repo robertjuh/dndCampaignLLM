@@ -65,7 +65,13 @@ export function requestedConsumable(
   suggestedId?: string | null,
 ): CharacterState['inventory'][number] | undefined {
   if (action.passed || action.supportAction || action.gathering) return undefined;
-  const text = resourceText(action.text);
+  let text = resourceText(action.text);
+  const ability = requestedAbility(member.character, action, undefined, null, member.state);
+  if (ability)
+    text = text.replace(
+      new RegExp(`(?:^|\\W)${ability.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|\\W)`, 'gi'),
+      ' ',
+    );
   if (
     !/\b(?:use(?:d)?|using|drink\w*|drank|consume\w*|take|apply|heal(?:ed|s)?|revive(?:d|s)?|gebruik\w*|neem|genees(?:t|de)?)\b/i.test(
       text,
@@ -80,14 +86,7 @@ export function requestedConsumable(
       text,
     );
   const healing = /\b(?:heal\w*|revive|genees\w*)\b/i.test(text);
-  if (
-    !concrete &&
-    (!healing ||
-      action.abilityName ||
-      requestsAbility(text) ||
-      requestedAbility(member.character, action, 'combat', null, member.state) ||
-      requestedAbility(member.character, action, 'utility', null, member.state))
-  )
+  if (!concrete && (!healing || action.abilityName || requestsAbility(text) || ability))
     return undefined;
   return items.find((item) => item.id === suggestedId) ?? items.find((item) => item.healing > 0);
 }

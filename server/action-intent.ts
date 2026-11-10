@@ -1,8 +1,8 @@
 import type { GMContext } from './game';
-import { requestsPickup } from './turn-pickups';
+import { requestsPickup, unquotedActionText } from './turn-pickups';
 
 export type ActionObligation = {
-  kind: 'search' | 'inspect' | 'talk' | 'collect' | 'use';
+  kind: 'search' | 'inspect' | 'talk' | 'collect' | 'use' | 'overcome';
   /** The player's actual words, for a correction that names the omitted action. */
   evidence: string;
   index: number;
@@ -11,7 +11,7 @@ export type ActionObligation = {
 };
 
 const verbs =
-  /\b(search(?:ing)?|investigat(?:e|ing)|doorzoek(?:en)?|onderzoek(?:en)?|zoek(?:en)?|inspect(?:ing)?|examin(?:e|ing)|inspecteer|bekijk(?:en)?|ask(?:ing)?|question(?:ing)?|talk(?:ing)?\s+(?:to|with)|speak(?:ing)?\s+(?:to|with)|meet(?:ing)?\s+(?:with\s+)?|vraag|ondervraag|praat\s+(?:met|tegen)|spreek\s+met|use|using|gebruik|take|collect|grab|pocket|pick\s+(?:\w+\s+){0,3}up|neem|pak|verzamel|raap)\b/giu;
+  /\b(search(?:ing)?|investigat(?:e|ing)|doorzoek(?:en)?|onderzoek(?:en)?|zoek(?:en)?|inspect(?:ing)?|examin(?:e|ing)|inspecteer|bekijk(?:en)?|ask(?:ing)?|question(?:ing)?|talk(?:ing)?\s+(?:to|with)|speak(?:ing)?\s+(?:to|with)|meet(?:ing)?\s+(?:with\s+)?|vraag|ondervraag|praat\s+(?:met|tegen)|spreek\s+met|hack(?:ing|en)?|bypass(?:ing)?|unlock(?:ing)?|breach(?:ing)?|(?:get|gain)\s+access\b|omzeil(?:en)?|ontgrendel(?:en)?|use|using|gebruik|take|collect|grab|pocket|pick\s+(?:\w+\s+){0,3}up|neem|pak|verzamel|raap)\b/giu;
 const nonAction =
   /\b(?:not|never|don['’]t|won['’]t|can['’]t|cannot|would|could|might|if|unless|niet|nooit|geen|zou|zouden|misschien|als|tenzij)\b/iu;
 const travel =
@@ -24,10 +24,7 @@ const travel =
  */
 export function actionObligations(text: string): ActionObligation[] {
   // Preserve offsets while excluding quoted instructions and quoted speech.
-  const unquoted = text.replace(
-    /"[^"\n]*"|“[^”\n]*”|(?<![\p{L}\p{N}])'(?:[^'\n]|(?<=[\p{L}\p{N}])'(?=[\p{L}\p{N}]))*'(?![\p{L}\p{N}])/gu,
-    (quote) => ' '.repeat(quote.length),
-  );
+  const unquoted = unquotedActionText(text);
   const obligations: ActionObligation[] = [];
   let travelled = false;
   // Sentence/contrast boundaries reset negation. Conjoined verbs keep their own
@@ -72,9 +69,11 @@ export function actionObligations(text: string): ActionObligation[] {
             ? 'inspect'
             : /^(?:ask|question|talk|speak|meet|vraag|ondervraag|praat|spreek)/u.test(verb)
               ? 'talk'
-              : /^(?:use|using|gebruik)$/u.test(verb)
-                ? 'use'
-                : 'collect';
+              : /^(?:hack|bypass|unlock|breach|get\s+access|gain\s+access|omzeil|ontgrendel)/u.test(verb)
+                ? 'overcome'
+                : /^(?:use|using|gebruik)$/u.test(verb)
+                  ? 'use'
+                  : 'collect';
         if (kind !== 'talk' && /\b(?:niet|nooit|geen)\b/iu.test(after)) continue;
         // Reuse the inventory consent guard, including its movement/observation idioms.
         if (kind === 'collect' && !requestsPickup(raw.slice(match.index))) continue;

@@ -1,3 +1,4 @@
+import { passageConnections } from '../shared/structures';
 import { isDeepStrictEqual } from 'node:util';
 import type { GMContext, CombatReceipt } from './game';
 import { enemySchema, npcReactionSchema, type NPCReaction } from '../shared/schema';
@@ -15,7 +16,7 @@ const same = (a: string, b: string) =>
 export function nearbyNPCFacts(context: GMContext) {
   const here = context.scene.location.id!;
   const neighbours = new Set(
-    (context.scene.worldMap?.connections ?? []).flatMap((edge) =>
+    passageConnections(context.scene).flatMap((edge) =>
       edge.blocked
         ? []
         : edge.to === here
@@ -162,7 +163,7 @@ export function validateNPCReactions(
     if (
       origin !== here &&
       (!context.scene.worldMap?.nodes[origin]?.visited ||
-        !context.scene.worldMap?.connections.some(
+        !passageConnections(context.scene).some(
           (edge) =>
             !edge.blocked &&
             ((edge.from === origin && edge.to === here) ||

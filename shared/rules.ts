@@ -1416,11 +1416,10 @@ export function runCombat(
             : roll(available.length, `${member.character.name}: random enemy`, member.id, action.stat) - 1
         ];
     }
-    const label = offhand ? 'off-hand attack' : (ability?.name ?? 'attack');
-    if (
-      (original && initiallyAvailableEnemies.has(original.id)) ||
-      (action.targetId === null && initiallyAvailableEnemies.size > 0)
-    ) {
+    const label = offhand
+      ? 'off-hand attack'
+      : (ability?.name ?? (action.main === 'creative' ? 'maneuver' : 'attack'));
+    if (original || action.targetId === null) {
       const remaining = encounter.enemies.filter(
         (enemy) => enemy.hp > 0 && !enemy.withdrawn && !excluded.has(enemy.id),
       );
@@ -1430,10 +1429,10 @@ export function runCombat(
         );
         return;
       }
-      if (original && action.allowRetarget !== false) {
+      if (original && (original.hp <= 0 || action.allowRetarget !== false)) {
         const target = remaining.find((enemy) => enemy.id === action.backupTargetId) ?? remaining[0];
         record(
-          `${member.character.name} redirects their ${label} from ${original.name} to ${target.name} because ${original.name} ${original.hp <= 0 ? 'fell' : 'withdrew'} earlier this round.`,
+          `${member.character.name} redirects their ${label} from ${original.name} to ${target.name} because ${original.name} ${original.hp <= 0 ? 'fell' : 'withdrew'}${initiallyAvailableEnemies.has(original.id) ? ' earlier this round' : ''}.`,
         );
         return target;
       }
@@ -1935,12 +1934,19 @@ export function runCombat(
         const target = attackTarget(member, action);
         if (target) attack(member, target, false, action.weaponSlot);
       } else {
-        const target = encounter.enemies.find((e) => e.id === action.targetId && e.hp > 0 && !e.withdrawn);
+        const original = encounter.enemies.find((enemy) => enemy.id === action.targetId);
+        const target =
+          original && original.hp <= 0
+            ? attackTarget(member, action)
+            : original && !original.withdrawn
+              ? original
+              : undefined;
         const proposed = action.environment;
         const source = proposed ? environment.sources[proposed.sourceId] : undefined;
         const profile = source?.profile ?? proposed;
         if (!target) {
-          blocked(`${member.character.name}'s target is no longer available; the main action is spent.`);
+          if (!original || original.hp > 0)
+            blocked(`${member.character.name}'s target is no longer available; the main action is spent.`);
         } else if (profile && source && !source.ready) {
           blocked(
             profile.consumption === 'reload'

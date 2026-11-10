@@ -1,9 +1,11 @@
+import { passageConnections } from '../shared/structures';
 import type { GMContext } from './game';
 import type { Enemy, Encounter, NPCState, Scene } from '../shared/schema';
 import type { TurnAdjudication, ResolvedEvent } from '../shared/turn-resolution';
 import { combatActive, memberScene } from '../shared/locations';
-import { npcNameKey, npcNames } from '../shared/npcs';
+import { ensureUniqueEnemyNames, npcNameKey, npcNames } from '../shared/npcs';
 import { gatheringOptions, memberLocationAtEvent, turnConnections } from './world-map';
+import { structureSceneAtEvent, witnessedLocations } from './structures';
 
 /** Backfill old saves from actual encounters; never infer life or location from old prose. */
 export function knownNPCs(scene: Scene): Record<string, NPCState> {
@@ -110,7 +112,7 @@ export function persistentEnemy(
     !(
       npc.locationId &&
       context.scene.worldMap?.nodes[npc.locationId]?.visited &&
-      context.scene.worldMap.connections.some(
+      passageConnections(context.scene).some(
         (edge) =>
           !edge.blocked &&
           ((edge.from === npc.locationId && edge.to === origin) ||
@@ -148,6 +150,7 @@ export function rememberNPCReaction(
 
 /** Only engine execution can overwrite saved HP, equipment, conditions or death. */
 export function saveNPCEncounter(scene: Scene, locationId: string, encounter: Encounter) {
+  ensureUniqueEnemyNames(encounter.enemies);
   scene.npcs ??= knownNPCs(scene);
   for (const enemy of encounter.enemies) {
     if (enemy.withdrawn && scene.npcs[enemy.id] && scene.npcs[enemy.id].locationId !== locationId) continue;
@@ -291,7 +294,8 @@ export function validateNPCUpdates(
         (member) =>
           member.active &&
           member.state.hp > 0 &&
-          memberLocationAtEvent(context, value, member.id, event.id, resolve) === eventLocation,
+          witnessedLocations(structureSceneAtEvent(context, value, resolve, event.id),
+            memberLocationAtEvent(context, value, member.id, event.id, resolve)).includes(eventLocation),
       )
     )
       throw new Error('NPC state needs an observed, successful or informational event at its stated place.');

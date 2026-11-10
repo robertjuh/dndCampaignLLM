@@ -1,3 +1,4 @@
+import { locationConnections } from '../shared/structures';
 import { createHash } from 'node:crypto';
 import type { GMContext } from './game';
 import type { Item, Member, Scene } from '../shared/schema';
@@ -57,7 +58,7 @@ function consents(text: string, type: 'accept' | 'decline' | 'abandon' | 'turnIn
 function reachable(scene: Scene, origin: string, target: string) {
   const reached = new Set([origin]);
   for (const at of reached)
-    for (const edge of scene.worldMap?.connections ?? []) {
+    for (const edge of locationConnections(scene)) {
       if (edge.blocked) continue;
       if (edge.from === at) reached.add(edge.to);
       if (edge.bidirectional && edge.to === at) reached.add(edge.from);
@@ -299,7 +300,7 @@ export function planQuests(context: GMContext, value: TurnAdjudication): QuestPl
           throw new Error('Prepare a reachable way to complete and turn in this request before offering it.');
         for (const access of definition.reward.access)
           if (
-            !scene.worldMap?.connections.some(
+            !locationConnections(scene).some(
               (edge) =>
                 (edge.from === access.from && edge.to === access.to) ||
                 (edge.bidirectional && edge.from === access.to && edge.to === access.from),

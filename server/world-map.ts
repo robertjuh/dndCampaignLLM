@@ -4,6 +4,8 @@ import { memberScene, knownLocations } from '../shared/locations';
 import type { Scene } from '../shared/schema';
 import { gatheringProgress } from '../shared/gathering';
 import { isInCombat } from '../shared/rules';
+import { containingStructure, locationConnections, passageConnections } from '../shared/structures';
+import { structureSceneAtEvent, witnessedLocations } from './structures';
 
 export function gatheringOptions(
   context: GMContext,
@@ -67,7 +69,7 @@ export function travelNextHop(
     let found: string | null = null;
     for (let index = 0; index < queue.length; index++) {
       const current = queue[index];
-      for (const edge of scene.worldMap?.connections ?? []) {
+      for (const edge of passageConnections(scene)) {
         if (edge.blocked) continue;
         const next =
           edge.from === current.id
@@ -190,6 +192,7 @@ export function turnConnections(
   value: TurnAdjudication,
   resolve: (ref: string) => string,
   untilEventId?: string,
+  includeTransport = false,
 ) {
   const cutoff = untilEventId
     ? (value.events.find((event) => event.id === untilEventId)?.sequence ?? Infinity)
@@ -206,9 +209,13 @@ export function turnConnections(
       to: resolve(edge.to),
     }));
   const pairs = new Set(updates.map((edge) => [edge.from, edge.to].sort().join('|')));
-  return (scene.worldMap?.connections ?? [])
+  const connections = (scene.worldMap?.connections ?? [])
     .filter((edge) => !pairs.has([edge.from, edge.to].sort().join('|')))
     .concat(updates);
+  return locationConnections({
+    ...structureSceneAtEvent({ scene }, value, resolve, untilEventId),
+    worldMap: { nodes: scene.worldMap?.nodes ?? {}, connections },
+  }).filter((edge) => includeTransport || !edge.transportOnly);
 }
 
 /** An uncaused local opening can precede its crossing without another model repair. */
@@ -318,10 +325,12 @@ export function validateWorldMap(
   const declared = new Set([...arrivals, ...previews.map((place) => place.ref)]);
   const occupied = new Set<string>();
   for (const member of context.members.filter((member) => member.active)) {
+    for (const id of witnessedLocations(context.scene, memberScene(context.scene, member.id).location.id!)) occupied.add(id);
+    for (const id of witnessedLocations(structureSceneAtEvent(context, value, resultingRef, value.events[0]?.id), memberScene(context.scene, member.id).location.id!)) occupied.add(id);
     const position = value.memberLocations?.find((position) => position.memberId === member.id);
     if (context.turn.number > 0 || !position)
-      occupied.add(memberScene(context.scene, member.id).location.id!);
-    if (position) occupied.add(resultingRef(position.locationId));
+      for (const id of witnessedLocations(structureSceneAtEvent(context, value, resultingRef), memberScene(context.scene, member.id).location.id!)) occupied.add(id);
+    if (position) for (const id of witnessedLocations(structureSceneAtEvent(context, value, resultingRef), resultingRef(position.locationId))) occupied.add(id);
   }
   if (context.turn.number === 0 && !value.memberLocations?.length) occupied.add(context.scene.location.id!);
   const updates = value.mapUpdates?.connections ?? [];
@@ -356,7 +365,9 @@ export function validateWorldMap(
         : new Set(
             context.members
               .filter((member) => member.active)
-              .map((member) => memberLocationAtEvent(context, value, member.id, event.id, resultingRef)),
+              .flatMap((member) => witnessedLocations(
+                structureSceneAtEvent(context, value, resultingRef, event.id),
+                memberLocationAtEvent(context, value, member.id, event.id, resultingRef))),
           );
     if (!witnessed.has(from) && !witnessed.has(to) && !remoteChange)
       throw new Error(
@@ -365,7 +376,7 @@ export function validateWorldMap(
     if (event.kind === 'action') {
       const actor = context.members.find((member) => member.id === event.memberId);
       const actorPlaces = actor
-        ? [memberLocationAtEvent(context, value, actor.id, event.id, resultingRef)]
+        ? witnessedLocations(structureSceneAtEvent(context, value, resultingRef, event.id), memberLocationAtEvent(context, value, actor.id, event.id, resultingRef))
         : [];
       if (
         ![from, to].some((ref) => actorPlaces.includes(ref)) ||
@@ -471,6 +482,9 @@ export function validateWorldMap(
     let pair = turnConnections(context.scene, value, resultingRef, position.movementEventId).find(
       (edge) => (edge.from === from && edge.to === to) || (edge.from === to && edge.to === from),
     );
+    const spatial = structureSceneAtEvent(context, value, resultingRef, position.movementEventId);
+    if (!pair && containingStructure(spatial, from)?.id !== containingStructure(spatial, to)?.id)
+      throw new Error('Entering or leaving a structure requires its currently accessible entrance; a room cannot connect directly to a distant world location.');
     // A first arrival can describe the new leg just traversed; it does not reopen a known route.
     if (!pair && !nodes.has(to) && arrivals.has(to)) {
       const discovered = value.mapUpdates?.connections.find(
@@ -528,11 +542,15 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     .filter(record)
     .flatMap((beat) => [
       ...(record(beat.place)
-        ? [{ ref: beat.kind === 'move' ? beat.to : beat.at, name: beat.place.name }]
+        ? [{ ref: ['move', 'transport'].includes(String(beat.kind)) ? beat.to : beat.at, name: beat.place.name }]
         : []),
       ...(Array.isArray(beat.exits)
         ? beat.exits.filter(record).map((exit) => ({ ref: exit.to, name: exit.name }))
         : []),
+      ...(Array.isArray(beat.structures) ? beat.structures.filter(record).flatMap((structure) => [
+        ...(record(structure.outside) ? [{ ref: structure.locationId, name: structure.outside.name }] : []),
+        ...(Array.isArray(structure.outsideExits) ? structure.outsideExits.filter(record).map((exit) => ({ ref: exit.to, name: exit.name })) : []),
+      ]) : []),
     ]);
   for (const list of [
     input.placeUpdates,
@@ -604,6 +622,13 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
   const list = (value: unknown, keys: string[], path: string) =>
     Array.isArray(value) ? value.map((item, index) => fields(item, keys, `${path}[${index}]`)) : value;
   const output = { ...input };
+  const structureFields = (value: unknown, path: string) => {
+    const next = fields(value, ['locationId', 'entranceId', 'controlId'], path);
+    if (!record(next)) return next;
+    if (Array.isArray(next.roomIds)) next.roomIds = next.roomIds.map((id, index) => resolve(id, `${path}.roomIds[${index}]`));
+    if (Array.isArray(next.outsideExits)) next.outsideExits = list(next.outsideExits, ['to'], `${path}.outsideExits`);
+    return next;
+  };
   const questOperation = (operation: unknown, path: string): unknown => {
     if (!record(operation) || !record(operation.quest)) return operation;
     const quest = { ...operation.quest };
@@ -622,7 +647,7 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     output.beats = beats.map((beat, index) => {
       if (!record(beat)) return beat;
       const path = `beats[${index}]`;
-      const next = fields(beat, beat.kind === 'move' ? ['to'] : ['at'], path) as Record<string, unknown>;
+      const next = fields(beat, ['move', 'transport'].includes(String(beat.kind)) ? ['to'] : ['at'], path) as Record<string, unknown>;
       if (typeof beat.actor === 'string') next.actor = actors[beat.actor]?.id ?? beat.actor;
       if (record(beat.stop)) next.stop = fields(beat.stop, ['at'], `${path}.stop`);
       if (Array.isArray(beat.quests)) next.quests = beat.quests.map((operation, i) => questOperation(operation, `${path}.quests[${i}].quest`));
@@ -633,6 +658,7 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
             : effect,
         );
       if (Array.isArray(beat.exits)) next.exits = list(beat.exits, ['to'], `${path}.exits`);
+      if (Array.isArray(beat.structures)) next.structures = beat.structures.map((structure, i) => structureFields(structure, `${path}.structures[${i}]`));
       if (Array.isArray(beat.npcs)) next.npcs = list(beat.npcs, ['locationId'], `${path}.npcs`);
       const companion = (item: unknown) =>
         record(item) && typeof item.followingMemberId === 'string'
@@ -653,6 +679,8 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
         ? { ...note, journey: { ...note.journey, memberId: actors[note.journey.memberId]?.id ?? note.journey.memberId } }
         : note);
   }
+  if (Array.isArray(output.structureUpdates)) output.structureUpdates = output.structureUpdates.map((structure, i) => structureFields(structure, `structureUpdates[${i}]`));
+  if (Array.isArray(output.structureMoves)) output.structureMoves = list(output.structureMoves, ['to'], 'structureMoves');
   for (const [name, keys] of Object.entries({
     memberLocations: ['locationId'],
     placeUpdates: ['ref'],

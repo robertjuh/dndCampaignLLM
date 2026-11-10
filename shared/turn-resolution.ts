@@ -4,6 +4,7 @@ import { worldProgressEvidenceSchema } from './world-progression';
 import { z } from 'zod';
 import { gmMemorySchema } from './gm-memory';
 import { questOperationSchema } from './quests';
+import { structureSchema, structureUpdateSchema, structureMoveSchema } from './structures';
 import {
   maxNarrationLength,
   outcomeSchema,
@@ -86,7 +87,7 @@ export const resolvedEventSchema = resolvedEventV1Schema.extend({
   presentation: z.literal('log').optional(),
   phase: z.enum(['main', 'minor', 'movement', 'aftermath']).nullable(),
   beforeEventId: z.string().min(1).optional(),
-  effect: z.enum(['movement', 'search']).optional(),
+  effect: z.enum(['movement', 'search', 'transport']).optional(),
   locationRef: z.string().min(1).max(100).optional(),
   result: componentStatus.nullable(),
   dependsOn: z
@@ -160,6 +161,8 @@ export const turnAdjudicationSchema = turnAdjudicationV1Schema.extend({
     .max(20)
     .optional(),
   featureUpdates: z.array(featureUpdateSchema).max(20).optional(),
+  structureUpdates: z.array(structureUpdateSchema).max(20).optional(),
+  structureMoves: z.array(structureMoveSchema).max(20).optional(),
   npcUpdates: z
     .array(
       z
@@ -270,6 +273,7 @@ export const turnResolutionV1Schema = z
     memberLocations: z.record(z.string()).optional(),
     knownLocations: z.record(z.string()).optional(),
     worldMap: worldMapSchema.optional(),
+    structureStates: z.array(structureSchema).optional(),
     featureStates: z.array(sceneFeatureSchema).optional(),
     npcStates: z
       .array(

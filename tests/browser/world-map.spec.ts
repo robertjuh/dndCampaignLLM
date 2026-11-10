@@ -111,6 +111,34 @@ async function mappedTable(page: Page) {
   return { snapshot, attach, courtyard, road, tower, drain, oldCamp };
 }
 
+test('switches between a moving structure interior and a world marker with all passengers', async ({ page }) => {
+  const { snapshot, courtyard, road, tower, drain, oldCamp } = await mappedTable(page);
+  snapshot.status = 'active';
+  snapshot.scene.structures = { 'new:ship': { id: 'new:ship', name: 'Zeewolf', locationId: oldCamp,
+    entranceId: courtyard, controlId: courtyard, roomIds: [courtyard, road, tower, drain], mobile: true, access: true } };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/campaign/${snapshot.id}`);
+  const map = page.getByRole('region', { name: 'World map', exact: true });
+  await expect(map.getByRole('heading', { name: 'Inside Zeewolf' })).toBeVisible();
+  await expect(map.getByRole('article', { name: 'Location: Courtyard', exact: true })).toBeVisible();
+  const views = page.getByRole('navigation', { name: 'Map view' });
+  await views.getByRole('button', { name: 'World', exact: true }).click();
+  await expect(map.getByRole('article')).toHaveCount(2);
+  const ship = map.getByRole('article', { name: 'Location: Zeewolf', exact: true });
+  await expect(ship).toContainText('Mira');
+  await expect(ship).toContainText('Rowan');
+  await expect(map.getByRole('article', { name: 'Location: Courtyard', exact: true })).toHaveCount(0);
+  await views.getByRole('button', { name: 'Inside Zeewolf', exact: true }).click();
+  await expect(map.getByRole('article', { name: 'Location: Old checkpoint', exact: true })).toContainText('Rowan');
+  const port = randomUUID();
+  snapshot.scene.worldMap!.nodes[port] = { id: port, name: 'New harbour', visited: true };
+  snapshot.scene.structures['new:ship'].locationId = port;
+  await page.reload();
+  await expect(page.getByText('New harbour › Zeewolf › Courtyard', { exact: true })).toBeVisible();
+  await expect(map.getByRole('article', { name: 'Location: New harbour', exact: true })).toBeVisible();
+  await expect(map.getByRole('article', { name: 'Location: Distant camp', exact: true })).toHaveCount(0);
+});
+
 test('maps known routes and separate character positions on phones and the shared screen', async ({
   page,
   browser,

@@ -394,6 +394,7 @@ export const mapConnectionSchema = z
     label: z.string().trim().min(1).max(200),
     blocked: z.boolean(),
     bidirectional: z.boolean(),
+    transportOnly: z.boolean().optional(),
   })
   .strict();
 export const worldMapSchema = z
@@ -591,6 +592,7 @@ export type InvestigationRecord = {
   leadLocationId: string;
 };
 export type Scene = {
+  structures?: Record<string, import('./structures').Structure>;
   currencyName?: string;
   quests?: Record<string, Quest>;
   features?: Record<string, SceneFeature>;
@@ -780,6 +782,10 @@ export type Turn = {
   };
   diagnostics?: string[];
   resolution?: TurnResolution;
+  characterDescriptions?: (Pick<Character, 'name' | 'role' | 'species' | 'appearance' | 'concept'> & {
+    traits: Pick<Trait, 'name' | 'description'>[];
+    equipment: Pick<Item, 'name' | 'kind' | 'description'>[];
+  })[];
   factionChanges?: ReputationReceipt[];
   equipmentChanges?: { memberId: string; characterName: string; description: string }[];
 };

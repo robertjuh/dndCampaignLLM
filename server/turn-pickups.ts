@@ -5,9 +5,17 @@ import { memberScene, placeScene, savePlace, combatActive } from '../shared/loca
 import { baseItem, incapacitatingCondition, takeItem, offerGroundItem } from '../shared/rules';
 import { adjudicationPlaceRef } from './turn-resolution';
 
+/** Keep source offsets while excluding speech and quoted names from intent matching. */
+export function unquotedActionText(text: string) {
+  return text.replace(
+    /"[^"\n]*"|“[^”\n]*”|(?<![\p{L}\p{N}])'(?:[^'\n]|(?<=[\p{L}\p{N}])'(?=[\p{L}\p{N}]))*'(?![\p{L}\p{N}])/gu,
+    (quote) => ' '.repeat(quote.length),
+  );
+}
+
 /** Narrow consent guard; interpretation and item/pronoun matching remain the adjudicator's job. */
 export function requestsPickup(text: string) {
-  return text
+  return unquotedActionText(text)
     .split(/[.;!\n]|\b(?:and|then|en|daarna)\b/iu)
     .some(
       (part) =>

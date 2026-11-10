@@ -261,6 +261,90 @@ describe('server combat interpretation defaults', () => {
       }).actions[0].targetId,
     ).toBe('enemy-1');
   });
+  it.each([
+    'I attack Militech Checkpoint Guard. By angrily punching him in the face',
+    'I attack Militech Checkpoint Guard with my crossbow I hit him on the head because I have no more bolts',
+    'Use Focused strike on Militech Checkpoint Guard',
+  ])('keeps the living same-name target from the combat plan: %s', (text) => {
+    const context = fixture(text);
+    const actor = context.members[0];
+    const [fallen, living] = context.scene.encounter!.enemies;
+    fallen.name = living.name = 'Militech Checkpoint Guard';
+    for (const hp of [30, 0]) {
+      fallen.hp = hp;
+      const input = normalizeCombatInput(context, {
+        actions: [{ memberId: actor.id, main: 'attack', targetId: living.id }],
+      });
+      expect(input.actions[0].targetId).toBe(living.id);
+      if (hp === 0) {
+        expect(normalizeCombatInput(context).actions[0].targetId).toBe(living.id);
+        runCombat(context.members, context.scene.encounter!, input, (sides) => Math.min(12, sides));
+        expect(living.hp).toBeLessThan(30);
+      }
+    }
+  });
+
+  it.each(['Attack Guard (2).', 'Use Focused strike on Guard (2).'])(
+    'resolves a numbered combat name ahead of a shared NPC alias: %s',
+    (text) => {
+      const context = fixture(text);
+      context.scene.encounter!.enemies[0].name = 'Guard';
+      context.scene.encounter!.enemies[1].name = 'Guard (2)';
+      context.scene.npcs = Object.fromEntries(
+        context.scene.encounter!.enemies.map((enemy) => [
+          enemy.id,
+          {
+            id: enemy.id,
+            name: 'Guard',
+            aliases: [],
+            locationId: context.scene.location.id!,
+            status: 'alive' as const,
+            allegiance: null,
+            fact: '',
+          },
+        ]),
+      );
+      const plan = normalizeCombatInput(context, {
+        actions: [{ memberId: context.members[0].id, targetId: 'enemy-0' }],
+      });
+      expect(plan.actions[0].targetId).toBe('enemy-1');
+      runCombat(context.members, context.scene.encounter!, plan, (sides) => Math.min(12, sides));
+      expect(context.scene.encounter!.enemies[0].hp).toBe(30);
+      expect(context.scene.encounter!.enemies[1].hp).toBeLessThan(30);
+    },
+  );
+
+  it.each(['Taunt the guard', 'I intimidate the guard', 'I threaten the guard'])(
+    'preserves a proposed social maneuver when guard is its target: %s',
+    (text) => {
+      const context = fixture(text);
+      const input = normalizeCombatInput(context, {
+        actions: [
+          {
+            memberId: context.members[0].id,
+            main: 'creative',
+            effect: 'influence',
+            stat: 'CHA',
+            dc: 15,
+            targetId: 'enemy-1',
+          },
+        ],
+      });
+      expect(input.actions[0]).toMatchObject({
+        main: 'creative',
+        effect: 'influence',
+        stat: 'CHA',
+        targetId: 'enemy-1',
+      });
+    },
+  );
+
+  it.each(['Guard Krail Venn', 'I guard Krail Venn', 'I take cover', 'Ik bescherm Krail Venn'])(
+    'still recognizes an explicit defensive action: %s',
+    (text) => {
+      expect(normalizeCombatInput(fixture(text)).actions[0].main).toBe('defend');
+    },
+  );
   it.each(['I attack only Ork Breachmob', 'Ik val alleen Ork Breachmob aan'])(
     'preserves explicit target restrictions despite model suggestions: %s',
     (text) => {
@@ -296,14 +380,14 @@ describe('server combat interpretation defaults', () => {
     });
   });
 
-  it('keeps an explicitly named unavailable target and a model-resolved restricted target', () => {
+  it('redirects a downed target despite a restriction and preserves a living restricted target', () => {
     const context = fixture('Attack only Ork Breachmob.');
     context.scene.encounter!.enemies[0].hp = 0;
     let plan = normalizeCombatInput(context);
     expect(plan.actions[0]).toMatchObject({ targetId: 'enemy-0', allowRetarget: false });
     let logs = runCombat(context.members, context.scene.encounter!, plan, () => 12);
-    expect(logs.join(' ')).toContain('main action is spent');
-    expect(context.scene.encounter!.enemies[1].hp).toBe(30);
+    expect(logs.join(' ')).toContain('redirects their attack from Ork Breachmob to Violet Vox-Herald');
+    expect(context.scene.encounter!.enemies[1].hp).toBeLessThan(30);
     context.turn.actions[0].text = 'Use my strike on an enemy.';
     context.turn.actions[0].abilityName = 'Focused strike';
     expect(normalizeCombatInput(context).actions[0].targetId).toBe('enemy-1');
@@ -641,6 +725,37 @@ describe('server combat interpretation defaults', () => {
     submitted.text = 'Use my A.M. tonic';
     expect(requestedConsumable(member, submitted, other.id)?.id).toBe(tonic.id);
   });
+
+  it.each([true, false])(
+    'keeps a healing ability distinct from an item named within it (selected=%s)',
+    (selected) => {
+      const context = fixture('Use Gemskin Trauma Patch on Krail Venn');
+      const [actor, target] = context.members;
+      const ability = {
+        ...actor.character.abilities[1],
+        name: 'Gemskin Trauma Patch',
+        effect: 'mend' as const,
+      };
+      actor.character.abilities[1] = ability;
+      const item = { ...baseItem('patch', 'Trauma patch', 'consumable'), healing: 6, quantity: 1 };
+      actor.state.inventory.push(item);
+      const submitted = context.turn.actions[0];
+      submitted.abilityName = selected ? ability.name : null;
+      expect(requestedConsumable(actor, submitted, item.id)).toBeUndefined();
+      const plan = normalizeCombatInput(context, {
+        actions: [{ memberId: actor.id, main: 'heal', mainItemId: item.id, targetId: target.id }],
+      });
+      expect(plan.actions[0]).toMatchObject({
+        main: 'ability',
+        abilityName: ability.name,
+        targetId: target.id,
+        mainItemId: null,
+        minor: 'none',
+      });
+      submitted.text = 'Use GEMSKIN TRAUMA PATCH and apply Trauma patch';
+      expect(requestedConsumable(actor, submitted, item.id)?.id).toBe(item.id);
+    },
+  );
 
   it('does not infer consumable use from inspection, refusals, passes or a healing ability alone', () => {
     const context = fixture();
@@ -1326,17 +1441,28 @@ describe('grounded environmental combat', () => {
     expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(false);
   });
 
-  it('preserves the source when the target is unavailable before execution', () => {
+  it('redirects an environmental attack when its target is downed before execution', () => {
     const f = cannonFixture();
     const input = f.plan();
     f.context.scene.encounter!.enemies[0].hp = 0;
+    f.execute(input);
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(0);
+    expect(f.context.scene.encounter!.enemies[1].hp).toBeLessThan(30);
+    expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(false);
+  });
+
+  it('preserves the source when no fighting targets remain before execution', () => {
+    const f = cannonFixture();
+    const input = f.plan();
+    f.context.scene.encounter!.enemies[0].hp = 0;
+    f.context.scene.encounter!.enemies[1].withdrawn = true;
     const result = f.execute(input);
     expect(result.rolls).toHaveLength(0);
     expect(f.context.scene.environment!.sources).toEqual({});
     expect(result.events).toContainEqual(
       expect.objectContaining({
         status: 'blocked',
-        fact: expect.stringContaining('target is no longer available'),
+        fact: expect.stringContaining('no enemies remain'),
       }),
     );
   });

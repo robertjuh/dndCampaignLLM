@@ -1,5 +1,6 @@
 import { combatActive, placeScene } from './locations';
 import type { Scene } from './schema';
+import { passageConnections } from './structures';
 
 /** Gather only through established, visited places and open directed routes. */
 export function gatheringRoute(scene: Scene, from: string, goal: string): string[] | null {
@@ -11,7 +12,7 @@ export function gatheringRoute(scene: Scene, from: string, goal: string): string
   for (const path of queue) {
     const current = path.at(-1)!;
     if (current === goal) return path;
-    for (const edge of scene.worldMap?.connections ?? []) {
+    for (const edge of passageConnections(scene)) {
       if (edge.blocked) continue;
       const next =
         edge.from === current ? edge.to : edge.bidirectional && edge.to === current ? edge.from : null;
@@ -29,7 +30,7 @@ export function gatheringProgress(scene: Scene, route: string[], introducedComba
   let stop: 'danger' | 'combat' | 'blocked' | null = null;
   for (const next of route.slice(1)) {
     const from = path.at(-1)!;
-    const edge = scene.worldMap?.connections.find(
+    const edge = passageConnections(scene).find(
       (edge) =>
         !edge.blocked &&
         ((edge.from === from && edge.to === next) ||

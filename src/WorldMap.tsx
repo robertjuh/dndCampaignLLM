@@ -2,6 +2,7 @@ import { Compass, LocateFixed, Maximize2, Minimize2, Minus, Plus, Scan } from 'l
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { Member, Scene, WorldMap as SavedMap } from '../shared/schema';
 import { locationHazard } from '../shared/locations';
+import { containingStructure, locationPath, mapLocation, structureMap } from '../shared/structures';
 import { worldMapPositions, type MapPoint } from '../shared/world-map-layout';
 import { CharacterPortrait } from './CharacterSheet';
 
@@ -64,7 +65,25 @@ function routePath(from: MapPoint, to: MapPoint, control: MapPoint, radius?: num
 
 export function WorldMap(props: Props) {
   if (!props.scene.worldMap || !Object.keys(props.scene.worldMap.nodes).length) return null;
+  if (Object.keys(props.scene.structures ?? {}).length) return <ScopedMap {...props} />;
   return <MapView {...props} map={props.scene.worldMap} />;
+}
+
+function ScopedMap(props: Props) {
+  const local = (props.myMemberId && props.scene.memberLocations?.[props.myMemberId]) || props.scene.location.id!;
+  const [scope, setScope] = useState<string | null>(() => containingStructure(props.scene, local)?.id ?? null);
+  const map = useMemo(() => structureMap(props.scene, scope), [props.scene, scope]);
+  return <>
+    <nav className="world-map-controls" aria-label={props.dutch ? 'Kaartweergave' : 'Map view'}>
+      <button type="button" aria-pressed={scope === null} onClick={() => setScope(null)}>{props.dutch ? 'Wereld' : 'World'}</button>
+      {Object.values(props.scene.structures ?? {}).map((structure) => <button type="button" key={structure.id}
+        aria-pressed={scope === structure.id} onClick={() => setScope(structure.id)}>
+        {props.dutch ? 'Binnen ' : 'Inside '}{structure.name}
+      </button>)}
+    </nav>
+    <p className="small">{locationPath(props.scene, local)}</p>
+    <MapView key={scope ?? 'world'} {...props} map={map} scope={scope} />
+  </>;
 }
 
 function MapView({
@@ -74,7 +93,8 @@ function MapView({
   historical = false,
   dutch = false,
   map,
-}: Props & { map: SavedMap }) {
+  scope,
+}: Props & { map: SavedMap; scope?: string | null }) {
   const arrowId = useId();
   const helpId = useId();
   const viewport = useRef<HTMLDivElement>(null);
@@ -91,7 +111,8 @@ function MapView({
   const connections = map.connections.filter(
     (route) => positions[route.from] && positions[route.to] && route.from !== route.to,
   );
-  const target = (myMemberId && scene.memberLocations?.[myMemberId]) || scene.location.id!;
+  const projected = (id: string) => scope === undefined ? id : mapLocation(scene, id, scope);
+  const target = projected((myMemberId && scene.memberLocations?.[myMemberId]) || scene.location.id!);
   const [selected, setSelected] = useState(target);
   const [expanded, setExpanded] = useState(false);
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 });
@@ -222,7 +243,7 @@ function MapView({
 
   const occupants = (id: string) =>
     members.filter(
-      (member) => member.active && (scene.memberLocations?.[member.id] ?? scene.location.id) === id,
+      (member) => member.active && projected(scene.memberLocations?.[member.id] ?? scene.location.id!) === id,
     );
   const selectedNode = map.nodes[selected];
   const selectedLocation =
@@ -233,7 +254,7 @@ function MapView({
   if (overview) {
     const placed: MapPoint[] = [];
     const important = nodes.filter(
-      (node) => node.id === selected || node.id === scene.location.id || occupants(node.id).length,
+      (node) => node.id === selected || node.id === projected(scene.location.id!) || occupants(node.id).length,
     );
     important.sort((a, b) => Number(b.id === selected) - Number(a.id === selected));
     for (const node of important) {
@@ -285,6 +306,7 @@ function MapView({
       {map.nodes[route.from].name} {route.bidirectional ? '↔' : '→'} {map.nodes[route.to].name}
       {' · '}
       {route.label}
+      {route.transportOnly && <> · {dutch ? 'Vervoer nodig' : 'Transport required'}</>}
       {!route.bidirectional && <> · {dutch ? 'Eenrichtingsroute' : 'One-way'}</>}
       {route.blocked && (
         <>
@@ -299,7 +321,7 @@ function MapView({
       <div className="world-map-heading">
         <h3>
           <Compass size={17} aria-hidden="true" />
-          {historical
+          {scope ? `${dutch ? 'Binnen ' : 'Inside '}${scene.structures?.[scope]?.name ?? ''}` : historical
             ? dutch
               ? 'Huidige wereldkaart'
               : 'Current world map'
@@ -520,7 +542,7 @@ function MapView({
           </svg>
           {nodes.map((node) => {
             const here = occupants(node.id);
-            const current = node.id === scene.location.id;
+            const current = node.id === projected(scene.location.id!);
             const label = labels.get(node.id);
             return (
               <article

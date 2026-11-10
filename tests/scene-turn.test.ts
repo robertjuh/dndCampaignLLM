@@ -177,6 +177,154 @@ function tools(context: GMContext): GameTools {
   });
 }
 
+const cameraHack = 'Probe the camera security system and try to get access to the camera controls';
+function deniedCameraHack(actor: string): SceneTurn {
+  // Recorded failure: cyberpunk world, turn 8. No camera check or prior physical blocker.
+  return {
+    version: 3,
+    notes: [],
+    summary: 'Niko cannot access camera controls.',
+    beats: [{
+      kind: 'act', actor, slot: 'main', intent: 'action',
+      fact: 'Niko Venn probes the visible camera system but gains no access to its controls.',
+      text: 'The security network does not yield access: its control traffic remains behind the protected internal network.',
+    }],
+  };
+}
+
+it('rejects the recorded unrolled camera denial and an invented blocker, while preserving grounded exemptions', () => {
+  const context = fixture();
+  const actor = context.members[0];
+  context.members = [actor];
+  context.turn.roster = [actor.id];
+  context.turn.actions = [{ memberId: actor.id, text: cameraHack, passed: false }];
+  const scene = deniedCameraHack(actor.id);
+  expect(() => compileSceneTurn(context, scene)).toThrow(/roll_check/);
+  const beat = scene.beats[0];
+  if (beat.kind !== 'act') throw new Error('Expected intrusion act.');
+  beat.blocked = 'The cameras are disconnected from every interface.';
+  expect(() => compileSceneTurn(context, scene)).toThrow(/roll_check/);
+  const at = memberScene(context.scene, actor.id);
+  beat.withoutCheck = {
+    sourceId: `scene:${at.location.name}:hazard`,
+    evidence: 'The cameras are disconnected from every interface.',
+  };
+  expect(() => compileSceneTurn(context, scene)).toThrow(/roll_check/);
+  at.location.hazard = beat.withoutCheck.evidence;
+  const blocked = compileSceneTurn(context, scene);
+  expect(blocked.actions[0]).toMatchObject({ status: 'blocked', basis: 'none' });
+
+  delete beat.blocked;
+  context.scene.features = {
+    cameras: {
+      id: 'cameras', name: 'Camera controls', aliases: [], locationId: at.location.id!,
+      properties: { operator: actor.character.name, access: 'granted' },
+      fact: `${actor.character.name} already has authorized access to the camera controls.`,
+    },
+  };
+  beat.fact = beat.text = context.scene.features.cameras.fact;
+  beat.withoutCheck = { sourceId: 'feature:cameras', evidence: beat.fact };
+  expect(compileSceneTurn(context, scene).actions[0]).toMatchObject({ status: 'success', basis: 'routine' });
+  context.scene.features.cameras.locationId = randomUUID();
+  expect(() => compileSceneTurn(context, scene)).toThrow(/roll_check/);
+  actor.state.inventory.push({
+    ...baseItem('camera-key', 'Camera access key', 'tool'),
+    description: 'Grants authorized access to the camera controls.', quantity: 1,
+  });
+  beat.withoutCheck = { sourceId: 'item:camera-key', evidence: 'Grants authorized access to the camera controls.' };
+  expect(compileSceneTurn(context, scene).actions[0]).toMatchObject({ status: 'success', basis: 'routine' });
+  actor.state.inventory = [];
+  expect(() => compileSceneTurn(context, scene)).toThrow(/roll_check/);
+});
+
+it.each([true, false])('rolls Niko’s camera intrusion (success: %s), saves access only on success, and reuses granted controls', async (success) => {
+  const saved = {
+    scene: initialScene('Freight-yard approach'),
+    members: [{ id: 'niko', name: 'Niko Venn', action: cameraHack }],
+    journal: [],
+  };
+  ensureLocations(saved.scene, ['niko']);
+  saved.scene.encounterRisk = { danger: 'safe', reason: 'The public approach is outside the perimeter.' };
+  const f = await table((context, call) => {
+    const actor = context.members[0];
+    if (context.turn.number === 6) {
+      if (call === 1) return deniedCameraHack(actor.id);
+      if (call === 2) return toolResponse('roll_check', {
+        memberId: actorAlias(context, actor.id), stat: 'INT', dc: 15,
+        reason: 'Niko uses his cyberdeck to overcome the camera network’s access protection.',
+        mode: 'normal', circumstances: { favorable: false, adverse: false },
+        lethal: false, abilityName: null, assistsMemberId: null, assistedBy: [],
+      });
+      return {
+        version: 3, summary: success ? 'Niko gains camera access.' : 'Niko fails to gain camera access.',
+        beats: [{
+          kind: 'act', actor: actor.id,
+          fact: success
+            ? 'Niko gains feed access and shutdown control of the Freight-yard cameras. The cameras remain online.'
+            : 'Niko fails to gain camera access; authentication rejects his attempt and the cameras remain online.',
+          text: success ? 'The camera feeds open on Niko’s cyberdeck, alongside their shutdown controls.' : 'An authentication challenge rejects Niko’s intrusion.',
+          ...(success ? {
+            features: [{ featureId: 'yard-cameras', name: 'Freight-yard cameras', properties: {
+              operator: actor.character.name, can_view: true, can_shutdown: true, online: true,
+            } }],
+            journal: { kind: 'fact', name: 'Camera access' },
+          } : {}),
+        }],
+      };
+    }
+    expect(context.scene.features?.['yard-cameras'].properties).toMatchObject({
+      operator: 'Niko Venn', can_view: true, can_shutdown: true, online: true,
+    });
+    const shutdown = context.turn.number === 8;
+    return {
+      version: 3, summary: shutdown ? 'The cameras are offline.' : 'Niko views the feeds.',
+      beats: [{
+        kind: 'act', actor: actor.id,
+        fact: shutdown ? 'Niko uses his granted controls to shut the cameras down.' : 'Niko sees two guards covering the loading apron in the live camera feeds.',
+        text: shutdown ? 'Niko sends the shutdown command and the lenses go dark.' : 'The loading-apron feed shows two guards watching the vehicle lanes.',
+        features: shutdown ? [{ featureId: 'yard-cameras', name: 'Freight-yard cameras', properties: { online: false } }] : [],
+        journal: { kind: 'fact', name: shutdown ? 'Cameras offline' : 'Camera feed observations' },
+      }],
+    };
+  }, saved);
+  try {
+    f.draw.mockImplementation((sides) => Math.min(success ? 20 : 1, sides));
+    const turnId = f.submit();
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    const feedback = f.db.prepare("SELECT payload FROM events WHERE turn_id = ? AND kind = 'stage:adjudication'").all(turnId) as { payload: string }[];
+    expect(snapshot.turn?.phase, JSON.stringify(feedback.map((row) => JSON.parse(row.payload).corrections))).toBe('collecting');
+    const turn = snapshot.history.find((turn) => turn.id === turnId)!;
+    expect(turn.rolls).toEqual([expect.objectContaining({ stat: 'INT', dc: 15, success })]);
+    expect(turn.resolution?.actions[0]).toMatchObject({ status: success ? 'success' : 'failure', basis: 'check' });
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
+    expect(snapshot.members[0].state.abilityUses).toEqual({});
+    if (!success) {
+      expect(snapshot.scene.features?.['yard-cameras']).toBeUndefined();
+      return;
+    }
+    const draws = f.draw.mock.calls.length;
+    const restarted = new Game(f.db, () => f.provider, f.draw);
+    expect(restarted.snapshot(f.campaign.id, f.host.id).scene.features?.['yard-cameras'].properties).toMatchObject({
+      operator: 'Niko Venn', can_view: true, can_shutdown: true, online: true,
+    });
+    for (const action of ['View the camera feeds', 'Shut down the cameras using my access']) {
+      restarted.submit(f.campaign.id, f.players[0].id, restarted.pending(f.campaign.id)!.id, action, false);
+      await restarted.idle();
+      const current = restarted.snapshot(f.campaign.id, f.host.id);
+      expect(current.turn?.phase, current.turn?.error ?? '').toBe('collecting');
+      expect(current.history.at(-1)?.rolls).toEqual([]);
+    }
+    const current = restarted.snapshot(f.campaign.id, f.host.id);
+    expect(current.scene.features?.['yard-cameras'].properties).toMatchObject({ online: false, can_view: true, can_shutdown: true });
+    expect(current.journal.find((entry) => entry.name === 'Camera feed observations')?.detail).toContain('two guards');
+    expect(f.draw).toHaveBeenCalledTimes(draws);
+    expect(f.narrate).not.toHaveBeenCalled();
+  } finally {
+    f.db.close();
+  }
+});
+
 function caravan(): GMContext {
   const context = fixture();
   context.scene = structuredClone(vaalTravel.scene) as Scene;
@@ -412,6 +560,11 @@ it.each(['remote', 'dead', 'fighting'])('refuses an unsupported %s travelling co
 
 it.each([
   ['I take the notice and submit myself for "private medical consultation".', true],
+  ['Attack the nearest guard while yelling "take that idiot!"', false],
+  ['I shout “take the tag!” at the guard.', false],
+  ["I say 'take Oren's ring'.", false],
+  ['I take the notice while yelling "take that idiot!"', true],
+  ['I take "the Silver Key".', true],
   ['I take the stairs down.', false],
   ['Take a look at the notice.', false],
   ['Ik neem de trap naar beneden.', false],
@@ -1384,6 +1537,66 @@ it('appends a saved story combat cause as its own local scene event', () => {
   ).toBe('success');
 });
 
+it('explains how to repair an outcome paraphrased outside its containing action fact', () => {
+  const context = fixture();
+  const scene = descent(context);
+  const act = scene.beats[1];
+  if (act.kind !== 'act') throw new Error('Expected the recorded conversation.');
+  context.turn.actions.find((action) => action.memberId === act.actor)!.text = 'Ask Iven about the levy.';
+  const fact = 'Iven says that collectors take households marked on the levy rolls.';
+  act.resolves = [{ id: 'intent:0', outcome: 'resolved', fact }];
+  expect(() => compileSceneTurn(context, scene)).toThrow(
+    `Include this outcome sentence: ${JSON.stringify(fact)}. A paraphrase does not satisfy this check.`,
+  );
+  act.fact = fact;
+  expect(compileSceneTurn(context, scene).actionOutcomes).toContainEqual(
+    expect.objectContaining({ memberId: act.actor, obligationId: 'intent:0', fact }),
+  );
+});
+
+it('repairs an introduction mistaken for a resolved combat round without executing an attack', async () => {
+  const context = recordedCombat();
+  const at = context.scene.location.id!;
+  const introduction = 'The Shadow Wight emerges to bar the way.';
+  context.combatResult = undefined;
+  context.receipts = {
+    startCombatByLocation: { [at]: structuredClone(context.scene.encounter!) },
+    combatIntroductionsByLocation: { [at]: introduction },
+  };
+  const before = structuredClone(context);
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(init!.body as string);
+    const input = JSON.parse(body.input[0].content);
+    expect(input.startedLocations).toEqual([locationAlias(context, at)]);
+    expect(input.mechanics).toEqual([]);
+    if (fetcher.mock.calls.length === 1)
+      return response({
+        version: 3,
+        summary: 'The fight begins.',
+        beats: [{ kind: 'combat', at, text: introduction }],
+      });
+    expect(JSON.stringify(body.input)).toContain('No combat round has been resolved');
+    expect(JSON.stringify(body.input)).toContain('separate act for every submitted actor');
+    return response({
+      version: 3,
+      summary: 'The wight blocks the way; the first round has not begun.',
+      beats: [{
+        kind: 'act',
+        actor: context.turn.actions[0].memberId,
+        blocked: 'The wight has just appeared; the first combat round has not begun.',
+        fact: 'Katooluman cannot strike before the confrontation begins; his attack has not executed.',
+        text: 'Katooluman faces the newly emerged wight, his cudgel ready. His blow has yet to fall.',
+      }],
+    });
+  });
+  const accepted = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, tools(context));
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(accepted.actions[0].components.main).toMatchObject({ status: 'blocked', basis: 'none' });
+  expect(accepted.events.some((event) => event.kind === 'combat')).toBe(false);
+  expect(accepted.sceneDraft?.passages.filter((passage) => passage.text === introduction)).toHaveLength(1);
+  expect(context).toEqual(before);
+});
+
 it.each(recordedCombats)(
   'compiles recorded combat turn $number without model-authored mechanical references',
   async (saved) => {
@@ -1881,6 +2094,54 @@ it('keeps processing errors retryable instead of returning fictional blockers', 
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
 
+it('accepts alive and repairs a shortened feature name with precise feedback instead of repeated scene rewrites', async () => {
+  const context = fixture();
+  context.requestBudget = { used: 0, limit: 3 };
+  const scene = descent(context);
+  const move = scene.beats[0];
+  const conversation = scene.beats[1];
+  if (move.kind !== 'move' || conversation.kind !== 'act') throw new Error('fixture');
+  move.fact += ' A telephone hangs beside the door.';
+  move.features = [{
+    featureId: 'new:internal-telephone', name: 'Internal ship telephone',
+    properties: { working: true },
+  }];
+  conversation.npcs![0].status = 'alive';
+  const invalidStatus = structuredClone(scene);
+  const invalidConversation = invalidStatus.beats[1];
+  if (invalidConversation.kind !== 'act') throw new Error('fixture');
+  Object.assign(invalidConversation.npcs![0], { status: 'Alive; explains the levy.' });
+  const corrected = structuredClone(scene);
+  const correctedMove = corrected.beats[0];
+  if (correctedMove.kind !== 'move') throw new Error('fixture');
+  correctedMove.features![0].aliases = ['telephone'];
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(init!.body as string);
+    expect(body.instructions).toContain('status?:"alive"|"withdrawn"|"surrendered"|"dead"');
+    expect(body.instructions).toContain('Put NPC role, activity and other descriptive details in fact/text');
+    const call = fetcher.mock.calls.length;
+    if (call === 1) return response(invalidStatus);
+    const feedback = body.input.at(-1).content;
+    if (call === 2) {
+      expect(feedback).toContain('invalid_enum_value');
+      return response(scene);
+    }
+    expect(feedback).toContain('new:internal-telephone');
+    expect(feedback).toContain('Internal ship telephone');
+    expect(feedback).toContain('exact name or an accurate declared alias');
+    expect(feedback).not.toContain('at an observed place');
+    return response(corrected);
+  });
+  const gameTools = tools(context);
+  const accepted = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(gameTools).not.toHaveBeenCalled();
+  expect(accepted.npcUpdates).toContainEqual(expect.objectContaining({ npcId: 'iven', status: 'alive' }));
+  expect(accepted.featureUpdates).toContainEqual(expect.objectContaining({
+    featureId: 'new:internal-telephone', aliases: ['telephone'], properties: { working: true },
+  }));
+});
+
 it('retains rejected scenes and correction instructions across tools and successive repairs', async () => {
   const context = fixture();
   const complete = descent(context);
@@ -2117,7 +2378,10 @@ async function table(build: (context: GMContext, call: number) => unknown, saved
   const db = openDatabase(':memory:');
   const practice = new PracticeGM();
   let current: GMContext;
-  const fetcher = vi.fn(async (_url?: unknown, _init?: RequestInit) => {
+  const fetcher = vi.fn(async (_url?: unknown, init?: RequestInit) => {
+    const data = JSON.parse(JSON.parse(String(init?.body)).input[0].content);
+    if (data.candidate && data.resolution)
+      return response({ storyApproved: true, summaryApproved: true, closingApproved: true, feedback: '' });
     const built = build(current, fetcher.mock.calls.length);
     return built instanceof Response ? built : response(built);
   });
@@ -2131,6 +2395,7 @@ async function table(build: (context: GMContext, call: number) => unknown, saved
       return gm.adjudicate(context, tools);
     },
     narrate,
+    reviewSceneNarration: vi.fn(gm.reviewSceneNarration.bind(gm)),
   };
   const draw = vi.fn((sides: number) => Math.min(4, sides));
   const game = new Game(db, () => provider, draw);
@@ -2764,7 +3029,7 @@ it.each([false, true])(
 );
 
 it.each(['ongoing', 'victory', 'interrupted'])(
-  'publishes %s combat from one scene response without a writer or critic',
+  'publishes %s combat with reviewed scene prose and no separate writer',
   async (mode) => {
     const f = await table((context) => {
       expect(context.sceneProtocol).toBe(true);
@@ -2844,8 +3109,9 @@ it.each(['ongoing', 'victory', 'interrupted'])(
       expect(snapshot.history.at(-1)?.result?.narration).toContain('Katooluman');
       expect(snapshot.scene.encounter?.victory).toBe(mode === 'victory');
       expect(snapshot.scene.encounter?.round).toBe(state.encounter!.round + 1);
-      expect(f.fetcher).toHaveBeenCalledTimes(1);
+      expect(f.fetcher).toHaveBeenCalledTimes(2);
       expect(f.provider.planCombat).toHaveBeenCalledTimes(1);
+      expect(f.provider.reviewSceneNarration).toHaveBeenCalledTimes(1);
       expect(f.narrate).not.toHaveBeenCalled();
       const stages = f.db
         .prepare("SELECT payload FROM events WHERE turn_id=? AND kind='stage:adjudication'")
@@ -2855,6 +3121,63 @@ it.each(['ongoing', 'victory', 'interrupted'])(
         expect(snapshot.scene.location.atmosphere).toContain('wight lies still');
         expect(snapshot.members.every((member) => member.state.xp > 0)).toBe(true);
       }
+    } finally {
+      f.db.close();
+    }
+  },
+);
+
+it.each(['rejected', 'unavailable', 'missing'])(
+  'publishes saved combat facts when the prose reviewer is %s without repeating mechanics',
+  async (review) => {
+    const invented = 'The Shadow Wight shoots Katooluman down. Moryan tries an unsubmitted healing action, but the combat action system prevents it.';
+    const badSummary = 'Katooluman is Downed.';
+    const f = await table(() => ({
+      version: 3, summary: badSummary,
+      beats: [{ kind: 'combat', at: 'current', text: invented }],
+    }));
+    try {
+      const state = recordedCombat().scene;
+      state.memberLocations = Object.fromEntries(f.members.map((member) => [member.id, state.location.id!]));
+      state.encounter!.initiative = [
+        ...f.members.map((member) => ({ id: member.id, total: 20 })),
+        { id: state.encounter!.enemies[0].id, total: 1 },
+      ];
+      f.db.prepare('UPDATE campaigns SET scene=? WHERE id=?').run(JSON.stringify(state), f.campaign.id);
+      f.provider.planCombat = vi.fn(async (context) => normalizeCombatInput(context));
+      if (review === 'missing') delete f.provider.reviewSceneNarration;
+      const sceneResponse = f.fetcher.getMockImplementation()!;
+      let drawsBeforeReview: number | undefined;
+      f.fetcher.mockImplementation(async (url, init) => {
+        const data = JSON.parse(JSON.parse(String(init?.body)).input[0].content);
+        if (data.resolution) {
+          drawsBeforeReview ??= f.draw.mock.calls.length;
+          if (data.candidate) {
+            expect(data.resolution).not.toHaveProperty('factualRecap');
+            expect(data.resolution.events.some((event: { kind: string }) => event.kind === 'combat')).toBe(true);
+            if (review === 'unavailable') throw new Error('Review unavailable.');
+            return response({ storyApproved: false, summaryApproved: false, feedback: 'No shot downed Katooluman and no healing was submitted. Preserve the saved misses and HP.' });
+          }
+          return response({
+            version: 2, turnId: data.resolution.turnId, closing: '', summary: badSummary,
+            passages: [{ eventIds: data.resolution.events.map((event: { id: string }) => event.id), text: invented }],
+          });
+        }
+        return sceneResponse(url, init);
+      });
+      f.submit(Object.fromEntries(f.members.map((member) => [member.character.name, 'Attack Shadow Wight.'])));
+      await f.game.idle();
+      const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+      expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+      const result = snapshot.history.at(-1)!.result!;
+      expect(result.narration).not.toContain('shoots Katooluman down');
+      expect(result.narration).not.toContain('unsubmitted healing');
+      expect(result.narration).not.toContain('combat action system');
+      expect(result.summary).not.toContain('Downed');
+      expect(snapshot.members.every((member) => member.state.hp > 0)).toBe(true);
+      expect(snapshot.scene.encounter!.round).toBe(state.encounter!.round + 1);
+      if (drawsBeforeReview !== undefined) expect(f.draw).toHaveBeenCalledTimes(drawsBeforeReview);
+      expect(f.provider.planCombat).toHaveBeenCalledTimes(1);
     } finally {
       f.db.close();
     }

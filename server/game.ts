@@ -5,6 +5,7 @@ import { projectJournal } from '../shared/journal';
 import type { DiceSource } from './random';
 import { createInviteCode, type DB } from './db';
 import { normalizeCombatInput } from './combat';
+import { ensureUniqueEnemyNames } from '../shared/npcs';
 import { validateEnvironmentalAction } from './environment';
 import {
   adjudicationOutcome,
@@ -37,6 +38,8 @@ import {
   saveNPCEncounter,
 } from './npcs';
 import { applyFeatureUpdates } from './scene-state';
+import { applyStructures } from './structures';
+import { locationConnections } from '../shared/structures';
 import { assertRandomEncounterBudget, boundRandomEnemy, randomEncounterBalance } from './encounter-balance';
 import { gmMemorySchema, prepareGMNotes, updateGMMemory, type GMMemory } from '../shared/gm-memory';
 import { sceneNarration } from './scene-turn';
@@ -415,6 +418,13 @@ export interface GameMaster {
   resolve?(context: GMContext, roll: GameTools): Promise<Outcome>;
   adjudicate?(context: GMContext, tools: GameTools): Promise<TurnAdjudication>;
   narrate?(resolution: TurnResolution, config: CampaignConfig, budget?: StageBudget): Promise<TurnNarration>;
+  /** Combat scene prose requires review; providers without it publish saved facts. */
+  reviewSceneNarration?(
+    resolution: TurnResolution,
+    config: CampaignConfig,
+    candidate: TurnNarration,
+    budget: StageBudget,
+  ): Promise<TurnNarration>;
   planCombat?(context: GMContext): Promise<unknown>;
   generate?(concept: string, signal?: AbortSignal): Promise<Character>;
   levelUp?(context: LevelUpContext): Promise<LevelUpReward>;
@@ -867,6 +877,16 @@ export class Game {
         ),
       ],
       resolution: savedDraft?.resolution,
+      // Use the saved cast, including characters with no action and lives since replaced.
+      characterDescriptions: actors.map(({ character, state }) => ({
+        name: character.name,
+        role: character.role,
+        species: character.species,
+        appearance: character.appearance,
+        concept: character.concept,
+        traits: character.traits.map(({ name, description }) => ({ name, description })),
+        equipment: equippedItems(state).map(({ name, kind, description }) => ({ name, kind, description })),
+      })),
       ...(row.phase === 'complete' && savedDraft?.factions
         ? {
             factionChanges: (
@@ -953,7 +973,7 @@ export class Game {
       id,
       ...(world ? { factions: publicFactions(world) } : {}),
       config: JSON.parse(c.config),
-      scene: c.scene ? JSON.parse(c.scene) : initialScene(JSON.parse(c.config).setting),
+      scene: ensureLocations(c.scene ? JSON.parse(c.scene) : initialScene(JSON.parse(c.config).setting)),
       status: c.status,
       paused: !!c.paused,
       version: c.version,
@@ -1877,6 +1897,7 @@ export class Game {
         )
       )
         throw new GameError('Enemy IDs must be unique across active encounters.');
+      ensureUniqueEnemyNames(enemies);
       const roster = this.turn(this.pending(id)!).roster;
       const initiative = draft.members
         .filter((m) => present(m.id) && roster.includes(m.id) && m.state.hp > 0)
@@ -3030,6 +3051,7 @@ export class Game {
                 ? draft.scene.location.id!
                 : (draft.placeRefs?.[ref] ?? ref);
           saveEncounterRisks(draft.scene, adjudication, resolve);
+          applyStructures(draft.scene, adjudication, resolve);
           applyNPCUpdates(draft.scene, adjudication, resolve);
           applyFeatureUpdates(draft.scene, adjudication, resolve);
           draft.gmMemory = updateGMMemory(
@@ -3272,7 +3294,8 @@ export class Game {
               .map((member) => [member.id, draft.scene.memberLocations![member.id]]),
           ),
           knownLocations: knownLocations(draft.scene),
-          worldMap: draft.scene.worldMap,
+          worldMap: draft.scene.worldMap && { ...draft.scene.worldMap, connections: locationConnections(draft.scene) },
+          structureStates: Object.values(draft.scene.structures ?? {}),
           npcStates: Object.values(knownNPCs(draft.scene)).map((npc) => ({
             id: npc.id,
             name: npc.name,
@@ -4317,12 +4340,19 @@ export class Game {
             'Narration skipped because adjudication fell back to saved receipts; no extra model requests can establish the missing world outcomes.';
         let proposed: TurnNarration;
         try {
-          proposed =
-            saved.adjudication?.version === 2 && saved.adjudication.sceneDraft
-              ? sceneNarration(saved.adjudication, saved.resolution!)
-              : saved.adjudicationFallback
-                ? factualNarration(saved.resolution!, config.language)
-                : await provider.narrate!(structuredClone(saved.resolution!), config, narrationBudget);
+          if (saved.adjudication?.version === 2 && saved.adjudication.sceneDraft) {
+            proposed = sceneNarration(saved.adjudication, saved.resolution!);
+            if (saved.resolution!.events.some((event) => event.kind === 'combat'))
+              proposed = provider.reviewSceneNarration
+                ? await provider.reviewSceneNarration(
+                    structuredClone(saved.resolution!), config, proposed, narrationBudget,
+                  )
+                : factualNarration(saved.resolution!, config.language);
+          } else {
+            proposed = saved.adjudicationFallback
+              ? factualNarration(saved.resolution!, config.language)
+              : await provider.narrate!(structuredClone(saved.resolution!), config, narrationBudget);
+          }
         } catch (error) {
           // Presentation failures cannot hold already finalized gameplay hostage.
           narrationBudget.fallback = `Narration unavailable; published saved facts. ${

@@ -4,6 +4,7 @@ import { QuestJournal } from './QuestJournal';
 import { TurnProgress } from './TurnProgress';
 import type { PublicFaction } from '../shared/factions';
 import { memberScene, placeScene, knownLocations, combatActive, locationHazard } from '../shared/locations';
+import { locationPath } from '../shared/structures';
 import React, { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QRCodeSVG } from 'qrcode.react';
@@ -376,9 +377,9 @@ function Dashboard({ me }: { me: Me }) {
             <span className="line" /> THE NEXT CHAPTER IS YOURS
           </span>
           <h2>
-            Enter the slop with ai slop lmao.
+            Enter the slopcampaign with ai slop.
             <br />
-            Prepare to cringe.
+            
           </h2>
           <p>Your imagination, your companions, and a game master ready to follow you into the unknown.</p>
           <a href="/new" className="button light">
@@ -1447,7 +1448,7 @@ function WorldStatus({
     <div className="world-status">
       <div className="location-banner">
         <span className="eyebrow">
-          {split ? 'CURRENT SCENE · PARTY SPLIT' : 'CURRENT LOCATION'} · {scene.location.name}
+          {split ? 'CURRENT SCENE · PARTY SPLIT' : 'CURRENT LOCATION'} · {locationPath(s.scene, scene.location.id!)}
         </span>
         {/* <h3>{s.scene.location.name}</h3>
         <p>{s.scene.location.atmosphere || s.config.premise}</p> */}
@@ -1461,7 +1462,7 @@ function WorldStatus({
             .map((member) => (
               <p className="small" key={member.id}>
                 {member.character.name}:{' '}
-                {names[s.scene.memberLocations?.[member.id] ?? ''] ?? s.scene.location.name}
+                {locationPath(s.scene, s.scene.memberLocations?.[member.id] ?? s.scene.location.id!)}
               </p>
             ))}
       </div>

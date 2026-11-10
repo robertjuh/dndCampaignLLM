@@ -1,4 +1,5 @@
 import type { Outcome, PlaceState, Scene, WorldMap } from './schema';
+import { ensureUniqueEnemyNames } from './npcs';
 
 export const combatActive = (scene: Pick<Scene, 'encounter'>) =>
   !!scene.encounter && !scene.encounter.victory && !scene.encounter.escaped;
@@ -21,6 +22,8 @@ export function locationHazard(hazard?: string) {
 export function ensureLocations(scene: Scene, memberIds: string[] = []) {
   scene.location.id ??= crypto.randomUUID();
   scene.places ??= {};
+  for (const place of [scene, ...Object.values(scene.places)])
+    if (place.encounter) ensureUniqueEnemyNames(place.encounter.enemies);
   scene.worldMap ??= { nodes: {}, connections: [] };
   for (const location of [scene.location, ...Object.values(scene.places).map((place) => place.location)])
     if (location.id)

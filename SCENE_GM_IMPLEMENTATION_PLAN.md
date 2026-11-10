@@ -77,8 +77,11 @@ derives each actor's main/minor outcomes from their own receipts. Enemy attacks
 and condition damage remain unowned events. Simultaneous locations stay separate.
 Victory requires a world aftermath and refreshed local place, while XP, loot,
 recovery, dice and resource use remain owned by the existing engine. Combat
-prose has no separate writer/fidelity-review requests. Direct false death or
-victory claims still use the existing deterministic combat-state validation.
+prose now receives the existing factual review before publication, using the
+scene draft as its initial candidate so faithful prose needs no separate writer.
+Rejected prose can be repaired within the narration budget; unavailable or
+exhausted review publishes saved facts without repeating combat. Direct false
+death or victory claims also retain deterministic combat-state validation.
 
 Regression coverage includes the recorded darknessworld turns 24, 25 and 27,
 mixed main/minor results, simultaneous fights, passes, victory and interrupted
@@ -94,7 +97,7 @@ isolated databases; completed play history is not rewritten.
 - The accepted scene carries its prose through finalization and publication.
   Server-added encounter introductions and finalization facts are appended
   locally; denied inventory operations receive factual local corrections.
-  Routine scene processing has no separate writer or fidelity critic.
+  Routine noncombat scene processing has no separate writer or fidelity critic.
 - Added additive, idempotent schema migration 21 and bounded private GM memory.
   Notes retain causes, answers, actors and due activities across turns/restarts.
   Public snapshots omit notes and uncommitted resolutions. Publication commits

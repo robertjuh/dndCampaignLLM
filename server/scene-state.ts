@@ -9,6 +9,7 @@ import {
 } from '../shared/scene-state';
 import { knownNPCs } from './npcs';
 import { eventCausedLocally, memberLocationAtEvent, turnConnections } from './world-map';
+import { structureSceneAtEvent, witnessedLocations } from './structures';
 
 const pair = (route: NonNullable<SceneFeature['route']>) => [route.from, route.to].sort().join('|');
 
@@ -51,7 +52,9 @@ export function validateFeatureUpdates(
       findSceneFeature(projected, update.featureId) ?? findSceneFeature(projected, update.name, locationId);
     const id = previous?.id ?? update.featureId;
     if (seen.has(id))
-      throw new Error('Update a scene feature once per turn, combining its changed properties.');
+      throw new Error(
+        `Update scene feature ${JSON.stringify(id)} (${JSON.stringify(update.name)}) once per turn, combining its changed properties in one update.`,
+      );
     seen.add(id);
     const names = [update.name, ...(update.aliases ?? [])];
     if (
@@ -83,7 +86,8 @@ export function validateFeatureUpdates(
         (member) =>
           member.active &&
           member.state.hp > 0 &&
-          memberLocationAtEvent(context, value, member.id, event.id, resolve) === locationId,
+          witnessedLocations(structureSceneAtEvent(context, value, resolve, event.id),
+            memberLocationAtEvent(context, value, member.id, event.id, resolve)).includes(locationId),
       );
     if (
       !places.has(locationId) ||
@@ -92,11 +96,14 @@ export function validateFeatureUpdates(
       event.presentation ||
       ['failure', 'blocked'].includes(event.result ?? '') ||
       eventLocation !== locationId ||
-      (!observed && !(previous && eventCausedLocally(context, value, event.id, resolve))) ||
-      (!previous && !names.some((name) => featureNameKey(event.fact).includes(featureNameKey(name))))
+      (!observed && !(previous && eventCausedLocally(context, value, event.id, resolve)))
     )
       throw new Error(
         'Scene state needs a public resolved event at an observed place, or a caused change to a known feature.',
+      );
+    if (!previous && !names.some((name) => featureNameKey(event.fact).includes(featureNameKey(name))))
+      throw new Error(
+        `New scene feature ${JSON.stringify(update.featureId)} (${JSON.stringify(update.name)}) must be named in its public fact for event ${JSON.stringify(event.id)}. Include its exact name or an accurate declared alias in that fact. Check every new feature; changing text or location alone cannot fix a missing name in fact.`,
       );
     if (
       previous &&

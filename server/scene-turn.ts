@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { structureSchema, locationConnections, structureChain } from '../shared/structures';
+import { structureSceneAtEvent, witnessedLocations } from './structures';
 import type { GMContext } from './game';
 import { gmNotePatchSchema, prepareGMNotes } from '../shared/gm-memory';
 import { memberScene, placeScene, knownLocations } from '../shared/locations';
@@ -8,6 +10,7 @@ import { currencyNameSchema, maxNarrationLength } from '../shared/schema';
 import { createHash } from 'node:crypto';
 import { investigationFact, investigationKey, investigationNarration, investigationResults } from './investigations';
 import { submittedActionObligations } from './action-intent';
+import { environmentalFacts } from './environment';
 import { applySceneJourneys } from './journeys';
 import { requestsPickup } from './turn-pickups';
 import { bindNPCSource, knownNPCs, npcIdentity } from './npcs';
@@ -58,6 +61,7 @@ const exit = z
     label: ref,
     blocked: z.boolean().default(false),
     bidirectional: z.boolean().default(true),
+    transportOnly: z.boolean().optional(),
   })
   .strict();
 const npc = turnAdjudicationSchema.shape.npcUpdates
@@ -87,6 +91,9 @@ const common = {
     .optional(),
   npcs: z.array(npc).max(12).optional(),
   features: z.array(feature).max(12).optional(),
+  structures: z.array(structureSchema.extend({
+    outside: place.optional(), outsideExits: z.array(exit).max(8).optional(),
+  })).max(12).optional(),
   factions: z
     .array(
       z.union([
@@ -149,6 +156,14 @@ export const sceneTurnSchema = z
           z
             .object({
               ...common,
+              kind: z.literal('transport'), actor: ref, structureId: ref, to: ref,
+              access: z.boolean().default(false), operatorId: ref.optional(), place: place.optional(),
+              route: ref.optional(), exits: z.array(exit).max(8).optional(),
+            })
+            .strict(),
+          z
+            .object({
+              ...common,
               kind: z.literal('move'),
               ...journeyFields,
               actor: ref,
@@ -169,6 +184,10 @@ export const sceneTurnSchema = z
               slot: z.enum(['main', 'minor']).default('main'),
               intent: z.enum(['action', 'orientation', 'search']).default('action'),
               blocked: z.string().trim().min(1).max(500).optional(),
+              withoutCheck: z.object({
+                sourceId: z.string().trim().min(1).max(700),
+                evidence: z.string().trim().min(8).max(1500),
+              }).strict().optional(),
               finding: z
                 .object({ fact, source: z.string().min(1).max(200) })
                 .strict()
@@ -238,6 +257,8 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
     worldProgress: [],
     npcUpdates: [],
     featureUpdates: [],
+    structureUpdates: [],
+    structureMoves: [],
     factionEffects: [],
     pickups: [],
     storyItems: [],
@@ -259,7 +280,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
   const journeys = new Map<string, NonNullable<TurnAdjudication['actions'][number]['travel']>>();
   const narratedCombats = new Set<string>();
   const people = knownNPCs(context.scene);
-  const performed = new Map<string, { kind: string; intent?: string; at: string; hasPerson: boolean; blocked: boolean; eventId: string; resolves?: z.infer<NonNullable<typeof resolves>> }[]>();
+  const performed = new Map<string, { kind: string; intent?: string; at: string; hasPerson: boolean; blocked: boolean; eventId: string; resolves?: z.infer<NonNullable<typeof resolves>>; withoutCheck?: { sourceId: string; evidence: string } }[]>();
   const resolve = (id: string) => (id === 'current' ? context.scene.location.id! : id);
   const add = (event: Omit<ResolvedEvent, 'id' | 'sequence'>) => {
     const saved: ResolvedEvent = {
@@ -355,13 +376,25 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
     eventId: string,
     blocked = false,
     bidirectional = true,
+    transportOnly?: boolean,
   ) => {
     if (
       !value.mapUpdates!.connections.some(
         (edge) => [edge.from, edge.to].sort().join('|') === [from, to].sort().join('|'),
       )
     )
-      value.mapUpdates!.connections.push({ from, to, label, blocked, bidirectional, eventId });
+      value.mapUpdates!.connections.push({ from, to, label, blocked, bidirectional, eventId,
+        ...(transportOnly !== undefined ? { transportOnly } : {}),
+      });
+  };
+  const addExits = (at: string, exits: z.infer<typeof exit>[], event: ResolvedEvent) => {
+    for (const edge of exits) {
+      if (!knownLocations(context.scene)[edge.to] && !value.mapUpdates!.locations.some((node) => node.ref === edge.to)) {
+        if (!edge.name) throw new Error('A new visible exit needs a name.');
+        value.mapUpdates!.locations.push({ ref: edge.to, name: edge.name });
+      }
+      route(at, edge.to, edge.label, event.id, edge.blocked, edge.bidirectional, edge.transportOnly);
+    }
   };
   const describe = (at: string, description: z.infer<typeof place>, event: ResolvedEvent) => {
     const hazard = description.deadEnd && !description.hazard.includes(description.deadEnd)
@@ -671,7 +704,11 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
           (event.locationRef ?? context.combatResult?.locationId ?? context.scene.location.id) === at &&
           event.presentation !== 'log',
       );
-      if (!events.length || narratedCombats.has(at))
+      if (!events.length)
+        throw new Error(
+          `No combat round has been resolved at ${at}. An encounter started by start_combat is only an introduction, appended automatically. Replace this combat beat with a separate act for every submitted actor: preserve saved check/resource outcomes and explicitly block or defer unexecuted attacks until the next turn. Do not invent hits, damage or resource use.`,
+        );
+      if (narratedCombats.has(at))
         throw new Error('Use one combat beat per location with saved combat results.');
       narratedCombats.add(at);
       value.sceneDraft!.passages.push({ eventIds: events.map((event) => event.id), text: beat.text });
@@ -682,7 +719,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
     const covered: string[] = [];
     if (beat.kind === 'world') {
       at = resolve(beat.at);
-      if (![...positions.values()].includes(at))
+      if (![...positions.values()].some((id) => witnessedLocations(structureSceneAtEvent(context, value), id).includes(at)))
         throw new Error('A world development needs a present witness.');
       event = world(at, beat.fact);
       if (combats[at]) event.phase = 'aftermath';
@@ -701,7 +738,53 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       parts.set(beat.actor, components);
       at = positions.get(beat.actor)!;
       const expected = engineComponents(context, beat.actor);
-      if (beat.kind === 'move') {
+      if (beat.kind === 'transport') {
+        if (components.main || combatReceiptForMember(context, beat.actor))
+          throw new Error('Operating a structure uses the main action and cannot repeat a resolved combat action.');
+        const projected = structureSceneAtEvent(context, value);
+        const structure = projected.structures?.[beat.structureId];
+        const operator = beat.operatorId && knownNPCs(context.scene)[beat.operatorId];
+        if (!structure?.mobile || (beat.operatorId
+          ? !operator || operator.status !== 'alive' || operator.locationId !== structure.controlId || !structureChain(projected, at).some((parent) => parent.id === structure.id)
+          : structure.controlId !== at))
+          throw new Error('Use transport only for an established mobile structure from its saved control room.');
+        const to = resolve(beat.to), from = structure.locationId;
+        const known = knownLocations(context.scene);
+        const disposition = expected.main ?? { status: 'success' as const, basis: 'routine' as const };
+        if (!known[to] && !beat.place) throw new Error('Describe the new world destination in transport.place.');
+        if (disposition.status === 'success' && !known[to]) {
+          value.mapUpdates!.locations.push({ ref: to, name: beat.place!.name });
+          const discovery = world(from, `${structure.name}: ${beat.route ?? beat.place!.name}.`);
+          covered.push(discovery.id);
+          route(from, to, beat.route ?? beat.place!.name, discovery.id, false, true, true);
+        }
+        const own = value.events.filter((item) => item.actionId === identity && item.phase === 'main');
+        event = add({
+          kind: 'action', memberId: beat.actor, actionId: identity, phase: 'main', effect: 'transport',
+          result: disposition.status, locationRef: at, fact: beat.fact,
+          receiptRefs: [...new Set(own.flatMap((item) => item.receiptRefs))],
+          dependsOn: own.map((item) => ({ eventId: item.id, requires: 'occurrence' as const })),
+        });
+        components.main = { ...disposition, fact: beat.fact, reason: 'Submitted operation of the mobile structure.',
+          receiptRefs: event.receiptRefs, eventIds: [...own.map((item) => item.id), event.id] };
+        covered.push(...own.map((item) => item.id), event.id);
+        if (disposition.status === 'success') {
+          value.structureMoves!.push({ structureId: structure.id, memberId: beat.actor, to, access: beat.access, eventId: event.id,
+            ...(beat.operatorId ? { operatorId: beat.operatorId } : {}),
+          });
+          if (beat.place || beat.exits?.length) {
+            const arrival = world(to, beat.place ? `${beat.place.name}. ${beat.place.atmosphere} ${beat.place.hazard}` : beat.fact,
+              [{ eventId: event.id, requires: 'success' }]);
+            covered.push(arrival.id);
+            if (beat.place) describe(to, beat.place, arrival);
+            addExits(to, beat.exits ?? [], arrival);
+          }
+        } else if (beat.place || beat.exits?.length)
+          throw new Error('Failed transport cannot establish arrival or open boarding at its destination.');
+        const acts = performed.get(beat.actor) ?? [];
+        acts.push({ kind: 'transport', intent: 'action', at, hasPerson: false, blocked: disposition.status !== 'success', eventId: event.id, resolves: beat.resolves });
+        performed.set(beat.actor, acts);
+      } else if (beat.kind === 'move') {
         if (moved.has(beat.actor) || (beat.checked && components.main))
           throw new Error('Travel crosses one connection; checked traversal uses the main action.');
         const destination = resolve(beat.to);
@@ -712,16 +795,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
           );
         if (!known[destination] && !beat.place)
           throw new Error('Describe the new adjacent place in move.place.');
-        const declaredRoutes = value.mapUpdates!.connections;
-        const availableRoutes = (context.scene.worldMap?.connections ?? [])
-          .filter(
-            (edge) =>
-              !declaredRoutes.some(
-                (update) =>
-                  [edge.from, edge.to].sort().join('|') === [update.from, update.to].sort().join('|'),
-              ),
-          )
-          .concat(declaredRoutes);
+        const availableRoutes = turnConnections(context.scene, value, resolve);
         if (
           known[destination] &&
           !availableRoutes.some(
@@ -877,7 +951,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         if (storyItem) value.storyItems!.push({ ...storyItem, eventId: event.id });
       }
     }
-    if ('exits' in beat)
+    if ('exits' in beat && beat.kind !== 'transport')
       for (const edge of beat.exits ?? []) {
         if (
           !knownLocations(context.scene)[edge.to] &&
@@ -892,12 +966,13 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
             ? event
             : world(at, `${beat.fact} ${edge.label}`);
         if (!covered.includes(evidence.id)) covered.push(evidence.id);
-        route(at, edge.to, edge.label, evidence.id, edge.blocked, edge.bidirectional);
+        route(at, edge.to, edge.label, evidence.id, edge.blocked, edge.bidirectional, edge.transportOnly);
       }
     let evidence = event;
     if (
       beat.npcs?.length ||
       beat.features?.length ||
+      beat.structures?.length ||
       (beat.progress && !(beat.kind === 'act' && beat.finding))
     ) {
       // A consequence can be observed even after a failed check without reversing that check.
@@ -906,6 +981,18 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
           ? event
           : world(at, beat.fact, [{ eventId: event.id, requires: 'occurrence' }]);
       if (!covered.includes(evidence.id)) covered.push(evidence.id);
+    }
+    for (const definition of beat.structures ?? []) {
+      const { outside, outsideExits, ...structure } = definition;
+      value.structureUpdates!.push({ ...structure, eventId: evidence.id });
+      if (outside || outsideExits?.length) {
+        const exterior = world(structure.locationId,
+          outside ? `${outside.name}. ${outside.atmosphere} ${outside.hazard}` : beat.fact,
+          [{ eventId: evidence.id, requires: 'occurrence' }]);
+        covered.push(exterior.id);
+        if (outside) describe(structure.locationId, outside, exterior);
+        addExits(structure.locationId, outsideExits ?? [], exterior);
+      }
     }
     for (const update of beat.npcs ?? []) {
       remember({ kind: 'npc', name: update.name }, evidence.fact);
@@ -959,7 +1046,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       const bound =
         update.route === undefined ? context.scene.features?.[update.featureId]?.route : update.route;
       if (bound && update.passable !== undefined) {
-        const edge = context.scene.worldMap?.connections.find(
+        const edge = locationConnections(structureSceneAtEvent(context, value)).find(
           (edge) => [edge.from, edge.to].sort().join('|') === [bound.from, bound.to].sort().join('|'),
         );
         if (edge) route(edge.from, edge.to, edge.label, evidence.id, !update.passable, edge.bidirectional);
@@ -978,6 +1065,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         blocked: !!beat.blocked,
         eventId: event.id,
         resolves: beat.resolves,
+        withoutCheck: beat.withoutCheck,
       });
       performed.set(beat.actor, acts);
     }
@@ -1033,7 +1121,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         corrections.push('Each requested target needs its own specific outcome; do not repeat one result for different intent IDs.');
       outcomeFacts.add(investigationKey(result.fact));
       if (!investigationKey(event.fact).includes(investigationKey(result.fact)))
-        corrections.push(`Outcome ${result.id} must be stated in its act fact, including its target and actual result or reason for deferral/refusal.`);
+        corrections.push(`Outcome ${result.id}: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: ${JSON.stringify(result.fact)}. A paraphrase does not satisfy this check.`);
       if (result.outcome !== 'resolved' && act.kind !== 'act')
         corrections.push(`Use an act with a concrete reason for ${result.outcome} ${result.id}; do not execute a take/meet/investigate for that unperformed part.`);
       (value.actionOutcomes ??= []).push({ memberId: submitted.memberId, obligationId: result.id, request: obligation.evidence, outcome: result.outcome, fact: result.fact, eventId: act.eventId });
@@ -1047,6 +1135,25 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         continue;
       }
       const candidates = addressed.length ? addressed : available;
+      if (obligation.kind === 'overcome' && expected.main?.basis !== 'check') {
+        const grounded = candidates.some((act) => {
+          if (!act.withoutCheck) return false;
+          if (act.at !== context.scene.location.id && !context.scene.places?.[act.at]) return false;
+          const facts = environmentalFacts({
+            journal: context.journal,
+            scene: placeScene(context.scene, act.at),
+            member: context.members.find((member) => member.id === submitted.memberId),
+          });
+          return facts[act.withoutCheck.sourceId]?.includes(act.withoutCheck.evidence);
+        });
+        const deferred = addressed.some((act) =>
+          act.resolves?.some((result) => result.id === obligation.id && result.outcome === 'deferred') &&
+          act.resolves.some((result) => result.outcome === 'resolved'),
+        );
+        if (!grounded && !deferred) corrections.push(
+          `${submitted.memberId} must resolve ${JSON.stringify(obligation.evidence)} with roll_check before narrating success or failure. Security/resistance is a difficulty, not automatic denial. For an already authorized routine operation or a genuinely impossible attempt, cite a saved localFacts source and exact evidence in act.withoutCheck; an impossible act also needs blocked. Do not invent a protected network, missing interface or other blocker to skip the check.`,
+        );
+      }
       const covered =
         (obligations.length === 1 && (obligation.kind === 'use' || obligation.kind === 'collect') &&
           !!context.receipts?.[`resource:item:${submitted.memberId}`]) ||
@@ -1064,7 +1171,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       if (!covered && !(parts.get(submitted.memberId)?.main && !obligation.afterTravel && !acts.length)) {
         const alias = Object.entries(actors).find(([, actor]) => actor.id === submitted.memberId)![0];
         corrections.push(
-          `${alias} still needs the submitted ${obligation.kind === 'collect' ? 'object collection' : obligation.kind}: ${JSON.stringify(obligation.evidence)}. Resolve it with its own fitting act/investigate/meet/take operation${obligation.afterTravel ? ' AFTER ordinary arrival, at the destination' : ' at its actual source'}. A move or unrelated prose cannot replace it. Preserve a concrete physical blocker/refusal when appropriate; do not invent success or new dice.`,
+          `${alias} still needs the submitted ${obligation.kind === 'collect' ? 'object collection' : obligation.kind}: ${JSON.stringify(obligation.evidence)}. Resolve it with its own fitting act/investigate/meet/take operation${obligation.afterTravel ? ' AFTER ordinary arrival, at the destination' : ' at its actual source'}. A move or unrelated prose cannot replace it. ${obligation.kind === 'overcome' ? 'Use roll_check for the uncertain attempt, reusing any saved roll.' : 'Preserve a concrete physical blocker/refusal when appropriate; do not invent success or new dice.'}`,
         );
       }
       if (obligation.kind === 'talk' && covered && !candidates.some((act) => act.blocked || act.hasPerson || act.resolves?.some((result) => result.id === obligation.id && result.outcome !== 'resolved'))) {
@@ -1084,16 +1191,19 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
   const arrivalCorrections = (adjudication: TurnAdjudication) => {
     const corrections: string[] = [];
     const places = locationReferences(context);
-    const connections = turnConnections(context.scene, adjudication, resolve);
+    const connections = turnConnections(context.scene, adjudication, resolve, undefined, true);
     for (const arrival of adjudication.arrivals ?? []) {
       const descriptions = operations.filter(
         (beat) =>
-          (beat.kind === 'move' && resolve(beat.to) === arrival.locationId) ||
+          (['move', 'transport'].includes(beat.kind) && 'to' in beat && resolve(beat.to) === arrival.locationId) ||
           (beat.kind === 'world' && resolve(beat.at) === arrival.locationId),
       );
       const reference = Object.entries(places).find(([, place]) => place.id === arrival.locationId);
       const name = reference ? `${reference[1].name} (${reference[0]})` : arrival.locationId;
       const deadEnd = descriptions.some((beat) => 'place' in beat && beat.place?.deadEnd);
+      if (operations.some((beat) => 'structures' in beat && beat.structures?.some((structure) =>
+        structure.locationId === arrival.locationId && structure.outside &&
+        (structure.outside.deadEnd || structure.outsideExits !== undefined)))) continue;
       if (!deadEnd && !descriptions.some((beat) => 'exits' in beat && beat.exits !== undefined)) {
         corrections.push(
           `First arrival at ${name} needs explicit exits for its visible routes. Supply exits on its move/world beat, or place.deadEnd explaining the concrete geography or obstacle ending the route.`,
@@ -1103,7 +1213,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       if (
         !deadEnd &&
         !context.members.some((member) => {
-          if (positions.get(member.id) !== arrival.locationId) return false;
+          if (!witnessedLocations(structureSceneAtEvent(context, adjudication), positions.get(member.id)!).includes(arrival.locationId)) return false;
           const origin = context.turn.number === 0 ? null : memberScene(context.scene, member.id).location.id;
           return connections.some(
             (edge) =>
@@ -1121,7 +1231,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
   };
   if (corrections.length)
     throw new Error(
-      `The scene needs structural corrections; changing fact/text alone cannot fix these:\n${[...corrections, ...arrivalCorrections(value)].join('\n')}`,
+      `The scene needs corrections; repair the indicated fields and operations:\n${[...corrections, ...arrivalCorrections(value)].join('\n')}`,
     );
   for (const submitted of context.turn.actions) {
     const id = actionId(context.turn.id, submitted.memberId);
@@ -1224,7 +1334,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
     if (result.reused) continue;
     const from = resolve(result.source.locationId);
     const to = resolve(result.finding.leadLocationId);
-    const edges = [...(context.scene.worldMap?.connections ?? []), ...value.mapUpdates!.connections];
+    const edges = turnConnections(context.scene, value, resolve);
     if (
       from !== to &&
       !edges.some(
@@ -1322,7 +1432,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
   return accepted;
 }
 
-/** Attach finalization-only facts locally; no second creative author or critic request. */
+/** Attach finalization-only facts locally; combat prose is reviewed before publication. */
 export function sceneNarration(value: TurnAdjudication, resolution: TurnResolution): TurnNarration {
   const draft = value.sceneDraft!;
   const events = narrationEvents(resolution);

@@ -3,9 +3,12 @@ import type { GMContext } from './game';
 import { createHash } from 'node:crypto';
 import { findNPC, npcPublicFact } from '../shared/npcs';
 import { featurePublicFact } from '../shared/scene-state';
+import { equippedItems } from '../shared/rules';
 
 /** Stable public references ground proposals without a catalog of environmental weapons. */
-export function environmentalFacts(context: Pick<GMContext, 'journal' | 'scene'>) {
+export function environmentalFacts(
+  context: Pick<GMContext, 'journal' | 'scene'> & { member?: GMContext['members'][number] },
+) {
   const here = context.scene.location.name.toLowerCase();
   const elsewhere = Object.values(context.scene.places ?? {}).map((place) =>
     place.location.name.toLowerCase(),
@@ -30,6 +33,10 @@ export function environmentalFacts(context: Pick<GMContext, 'journal' | 'scene'>
       ...Object.values(context.scene.features ?? {})
         .filter((feature) => feature.locationId === context.scene.location.id)
         .map((feature) => [`feature:${feature.id}`, featurePublicFact(feature, context.scene)]),
+      ...(context.member
+        ? [...context.member.state.inventory, ...equippedItems(context.member.state)]
+            .map((item) => [`item:${item.id}`, `${item.name}. ${item.description}`])
+        : []),
     ].filter(([, fact]) => fact.trim()),
   );
 }

@@ -1717,13 +1717,13 @@ it('prefers a valid backup, otherwise the first living fighting enemy, after a k
   }
 });
 
-it('keeps explicit target restrictions and creative maneuvers from redirecting', () => {
+it('redirects downed targets for restricted attacks, abilities, off-hand attacks and creative maneuvers', () => {
   for (const main of ['attack', 'ability', 'creative'] as const) {
     const first = member('First');
     const second = member('Second');
     const ability = second.character.abilities[0];
     const e = encounter([first, second], { hp: 2 });
-    e.enemies.push({ ...e.enemies[0], id: 'survivor', hp: 30 });
+    e.enemies.push({ ...e.enemies[0], id: 'survivor', name: 'Survivor', hp: 30 });
     const request = input(first);
     request.actions.push(
       input(second, {
@@ -1733,19 +1733,52 @@ it('keeps explicit target restrictions and creative maneuvers from redirecting',
       }).actions[0],
     );
     const logs = runCombat([first, second], e, request, (sides) => (sides === 20 ? 12 : 2));
-    expect(e.enemies[1].hp).toBe(30);
-    expect(e.enemies[1].stunned).toBeUndefined();
-    expect(logs.join(' ')).toContain('main action is spent');
-    expect(logs.join(' ')).not.toContain('redirects');
-    expect(second.state.abilityUses).toEqual({});
+    if (main === 'creative') expect(logs.join(' ')).toContain("maneuver prevents Survivor's next attack");
+    else expect(e.enemies[1].hp).toBeLessThan(30);
+    expect(logs.join(' ')).toContain('redirects');
+    expect(second.state.abilityUses).toEqual(main === 'ability' ? { [ability.name]: 1 } : {});
   }
 });
 
-it('does not redirect pre-existing unavailable targets or ignore a restriction without a target', () => {
-  for (const target of ['dead', 'withdrawn', 'restricted-unspecified']) {
+it.each(['attack', 'ability', 'creative'] as const)(
+  'redirects a pre-existing downed %s target to the living backup despite a restriction',
+  (main) => {
     const hero = member();
     const e = encounter([hero]);
-    e.enemies[0].hp = target === 'dead' ? 0 : 30;
+    e.enemies[0].hp = 0;
+    e.enemies.push(
+      { ...e.enemies[0], id: 'withdrawn', hp: 30, withdrawn: true },
+      { ...e.enemies[0], id: 'survivor', name: 'Survivor', hp: 30 },
+      { ...e.enemies[0], id: 'backup', name: 'Backup', hp: 30 },
+    );
+    e.initiative = [{ id: hero.id, total: 15 }];
+    const ability = hero.character.abilities[0];
+    const logs = runCombat(
+      [hero],
+      e,
+      input(hero, {
+        main,
+        abilityName: main === 'ability' ? ability.name : null,
+        ...(main === 'creative' ? { effect: 'stun' } : {}),
+        allowRetarget: false,
+        backupTargetId: 'backup',
+      }),
+      (sides) => (sides === 20 ? 18 : 2),
+    );
+    expect(e.enemies[0].hp).toBe(0);
+    expect(e.enemies[1].hp).toBe(30);
+    expect(e.enemies[2].hp).toBe(30);
+    if (main === 'creative') expect(logs.join(' ')).toContain("maneuver prevents Backup's next attack");
+    else expect(e.enemies[3].hp).toBeLessThan(30);
+    expect(logs.join(' ')).toContain('to Backup because Custom adversary fell.');
+    expect(logs.join(' ')).not.toContain('earlier this round');
+  },
+);
+
+it('keeps restrictions for withdrawn or unspecified targets', () => {
+  for (const target of ['withdrawn', 'restricted-unspecified']) {
+    const hero = member();
+    const e = encounter([hero]);
     e.enemies[0].withdrawn = target === 'withdrawn';
     e.enemies.push({ ...e.enemies[0], id: 'survivor', hp: 30, withdrawn: false });
     e.initiative = [{ id: hero.id, total: 15 }];
@@ -1755,7 +1788,8 @@ it('does not redirect pre-existing unavailable targets or ignore a restriction w
       e,
       input(hero, {
         minor: 'offhand',
-        ...(target === 'restricted-unspecified' ? { targetId: null, allowRetarget: false } : {}),
+        allowRetarget: false,
+        ...(target === 'restricted-unspecified' ? { targetId: null } : {}),
       }),
       dice,
     );

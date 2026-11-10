@@ -9,6 +9,7 @@ import {
 import type { GMContext } from './game';
 import { engineEvents, normalizeAdjudicationStructure } from './turn-resolution';
 import { encounterPlaceRef } from './encounters';
+import { structureSceneAtEvent, witnessedLocations } from './structures';
 import { memberLocationAtEvent } from './world-map';
 
 const phases = ['movement', 'minor', 'main'] as const;
@@ -86,13 +87,8 @@ export function retainAdjudicationProgress(
       context.members.some(
         (member) =>
           member.active &&
-          memberLocationAtEvent(
-            context,
-            { ...candidate, memberLocations: positions },
-            member.id,
-            evidence.eventId,
-            resolve,
-          ) === resolve(evidence.locationId),
+          witnessedLocations(structureSceneAtEvent(context, candidate, resolve, evidence.eventId),
+            memberLocationAtEvent(context, { ...candidate, memberLocations: positions }, member.id, evidence.eventId, resolve)).includes(resolve(evidence.locationId)),
       );
     const required = new Set([
       ...selectedWorld,
@@ -173,6 +169,8 @@ export function retainAdjudicationProgress(
       pickups: candidate.pickups?.filter((pickup) => owned.some((event) => event.id === pickup.eventId)),
       npcUpdates: candidate.npcUpdates?.filter((update) => ids.has(update.eventId)),
       featureUpdates: candidate.featureUpdates?.filter((update) => ids.has(update.eventId)),
+      structureUpdates: candidate.structureUpdates?.filter((update) => ids.has(update.eventId)),
+      structureMoves: candidate.structureMoves?.filter((update) => ids.has(update.eventId)),
       journal: candidate.journal.filter(
         (entry) =>
           world.some((event) => event.fact === entry.detail) ||
@@ -221,6 +219,7 @@ export function retainAdjudicationProgress(
   const stateEvents = new Set([
     ...(candidate.npcUpdates ?? []).map((update) => update.eventId),
     ...(candidate.featureUpdates ?? []).map((update) => update.eventId),
+    ...(candidate.structureUpdates ?? []).map((update) => update.eventId),
   ]);
   for (const event of candidate.events.filter(
     (event) => event.kind === 'world' && (event.npcIds?.length || stateEvents.has(event.id)),
@@ -325,6 +324,10 @@ export function applyAdjudicationRepair(
     ...patch,
     actions,
     pickups: merge(base.pickups ?? [], patch.pickups ?? [], (item) => item.eventId),
+    structureUpdates: base.structureUpdates === undefined && patch.structureUpdates === undefined ? undefined :
+      merge(base.structureUpdates ?? [], patch.structureUpdates ?? [], (item) => item.id),
+    structureMoves: base.structureMoves === undefined && patch.structureMoves === undefined ? undefined :
+      merge(base.structureMoves ?? [], patch.structureMoves ?? [], (item) => item.structureId),
     npcUpdates:
       base.npcUpdates === undefined && patch.npcUpdates === undefined
         ? undefined

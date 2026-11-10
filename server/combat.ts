@@ -46,7 +46,9 @@ function submittedIntent(text: string, proposed: unknown): CombatAction['main'] 
     (!refusesAttack && /\b(?:val|vallen)\b[^.!?;]*\baan\b/.test(intent))
   )
     choices.push('attack');
-  if (/\b(?:defend|guard|protect|take cover|verdedig\w*|bescherm\w*|bewaak)\b/.test(intent))
+  if (
+    /(?:^|[;:,.!?]|\b(?:and|then|en|dan)\b)\s*(?:(?:i|ik)\s+(?:(?:will|want to|try to|attempt to|wil|probeer te)\s+)?)?(?:defend|guard|protect|take cover|verdedig\w*|bescherm\w*|bewaak)\b/.test(intent)
+  )
     choices.push('defend');
   if (diplomatic(intent)) choices.push('creative');
   if (
@@ -262,16 +264,34 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
             ? encounterEnemies
             : enemies;
       const namedTargets = targets
-        .filter((target) => {
+        .map((target) => {
           const npc = findNPC(context.scene, target.id);
-          return (npc ? npcNames(npc) : [target.name]).some((name) => mentions(text, name));
+          const names = [target.name, ...(npc ? npcNames(npc) : [])];
+          const name = names
+            .filter((name) =>
+              new RegExp(`(?:^|\\W)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|\\W)`, 'i').test(text),
+            )
+            .sort((a, b) => b.length - a.length)[0];
+          return { target, name, index: name ? text.indexOf(name.toLowerCase()) : -1 };
         })
-        .sort((a, b) => text.indexOf(a.name.toLowerCase()) - text.indexOf(b.name.toLowerCase()));
+        .filter(
+          (match, _index, all) =>
+            match.name &&
+            !all.some((other) => other.index === match.index && other.name!.length > match.name!.length),
+        )
+        .sort((a, b) => a.index - b.index)
+        .map(({ target }) => target);
       const vagueAttack =
         /^(?:(?:i|ik)\s+)?(?:attack|strike|hit|aanvallen|aanval)(?:\s+(?:(?:the|an|a|de|een)\s+)?(?:enemy|opponent|foe|vijand))?\s*[.!?]?\s*$/.test(
           text,
         );
+      // A shared name does not identify a corpse when a matching enemy is still fighting.
+      const availableNamed = namedTargets.filter(
+        (target) => target.name === namedTargets[0]?.name && enemies.some((enemy) => enemy.id === target.id),
+      );
       const target =
+        availableNamed.find((target) => target.id === chosen.targetId) ??
+        availableNamed[0] ??
         namedTargets[0] ??
         targets.find(
           (target) =>

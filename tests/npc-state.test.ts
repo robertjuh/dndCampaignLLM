@@ -15,9 +15,55 @@ import { normalizeCombatInput } from '../server/combat';
 import { engineEvents } from '../server/turn-resolution';
 import { projectJournal } from '../shared/journal';
 import { ensureLocations } from '../shared/locations';
+import { ensureUniqueEnemyNames, npcNameKey } from '../shared/npcs';
 import { baseItem, initialScene, initialState } from '../shared/rules';
 import { enemySchema, templateCharacter, type Enemy } from '../shared/schema';
 import { factualNarration, turnAdjudicationSchema } from '../shared/turn-resolution';
+
+it('gives duplicate enemies stable unique names, including existing suffixes and maximum-length names', () => {
+  const enemies = ['Guard', ' guard ', 'Guard', 'Guard (2)', 'G'.repeat(100), 'G'.repeat(100)].map(
+    (name, index) => ({ id: `${index}`, name }),
+  );
+  ensureUniqueEnemyNames(enemies);
+  expect(enemies.slice(0, 4).map((enemy) => enemy.name)).toEqual([
+    'Guard',
+    'guard (3)',
+    'Guard (4)',
+    'Guard (2)',
+  ]);
+  expect(new Set(enemies.map((enemy) => npcNameKey(enemy.name))).size).toBe(enemies.length);
+  expect(enemies.every((enemy) => enemy.name.length <= 100)).toBe(true);
+  const saved = structuredClone(enemies);
+  ensureUniqueEnemyNames(enemies);
+  expect(enemies).toEqual(saved);
+  enemies.push({ id: 'reinforcement', name: 'Guard' });
+  ensureUniqueEnemyNames(enemies);
+  expect(enemies.slice(0, -1)).toEqual(saved);
+  expect(enemies.at(-1)?.name).toBe('Guard (5)');
+});
+
+it('labels duplicate enemies in existing local encounters without changing their identity or HP', () => {
+  const c = context();
+  const enemy = c.scene.encounter!.enemies[0];
+  const hold = randomUUID();
+  c.scene.places![hold] = {
+    location: { id: hold, name: 'Hold', atmosphere: '', hazard: '' },
+    encounter: {
+      ...structuredClone(c.scene.encounter!),
+      enemies: [
+        { ...enemy, id: 'fallen', hp: 0 },
+        { ...enemy, id: 'living', hp: 7 },
+      ],
+    },
+    loot: [],
+  };
+  const local = Object.values(c.scene.places!)[0].encounter!;
+  ensureLocations(c.scene);
+  expect(local.enemies.map(({ id, name, hp }) => ({ id, name, hp }))).toEqual([
+    { id: 'fallen', name: 'Captain Mara', hp: 0 },
+    { id: 'living', name: 'Captain Mara (2)', hp: 7 },
+  ]);
+});
 
 function context(): GMContext {
   const id = randomUUID(),

@@ -5,6 +5,7 @@ import { memberScene, knownLocations, placeScene, combatActive } from '../shared
 import { assertPublicFactionText } from './factions';
 import { travelNextHop, turnConnections, memberLocationAtEvent, submittedTravel } from './world-map';
 import type { CampaignConfig, LootBlueprint } from '../shared/schema';
+import { structureSceneAtEvent, witnessedLocations } from './structures';
 
 export function explorationPotion(language: CampaignConfig['language']): LootBlueprint {
   return {
@@ -39,7 +40,8 @@ export function validateExploration(
     const member = context.members.find((member) => member.id === action.memberId);
     if (!member) throw new Error('Exploration references an unknown character.');
     const main = action.components.main;
-    const journey = context.sceneProtocol ? submittedTravel(context, member.id) : undefined;
+    const operating = value.events.some((event) => event.memberId === member.id && event.effect === 'transport');
+    const journey = context.sceneProtocol && !operating ? submittedTravel(context, member.id) : undefined;
     if (journey) {
       if (journey.goalId) {
         if (action.travel && action.travel.goalId !== journey.goalId)
@@ -194,11 +196,16 @@ export function validateExploration(
       required.add(to);
   }
   const represented = new Set<string>();
+  for (const move of value.structureMoves ?? [])
+    if (!context.scene.worldMap?.nodes[resolve(move.to)]?.visited) required.add(resolve(move.to));
   for (const arrival of value.arrivals) {
     const placeId = resolve(arrival.locationId);
     if (represented.has(placeId)) throw new Error('Describe each shared arrival once.');
     represented.add(placeId);
-    if (!context.members.some((member) => member.active && resultingPlace(member.id) === placeId))
+    if (!context.members.some((member) => member.active && witnessedLocations(
+      structureSceneAtEvent(context, value, resolve, arrival.eventId),
+      memberLocationAtEvent(context, value, member.id, arrival.eventId, resolve),
+    ).includes(placeId)))
       throw new Error('Arrival evidence needs a present character.');
     const event = value.events.find((event) => event.id === arrival.eventId);
     if (

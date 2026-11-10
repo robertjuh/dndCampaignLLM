@@ -1,3 +1,4 @@
+import { locationConnections } from './structures';
 import { z } from 'zod';
 import type { Scene } from './schema';
 
@@ -45,10 +46,10 @@ export function findSceneFeature(scene: Pick<Scene, 'features'>, ref: string, lo
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-export function featureConnection(scene: Pick<Scene, 'worldMap'>, route: SceneFeature['route']) {
+export function featureConnection(scene: Pick<Scene, 'worldMap' | 'structures'>, route: SceneFeature['route']) {
   return (
     route &&
-    scene.worldMap?.connections.find(
+    locationConnections(scene).find(
       (edge) =>
         (edge.from === route.from && edge.to === route.to) ||
         (edge.from === route.to && edge.to === route.from),
@@ -56,7 +57,7 @@ export function featureConnection(scene: Pick<Scene, 'worldMap'>, route: SceneFe
   );
 }
 
-export function featurePublicFact(feature: SceneFeature, scene: Pick<Scene, 'worldMap'>) {
+export function featurePublicFact(feature: SceneFeature, scene: Pick<Scene, 'worldMap' | 'structures'>) {
   const connection = featureConnection(scene, feature.route);
   const properties = { ...feature.properties };
   if (connection) delete properties.passable;

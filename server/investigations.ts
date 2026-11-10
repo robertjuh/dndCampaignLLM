@@ -1,3 +1,4 @@
+import { passageConnections } from '../shared/structures';
 import { createHash } from 'node:crypto';
 import type { GMContext } from './game';
 import type { NPCState, Scene } from '../shared/schema';
@@ -74,7 +75,7 @@ export function validateInvestigationLeads(
     if (
       at !== source.locationId &&
       !at.startsWith('new:') &&
-      !context.scene.worldMap?.connections.some(
+      !passageConnections(context.scene).some(
         (edge) =>
           !edge.blocked &&
           ((edge.from === source.locationId && edge.to === at) ||
@@ -156,7 +157,7 @@ export function bindInvestigationSource(context: GMContext, memberId: string, in
   if (
     source.locationId !== origin &&
     !source.locationId.startsWith('new:') &&
-    !context.scene.worldMap?.connections.some(
+    !passageConnections(context.scene).some(
       (edge) =>
         !edge.blocked &&
         ((edge.from === origin && edge.to === source.locationId) ||

@@ -10,9 +10,14 @@ export function TurnImagePrompt({ config, turn }: { config: CampaignConfig; turn
       task: 'Create an image',
       instructions:
         'Create one cinematic illustration of this RPG scene, matching the campaign setting and tone. ' +
+        'Use the supplied character descriptions as the visual references for each named character. ' +
+        "Preserve each character's species, anatomy, appearance, distinctive traits, and equipped items; " +
+        'do not replace non-human characters with humans or invent different equipment. ' +
         'Use the saved narration as the source of truth for the location, characters, actions, and outcomes; ' +
-        'player actions are intentions and may have failed. Depict one coherent moment. Include no text, captions, or interface elements. Keep the art style simple and minimaliscic, not unnesecarily over-detailed (aka ai slop)',
+        'player actions are intentions and may have failed. Depict only characters present in that scene, ' +
+        'in one coherent moment. Include no text, captions, or interface elements. Keep the art style simple and minimalistic, without unnecessary detail.',
       campaign: { name, setting, premise, tone, custom },
+      characters: turn.characterDescriptions ?? [],
       turn: {
         number: turn.number,
         narration: turn.result?.narration ?? '',

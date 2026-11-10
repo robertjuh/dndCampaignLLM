@@ -46,6 +46,26 @@ async function setup(page: Page) {
     number: 0,
     phase: 'complete',
     roster: [member.id],
+    characterDescriptions: [
+      {
+        name: 'Fallen Ivo',
+        species: 'Six-legged copper automaton',
+        role: 'Lantern keeper',
+        appearance: 'A small copper body, six jointed legs, and one green glass eye.',
+        concept: 'A clockwork explorer searching for a lost lantern.',
+        traits: [{ name: 'Clockwork body', description: 'Six legs and no human face.' }],
+        equipment: [{ name: 'Silver staff', kind: 'weapon', description: 'A thin staff with a blue tip.' }],
+      },
+      {
+        name: 'Quiet Uma',
+        species: 'Living mushroom',
+        role: 'Guide',
+        appearance: 'A tiny red-capped mushroom wearing a moss cloak.',
+        concept: 'A silent guide through the clouds.',
+        traits: [{ name: 'Spore glow', description: 'Soft golden spores drift from the cap.' }],
+        equipment: [],
+      },
+    ],
     actions: [],
     rolls: [],
     result: outcomeSchema.parse({
@@ -61,6 +81,11 @@ async function setup(page: Page) {
     ...opening,
     id: 'latest-scene-id',
     number: 1,
+    characterDescriptions: opening.characterDescriptions!.map((character) =>
+      character.name === 'Fallen Ivo'
+        ? { ...character, appearance: `${character.appearance} Fresh soot covers the copper shell.` }
+        : character,
+    ),
     actions: [
       {
         memberId: member.id,
@@ -127,6 +152,7 @@ function expectPrompt(text: string, snapshot: Snapshot, turn: Turn) {
       tone: snapshot.config.tone,
       custom: snapshot.config.custom,
     },
+    characters: turn.characterDescriptions ?? [],
     turn: {
       number: turn.number,
       narration: turn.result!.narration,
@@ -140,9 +166,18 @@ function expectPrompt(text: string, snapshot: Snapshot, turn: Turn) {
     },
   });
   expect(prompt.instructions).toMatch(/narration/i);
+  expect(prompt.instructions).toMatch(/character descriptions/i);
+  expect(prompt.instructions).toMatch(/species, anatomy, appearance/i);
+  expect(prompt.instructions).toMatch(/equipped items/i);
   expect(prompt.instructions).toMatch(/moment/i);
   expect(prompt.instructions).toMatch(/text/i);
   expect(prompt.instructions).toMatch(/interface|\bUI\b/i);
+  expect(text).not.toContain(snapshot.config.instructions);
+  expect(text).not.toContain('private-player-id');
+  expect(text).not.toContain('private-character-id');
+  expect(text).not.toContain('Replacement Neri');
+  expect(text).not.toContain('A future character appearance');
+  expect(text).not.toContain('A later location');
 }
 
 test('image prompts copy the displayed opening, latest, and historical scenes without live state', async ({
@@ -162,6 +197,12 @@ test('image prompts copy the displayed opening, latest, and historical scenes wi
   await copy.click();
   await expect(page.getByRole('status').filter({ hasText: copiedMessage })).toBeVisible();
   expectPrompt(await page.evaluate(() => window.imagePromptClipboard.writes.at(-1)!), snapshot, opening);
+  const openingPrompt = JSON.parse(await page.evaluate(() => window.imagePromptClipboard.writes.at(-1)!));
+  expect(openingPrompt.characters.map((character: { name: string }) => character.name)).toEqual([
+    'Fallen Ivo',
+    'Quiet Uma',
+  ]);
+  expect(openingPrompt.characters[0].appearance).toContain('six jointed legs');
 
   snapshot.history = [opening, latest];
   snapshot.turn = {
@@ -194,6 +235,17 @@ test('image prompts copy the displayed opening, latest, and historical scenes wi
   snapshot.history = [{ ...opening, result: null }];
   await page.reload();
   await expect(copy).toBeDisabled();
+});
+
+test('legacy scenes without saved descriptions still copy without borrowing a replacement character', async ({
+  page,
+}) => {
+  const { snapshot, opening } = await setup(page);
+  delete opening.characterDescriptions;
+  snapshot.history = [opening];
+  await page.goto(`/campaign/${snapshot.id}`);
+  await page.getByRole('button', { name: 'Copy image prompt', exact: true }).click();
+  expectPrompt(await page.evaluate(() => window.imagePromptClipboard.writes.at(-1)!), snapshot, opening);
 });
 
 for (const failure of ['unavailable', 'rejected'] as const) {

@@ -76,6 +76,11 @@ test('players target local enemies while the shared screen shows each occupied f
   snapshot.scene.memberLocations = Object.fromEntries(
     snapshot.members.map((member, index) => [member.id, index < 2 ? ravine : index === 2 ? tower : inn]),
   );
+  const wolves = snapshot.scene.places[ravine].encounter!.enemies;
+  wolves.push(
+    { ...wolves[0], id: randomUUID(), name: 'Ravine wolf (2)' },
+    { ...wolves[0], id: randomUUID(), name: 'Fallen wolf', hp: 0 },
+  );
   snapshot.turn = {
     id: randomUUID(),
     number: 3,
@@ -105,6 +110,14 @@ test('players target local enemies while the shared screen shows each occupied f
     'I attack Ravine wolf.',
   );
   await expect(page.getByRole('button', { name: 'Add Tower guard to your action' })).toHaveCount(0);
+  const action = page.getByRole('textbox', { name: 'Your action', exact: true });
+  const fallen = page.getByRole('button', { name: 'Add Fallen wolf to your action' });
+  await expect(fallen).toBeDisabled();
+  await fallen.click({ force: true });
+  await expect(action).toHaveValue('I attack Ravine wolf.');
+  await action.fill('');
+  await page.getByRole('button', { name: 'Add Ravine wolf (2) to your action' }).press('Enter');
+  await expect(action).toHaveValue('I attack Ravine wolf (2).');
 
   const shared = await context.newPage();
   await attach(shared, true);

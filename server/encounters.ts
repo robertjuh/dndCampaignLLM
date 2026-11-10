@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { adjudicationPlaceRef } from './turn-resolution';
 import { memberLocationAtEvent } from './world-map';
 import { randomEncounterBalance } from './encounter-balance';
+import { structureSceneAtEvent, witnessedLocations } from './structures';
 
 export type EncounterCheck = {
   locationId: string;
@@ -99,6 +100,8 @@ export function assertEncounterProposal(
     'pickups',
     'npcUpdates',
     'featureUpdates',
+    'structureUpdates',
+    'structureMoves',
     'sceneDraft',
     'gmNotes',
   ] as const)
@@ -193,6 +196,13 @@ export function prepareEncounterChecks(
     return update ? resolve(update.locationId) : memberScene(context.scene, memberId).location.id!;
   };
   const occupied = new Set(context.members.filter((m) => m.active).map((m) => position(m.id)));
+  const spatial = structureSceneAtEvent(context, value, resolve);
+  const initial = structureSceneAtEvent(context, value, resolve, value.events[0]?.id);
+  const observable = new Set([
+    ...[...occupied].flatMap((id) => witnessedLocations(spatial, id)),
+    ...context.members.filter((member) => member.active).flatMap((member) =>
+      witnessedLocations(initial, memberScene(context.scene, member.id).location.id!)),
+  ]);
   const starts = context.receipts?.startCombatByLocation as Record<string, Encounter> | undefined;
   for (const ref of Object.keys(starts ?? {})) {
     const locationId =
@@ -218,7 +228,7 @@ export function prepareEncounterChecks(
   const assessments = new Map<string, NonNullable<TurnAdjudication['encounterRisks']>[number]>();
   for (const risk of value.encounterRisks ?? []) {
     const locationId = resolve(risk.locationId);
-    if (assessments.has(locationId) || !occupied.has(locationId))
+    if (assessments.has(locationId) || !observable.has(locationId))
       throw new Error('Assess encounter danger once per occupied location.');
     const evidence = value.events.find((event) => event.id === risk.eventId);
     if (
@@ -231,7 +241,8 @@ export function prepareEncounterChecks(
       !context.members.some(
         (member) =>
           member.active &&
-          memberLocationAtEvent(context, value, member.id, evidence.id, resolve) === locationId,
+          witnessedLocations(structureSceneAtEvent(context, value, resolve, evidence.id),
+            memberLocationAtEvent(context, value, member.id, evidence.id, resolve)).includes(locationId),
       )
     )
       throw new Error('Encounter danger needs public local world evidence.');
@@ -249,6 +260,21 @@ export function prepareEncounterChecks(
       throw new Error('A failed check cannot establish that a location is safe.');
     assessments.set(locationId, risk);
   }
+  const navigationRisks = new Map<string, { danger: 'safe' | 'dangerous'; reason: string }>();
+  for (const move of value.structureMoves ?? []) {
+    const destination = resolve(move.to);
+    const place = destination === context.scene.location.id || context.scene.places?.[destination]
+      ? placeScene(context.scene, destination) : undefined;
+    const risk = assessments.get(destination) ?? place?.encounterRisk;
+    if (!risk) throw new Error(`Supply a grounded encounter danger assessment for the structure's world destination ${destination}.`);
+    navigationRisks.set(position(move.memberId), risk);
+  }
+  const riskAt = (id: string) => {
+    const place = id === context.scene.location.id || context.scene.places?.[id] ? placeScene(context.scene, id) : undefined;
+    const local = assessments.get(id) ?? place?.encounterRisk;
+    const navigation = navigationRisks.get(id);
+    return local?.danger === 'dangerous' ? local : navigation ?? local;
+  };
   const updatedGroups = new Map<EncounterCheck, string[]>();
   // A continuation cannot escape a saved trigger by changing a destination or renaming an arrival.
   for (const check of Object.values(saved)) {
@@ -260,8 +286,7 @@ export function prepareEncounterChecks(
       const changed = [...new Set([...group, ...check.memberIds])].filter(
         (id) => group.includes(id) !== check.memberIds.includes(id),
       );
-      const risk =
-        assessments.get(check.locationId) ?? placeScene(context.scene, check.locationId).encounterRisk;
+      const risk = riskAt(check.locationId);
       // Older partial checkpoints could freeze a safe group before a companion's arrival resolved.
       // With no die or encounter to preserve, validated moves may update that safe group.
       if (
@@ -314,7 +339,7 @@ export function prepareEncounterChecks(
     if (started(context, locationId) || (place && combatActive(place))) continue;
     // Descriptive edits do not change the saved danger classification. Only a grounded
     // encounterRisks entry does; unassessed places still require one before exploration.
-    const risk = assessments.get(locationId) ?? place?.encounterRisk;
+    const risk = riskAt(locationId);
     if (!risk && (candidates.has(locationId) || context.turn.number === 0))
       throw new Error(`Supply encounterRisks with grounded safe/dangerous evidence for ${locationId}.`);
     if (!risk || !candidates.has(locationId) || saved[locationId]) continue;

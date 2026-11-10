@@ -282,6 +282,10 @@ describe('replacement characters after successful encounters', () => {
     expect(snapshot.history[1].actions.find((action) => action.memberId === fresh.id)?.characterName).toBe(
       'Mira',
     );
+    expect(snapshot.history[1].characterDescriptions?.map((character) => character.name)).toEqual([
+      'Mira',
+      'Rowan',
+    ]);
     expect(archives(f)).toHaveLength(1);
     const archived = JSON.parse(archives(f)[0].payload);
     expect(archived).toMatchObject({

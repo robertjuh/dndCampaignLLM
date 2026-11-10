@@ -2,6 +2,7 @@ import { validateFactionEffects } from './factions';
 import { planQuests } from './quests';
 import { validateNPCUpdates } from './npcs';
 import { validateFeatureUpdates } from './scene-state';
+import { structureSceneAtEvent, validateStructures, witnessedLocations } from './structures';
 import { isDeepStrictEqual } from 'node:util';
 import {
   actionId,
@@ -20,7 +21,7 @@ import { outcomeSchema, type ResourceUse, type CombatInput } from '../shared/sch
 import type { CombatReceipt, GMContext, ResourceReceipt } from './game';
 import { combatFact } from './narration';
 import { memberScene, knownLocations, occupiedPlaces } from '../shared/locations';
-import { orderRouteOpenings, validateWorldMap } from './world-map';
+import { memberLocationAtEvent, orderRouteOpenings, validateWorldMap } from './world-map';
 import { validateExploration } from './exploration';
 import { validateWorldProgression } from './world-progression';
 import { updateGMMemory } from '../shared/gm-memory';
@@ -882,6 +883,7 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
   if (focus && !known(focus) && !refs.has(focus))
     throw new Error('Scene focus must be an established or declared place.');
   const resultingRef = adjudicationPlaceRef(context, value);
+  validateStructures(context, value, resultingRef);
   validateFeatureUpdates(context, value, resultingRef);
   orderRouteOpenings(context, value, resultingRef);
   validateNPCUpdates(context, value, resultingRef);
@@ -1029,7 +1031,16 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
   for (const update of updates.filter(
     (update) => update.ref.startsWith('new:') || context.scene.worldMap?.nodes[update.ref]?.visited === false,
   ))
-    if (!positions.some((position) => resultingRef(position.locationId) === update.ref))
+    if (!positions.some((position) => resultingRef(position.locationId) === update.ref) &&
+      !context.members.some((member) => member.active && witnessedLocations(
+        structureSceneAtEvent(context, value, resultingRef),
+        resultingRef(positions.find((position) => position.memberId === member.id)?.locationId ?? memberScene(context.scene, member.id).location.id!),
+      ).includes(resultingRef(update.ref))) &&
+      !value.arrivals?.some((arrival) => resultingRef(arrival.locationId) === resultingRef(update.ref) &&
+        context.members.some((member) => member.active && witnessedLocations(
+          structureSceneAtEvent(context, value, resultingRef, arrival.eventId),
+          memberLocationAtEvent(context, value, member.id, arrival.eventId, resultingRef),
+        ).includes(resultingRef(update.ref)))))
       throw new Error('New places require an arriving character.');
   assertMovementPositions(context, value);
   validateWorldMap(context, value, resultingRef);

@@ -96,7 +96,10 @@ it.each(['assist', 'mend'] as const)(
     const ability = actor.character.abilities[1];
     ability.effect = effect;
     ability.stat = 'INT';
-    if (effect === 'mend') ability.cures = ['Shocked'];
+    if (effect === 'mend') {
+      ability.name = `Field ${actor.state.inventory.find((item) => item.healing > 0)!.name}`;
+      ability.cures = ['Shocked'];
+    }
     target.state.hp = 10;
     applyCondition(target.state, 'Shocked');
     f.db.prepare('UPDATE members SET sheet = ? WHERE id = ?').run(JSON.stringify(actor.character), actor.id);
@@ -140,6 +143,7 @@ it.each(['assist', 'mend'] as const)(
     expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
     expect(f.game.members(f.c.id)[0].state.abilityUses?.[ability.name] ?? 0).toBe(0);
     const draws = f.draw.mock.calls.length;
+    const originalInventory = structuredClone(f.game.members(f.c.id)[0].state.inventory);
     fail = false;
     f.game.retry(f.c.id, f.host.id);
     await f.game.idle();
@@ -147,6 +151,7 @@ it.each(['assist', 'mend'] as const)(
     expect(result.turn!.phase).toBe('collecting');
     expect(f.draw.mock.calls.length).toBe(draws);
     expect(result.members[0].state.abilityUses?.[ability.name]).toBe(1);
+    expect(result.members[0].state.inventory).toEqual(originalInventory);
     if (effect === 'mend') {
       expect(result.members[1].state.hp).toBe(18);
       expect(result.members[1].state.conditions).not.toContain('Shocked');
@@ -428,6 +433,76 @@ function submitBoth(f: ReturnType<typeof fixture>, turnId: string) {
   f.game.submit(f.c.id, f.p1.id, turnId, 'Investigate the door.', false);
   f.game.submit(f.c.id, f.p2.id, turnId, 'Watch the road.', false);
 }
+
+it.each(['legacy', 'resolution'] as const)(
+  'exports frozen character descriptions and actual equipment for opening and completed %s turns',
+  async (pipeline) => {
+    const practice = new PracticeGM();
+    const f = fixture(
+      pipeline === 'resolution'
+        ? { adjudicate: practice.adjudicate.bind(practice), narrate: practice.narrate.bind(practice) }
+        : undefined,
+    );
+    const weapon = {
+      ...baseItem('saved-staff', 'Silver staff', 'weapon'),
+      hands: 2 as const,
+      description: 'A thin staff with a blue tip.',
+    };
+    const members = f.game.members(f.c.id);
+    for (const member of members) {
+      Object.assign(member.character, {
+        species: 'Clockwork spider',
+        role: 'Lantern keeper',
+        appearance: 'A copper shell, six jointed legs, and one green glass eye.',
+        concept: 'A mechanical explorer.',
+        traits: [{ ...member.character.traits[0], name: 'Copper body', description: 'No human face.' }],
+      });
+      member.state.equipment = {
+        left: weapon,
+        right: weapon,
+        body: null,
+        head: null,
+        boots: null,
+        relic: null,
+      };
+      member.state.inventory.push({ ...baseItem('unworn', 'Unworn cloak', 'armour'), quantity: 1 });
+      f.db
+        .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+        .run(JSON.stringify(member.character), JSON.stringify(member.state), member.id);
+    }
+    const turn = await start(f);
+    const expected = members.map(({ character }) => ({
+      name: character.name,
+      species: 'Clockwork spider',
+      role: 'Lantern keeper',
+      appearance: 'A copper shell, six jointed legs, and one green glass eye.',
+      concept: 'A mechanical explorer.',
+      traits: [{ name: 'Copper body', description: 'No human face.' }],
+      equipment: [{ name: 'Silver staff', kind: 'weapon', description: 'A thin staff with a blue tip.' }],
+    }));
+    expect(f.game.snapshot(f.c.id, f.host.id).history[0].characterDescriptions).toEqual(expected);
+    for (const player of [f.p1, f.p2]) f.game.submit(f.c.id, player.id, turn.id, '', true);
+    await f.game.idle();
+    for (const member of members) {
+      member.character.name = 'Future replacement';
+      member.character.appearance = 'An unrelated future appearance.';
+      member.state.equipment.left = null;
+      member.state.equipment.right = null;
+      f.db
+        .prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?')
+        .run(JSON.stringify(member.character), JSON.stringify(member.state), member.id);
+    }
+    const reopened = new Game(f.db, () => new PracticeGM());
+    const snapshot = reopened.snapshot(f.c.id, f.p1.id);
+    expect(snapshot.history).toHaveLength(2);
+    for (const saved of snapshot.history) {
+      expect(saved.characterDescriptions).toEqual(expected);
+      const exported = JSON.stringify(saved.characterDescriptions);
+      for (const excluded of [f.p1.id, f.c1.id, 'Unworn cloak', 'Starting weapon', 'Future replacement'])
+        expect(exported).not.toContain(excluded);
+    }
+  },
+);
 
 it.each(['Stunned', 'Frozen', 'Electrocuted'])(
   'skips submissions for a %s player while resolving their condition ticks',
@@ -2349,6 +2424,50 @@ it.each(['Use the cross slash ability on the Gatekeeper.', 'Use my combat abilit
     expect(result.scene.encounter!.enemies[0].hp).toBe(48);
   },
 );
+
+it('saves unique enemy names at combat creation and exposes them in snapshots', async () => {
+  const f = fixture({
+    resolve: async (context, tools) => {
+      if (context.turn.number === 1) {
+        const enemies = ['guard-a', 'guard-b', 'guard-c'].map((id) =>
+          enemySchema.parse({
+            id,
+            name: 'Checkpoint Guard',
+            tier: 'normal',
+            hp: 30,
+            defense: 10,
+            attack: 0,
+            damage: '1d4',
+            description: 'An armed guard.',
+            tactic: 'Guard',
+          }),
+        );
+        const encounter = tools.startCombat(enemies);
+        expect(encounter).toMatchObject({
+          enemies: [
+            { name: 'Checkpoint Guard' },
+            { name: 'Checkpoint Guard (2)' },
+            { name: 'Checkpoint Guard (3)' },
+          ],
+        });
+      }
+      return outcome();
+    },
+  });
+  f.draw.mockImplementation((sides: number) => Math.min(12, sides));
+  submitBoth(f, (await start(f)).id);
+  await f.game.idle();
+  const snapshot = f.game.snapshot(f.c.id, f.host.id);
+  expect(snapshot.turn!.phase).toBe('collecting');
+  expect(snapshot.scene.encounter!.enemies.map((enemy) => enemy.name)).toEqual([
+    'Checkpoint Guard',
+    'Checkpoint Guard (2)',
+    'Checkpoint Guard (3)',
+  ]);
+  expect(
+    JSON.parse(f.game.campaign(f.c.id).scene!).encounter.enemies.map((enemy: { name: string }) => enemy.name),
+  ).toEqual(snapshot.scene.encounter!.enemies.map((enemy) => enemy.name));
+});
 
 it('executes combat before narration even when the provider has no combat planner', async () => {
   let resolved = false;

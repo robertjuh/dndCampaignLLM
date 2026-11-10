@@ -10,6 +10,18 @@ it('retains the recorded unchecked canal search separately from arrival', () => 
 });
 
 it.each([
+  ['Probe the camera security system and try to get access to the camera controls', 'get access to the camera controls'],
+  ['Hack the depot cameras', 'Hack the depot cameras'],
+  ['I bypass the security lock', 'bypass the security lock'],
+  ['I unlock the service hatch', 'unlock the service hatch'],
+  ['Ik omzeil de beveiliging', 'omzeil de beveiliging'],
+])('recognizes an explicit attempt to overcome security: %s', (text, evidence) => {
+  expect(actionObligations(text)).toEqual([
+    { kind: 'overcome', evidence, index: text.indexOf(evidence), afterTravel: false },
+  ]);
+});
+
+it.each([
   ['Go into the wreck interior and search around', 'search', 'search around'],
   ['I go to the dock to inspect the skiff markings', 'inspect', 'inspect the skiff markings'],
   ['I travel to ask the pilot where Tavi went', 'talk', 'ask the pilot where Tavi went'],
@@ -53,6 +65,7 @@ it.each([
   'I cry and wave goodbye to the pilot.',
   'I wait.',
   'I attack the warden.',
+  'Attack the nearest guard while yelling "take that idiot!"',
   'I say "go to the canal and search it".',
   "I say 'search Oren's tent' and go to the canal.",
   'The pilot says “inspect the wreck”. I walk to the canal.',
@@ -60,6 +73,10 @@ it.each([
   'I will not collect the notice.',
   'I would search the wreck.',
   'If the guard leaves, I search the wreck.',
+  "I don't hack the cameras.",
+  'If Niko succeeds, use the lack of cameras to sneak inside.',
+  'I say "hack the cameras".',
+  'I look for hacking manuals.',
   'Ik doorzoek het wrak niet.',
   'Ik ga niet naar de markt en pak de brief.',
   'Als de bewaker weggaat, inspecteer ik de poort.',

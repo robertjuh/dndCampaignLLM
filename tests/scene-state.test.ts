@@ -194,6 +194,28 @@ it('saves current control and passage state, keeps unchanged facts, and projects
   expect(environmentalFacts(c)['feature:ship']).toContain('"control":"Ragman’s crew"');
 });
 
+it('distinguishes missing feature names from unobserved places and accepts an accurate declared alias', () => {
+  const c = context();
+  const value = proposal(c);
+  value.events.push({
+    id: 'telephone', sequence: value.events.length, kind: 'world',
+    actionId: null, memberId: null, phase: null, result: null,
+    locationRef: c.scene.location.id!, fact: 'A telephone hangs beside the door.',
+    receiptRefs: [], dependsOn: [],
+  });
+  value.featureUpdates = [{
+    featureId: 'new:telephone', name: 'Internal ship telephone',
+    locationId: c.scene.location.id!, properties: { working: true }, eventId: 'telephone',
+  }];
+  expect(() => validateAdjudication(c, value)).toThrow(/new:telephone.*Internal ship telephone.*exact name or an accurate declared alias/);
+  value.featureUpdates[0].aliases = ['telephone'];
+  expect(validateAdjudication(c, value).featureUpdates![0].aliases).toEqual(['telephone']);
+  const dock = c.scene.worldMap!.connections[0].to;
+  value.events.at(-1)!.locationRef = dock;
+  value.featureUpdates[0].locationId = dock;
+  expect(() => validateAdjudication(c, value)).toThrow('at an observed place');
+});
+
 it('closes the old boarding route when rebinding, while preserving passengers and inventory', () => {
   const c = context(),
     port = randomUUID(),
