@@ -10,8 +10,10 @@
   "scripts": {
     "dev": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
-    "start": "tsx server/index.ts --production",
+    "start": "node scripts/local-icons.mjs --with-game",
     "tunnel": "node scripts/google-tunnel.mjs",
+    "icons": "node scripts/local-icons.mjs",
+    "icons:setup": "node scripts/local-icons.mjs --setup",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",

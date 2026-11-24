@@ -1,12 +1,16 @@
+import { NPCChats } from './npc-chat';
+import type { NPCReply, NPCChatContext } from '../shared/npc-chat';
 import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { projectJournal } from '../shared/journal';
 import type { DiceSource } from './random';
 import { createInviteCode, type DB } from './db';
-import { normalizeCombatInput } from './combat';
-import { ensureUniqueEnemyNames } from '../shared/npcs';
-import { validateEnvironmentalAction } from './environment';
+import { retrieveCampaignMemory, type RetrievedMemory } from './campaign-memory';
+import { addInstinctObservations, turnPlayability, type GoalRecovery } from './turn-fallback';
+import { combatRollEffect, normalizeCombatInput, validateCombatManeuver } from './combat';
+import { ensureUniqueEnemyNames, findNPC } from '../shared/npcs';
+import { environmentalFacts, validateEnvironmentalAction } from './environment';
 import {
   adjudicationOutcome,
   adjudicationPlaceRef,
@@ -42,7 +46,7 @@ import { applyStructures } from './structures';
 import { locationConnections } from '../shared/structures';
 import { assertRandomEncounterBudget, boundRandomEnemy, randomEncounterBalance } from './encounter-balance';
 import { gmMemorySchema, prepareGMNotes, updateGMMemory, type GMMemory } from '../shared/gm-memory';
-import { sceneNarration } from './scene-turn';
+import { compileSceneTurn, sceneNarration } from './scene-turn';
 import { planQuests, applyQuestPlan } from './quests';
 import {
   factionWorldSchema,
@@ -73,8 +77,8 @@ import {
   type TurnResolution,
   type TurnNarration,
 } from '../shared/turn-resolution';
-import type { CombatEvent } from '../shared/rules';
-import { requestedAbility, requestedConsumable, requestsAbility } from './action-resources';
+import type { CombatEvent, CombatRollDetails } from '../shared/rules';
+import { requestedAbility, requestedConsumable, requestedHealingNPC, requestsAbility } from './action-resources';
 import { explorationPotion } from './exploration';
 import {
   prepareEncounterChecks,
@@ -93,6 +97,7 @@ import {
   checkSchema,
   outcomeSchema,
   type Action,
+  type CombatSelection,
   type SupportAction,
   type CampaignConfig,
   type Character,
@@ -102,6 +107,7 @@ import {
   resourceUseSchema,
   type ResourceUse,
   type Member,
+  type NPCState,
   type Outcome,
   type Roll,
   type Snapshot,
@@ -125,6 +131,7 @@ import {
 } from '../shared/schema';
 import {
   normalizeCharacter,
+  effectiveStats,
   initialState,
   initialScene,
   modifier,
@@ -139,6 +146,7 @@ import {
   hasAdvancedTargeting,
   validateAbilityTheme,
   equipmentBonus,
+  initiativeBonus,
   availableAbility,
   availableAbilities,
   abilityUseKey,
@@ -146,6 +154,7 @@ import {
   recoverAfterEncounter,
   helpUp,
   chooseStartingEquipment,
+  startingEquipmentSelected,
   equip,
   unequip,
   removeItem,
@@ -153,6 +162,7 @@ import {
   takeItem,
   equippedItems,
   healWithItem,
+  healNPCWithResource,
   mendWithAbility,
   mendWithAbilityTargets,
   isDead,
@@ -161,6 +171,7 @@ import {
   canInteract,
   damage,
   runCombat,
+  prepareEnemyIntents,
   randomLoot,
   usableSlots,
   rollEnemyLoot,
@@ -193,6 +204,8 @@ const gameplayBuildId = createHash('sha256')
   .update(
     [
       './game.ts',
+      './campaign-memory.ts',
+      './turn-fallback.ts',
       './providers.ts',
       './encounters.ts',
       './world-map.ts',
@@ -230,6 +243,12 @@ export class GameError extends Error {
     super(message);
   }
 }
+export class ToolBudgetError extends GameError {
+  constructor() { super('Adjudication reached its twenty-tool limit.'); }
+}
+export class OpeningValidationError extends GameError {}
+
+type OpeningRepair = { scene: unknown; feedback: string };
 export type CampaignRow = {
   id: string;
   owner_id: string;
@@ -244,6 +263,7 @@ export type CampaignRow = {
   gm_memory: string;
 };
 type TurnRow = {
+  combat_rules: number | null;
   id: string;
   campaign_id: string;
   number: number;
@@ -282,10 +302,13 @@ export type StageBudget = {
     failure?: string;
   }[];
   corrections?: { request: number; feedback: string }[];
+  goalRecovery?: GoalRecovery[];
   fallback?: string;
 };
 export type GMContext = {
+  retrievedMemory?: RetrievedMemory;
   partialAdjudication?: TurnAdjudication;
+  openingRepair?: OpeningRepair;
   sceneProtocol?: boolean;
   gmMemory?: GMMemory;
   buildId?: string;
@@ -365,12 +388,14 @@ export type ResourceReceipt = ResourceUse & {
   restored: number;
   cured?: string[];
   state: CharacterState;
-  targetState: CharacterState;
+  targetState?: CharacterState;
+  npcTarget?: NPCState;
   targets?: { targetId: string; restored: number; cured: string[]; state: CharacterState }[];
 };
 export type GameTools = ((check: Check) => Roll) & {
   investigate?: (input: Investigation) => InvestigationResult;
   checkpointAdjudication?: (value: TurnAdjudication) => void;
+  checkpointOpeningRepair?: (repair: OpeningRepair) => void;
   prepareEncounters?: (value: TurnAdjudication) => EncounterCheck[];
   startCombat: (enemies: unknown, locationId?: string, introduction?: string) => unknown;
   combat: (input: CombatInput, locationId?: string) => unknown;
@@ -387,7 +412,9 @@ export type GameTools = ((check: Check) => Roll) & {
   validateAdjudication?: (input: unknown) => TurnAdjudication;
 };
 type Draft = {
+  goalRecovery?: GoalRecovery[];
   partialAdjudication?: TurnAdjudication;
+  openingRepair?: OpeningRepair;
   gmMemory?: GMMemory;
   progress?: Turn['progress'];
   placeRefs?: Record<string, string>;
@@ -407,7 +434,10 @@ type Draft = {
   narrationRevision?: number;
 };
 export interface GameMaster {
+  npcReply?(context: NPCChatContext, signal: AbortSignal): Promise<NPCReply>;
+  generateStartingStories?(context: GMContext, budget: StageBudget): Promise<import('../shared/schema').StartingStory[]>;
   sceneTurns?: boolean;
+  lightweightCombat?: boolean;
   generateFactions?(context: GMContext, example: FactionWorld, budget: StageBudget): Promise<FactionWorld>;
   connectFactions?(
     context: GMContext,
@@ -427,6 +457,7 @@ export interface GameMaster {
   ): Promise<TurnNarration>;
   planCombat?(context: GMContext): Promise<unknown>;
   generate?(concept: string, signal?: AbortSignal): Promise<Character>;
+  improvePremise?(config: CampaignConfig, signal?: AbortSignal, previousDraft?: import('../shared/schema').CampaignImprovement): Promise<import('../shared/schema').CampaignImprovement>;
   levelUp?(context: LevelUpContext): Promise<LevelUpReward>;
 }
 export type LevelUpContext = {
@@ -498,16 +529,20 @@ const requiresUtilityCheck = (character: Character, action: Action, state?: Char
     ));
 
 export class Game {
+  readonly chats: NPCChats;
   private running = new Map<string, Promise<void>>();
   private mechanicalIndex = new Map<string, number>();
   private listeners = new Map<string, Set<() => void>>();
+  private combatPreviews = new Map<string, Map<string, string[]>>();
   private leveling = new Set<string>();
   constructor(
     public db: DB,
     private providers: ProviderFactory,
     private draw: (sides: number) => number = (sides) => randomInt(1, sides + 1),
     private diceFor?: (config: CampaignConfig) => DiceSource,
-  ) {}
+  ) {
+    this.chats = new NPCChats(this, providers, id => this.emit(id));
+  }
 
   private die(id: string, sides: number) {
     return this.diceFor ? this.diceFor(JSON.parse(this.campaign(id).config)).draw(sides) : this.draw(sides);
@@ -728,8 +763,10 @@ export class Game {
           .get(characterId, playerId) as { sheet: string } | undefined;
         if (!saved) throw new GameError('Choose one of your saved character templates.', 403);
         const character = characterSchema.parse(JSON.parse(saved.sheet));
-        if (character.selectedEquipmentIds.length !== 2)
-          throw new GameError('Save two starting equipment choices for your replacement first.');
+        if (!startingEquipmentSelected(character.equipmentOptions, character.selectedEquipmentIds))
+          throw new GameError(
+            'Save one weapon and two non-weapon starting equipment choices for your replacement first.',
+          );
         character.abilities = character.abilities.map((ability) => ({ ...ability, level: 1 }));
         initialState(character, randomUUID()); // Validate saved gear before queueing it.
         replacement = { characterId, character };
@@ -844,6 +881,7 @@ export class Game {
     return {
       id: row.id,
       number: row.number,
+      ...(row.combat_rules === 2 ? { combatRules: 2 as const } : {}),
       phase: row.phase,
       roster: JSON.parse(row.roster),
       result: row.result ? JSON.parse(row.result) : null,
@@ -913,7 +951,9 @@ export class Game {
           text: string;
           passed: number;
           accepts_lethal_risk: number;
+          npc_deal: string | null;
           ability_name: string | null;
+          combat_selection: string | null;
           support_action: string | null;
           gathering: string | null;
           submitted_at: string | null;
@@ -922,9 +962,11 @@ export class Game {
         memberId: a.member_id,
         text: a.text,
         passed: !!a.passed,
+        ...(a.npc_deal ? { npcDeal: JSON.parse(a.npc_deal) } : {}),
         ...(a.submitted_at ? { submittedAt: a.submitted_at } : {}),
         acceptsLethalRisk: !!a.accepts_lethal_risk,
         ...(a.ability_name ? { abilityName: a.ability_name } : {}),
+        ...(a.combat_selection ? { combatSelection: JSON.parse(a.combat_selection) } : {}),
         ...(a.support_action ? { supportAction: JSON.parse(a.support_action) } : {}),
         ...(a.gathering ? { gathering: JSON.parse(a.gathering) } : {}),
         ...(actors.find((member) => member.id === a.member_id)
@@ -946,13 +988,15 @@ export class Game {
     const c = this.campaign(id);
     const pending = this.pending(id);
     const members = this.members(id);
+    const viewer = members.find((member) => member.playerId === playerId);
+    const scene = ensureLocations(c.scene ? JSON.parse(c.scene) : initialScene(JSON.parse(c.config).setting));
     const world: FactionWorld | undefined = c.factions
       ? factionWorldSchema.parse(JSON.parse(c.factions))
       : undefined;
     const viewTurn = (row: TurnRow): Turn => {
       const turn = this.turn(row);
       const draft: Draft | undefined = row.draft ? JSON.parse(row.draft) : undefined;
-      if (draft?.context?.sceneProtocol) {
+      if (draft?.context?.sceneProtocol && !(row.number === 0 && row.phase === 'failed' && playerId === c.owner_id)) {
         delete turn.diagnostics;
       }
       if ((draft?.factions || draft?.context?.sceneProtocol) && row.phase !== 'complete')
@@ -969,11 +1013,21 @@ export class Game {
       }
       return turn;
     };
+    const currentTurn = pending ? viewTurn(pending) : null;
+    const previews = viewer && currentTurn?.phase === 'collecting'
+      ? [...(this.combatPreviews.get(currentTurn.id) ?? [])]
+        .filter(([memberId]) => currentTurn.roster.includes(memberId) &&
+          !currentTurn.actions.some((action) => action.memberId === memberId) &&
+          memberScene(scene, memberId).location.id === memberScene(scene, viewer.id).location.id)
+        .map(([memberId, targetIds]) => ({ memberId, targetIds }))
+      : [];
     return {
       id,
+      npcConversation: this.chats.view(id, !!viewer || playerId === c.owner_id, currentTurn),
       ...(world ? { factions: publicFactions(world) } : {}),
       config: JSON.parse(c.config),
-      scene: ensureLocations(c.scene ? JSON.parse(c.scene) : initialScene(JSON.parse(c.config).setting)),
+      scene,
+      ...(previews.length ? { combatPreviews: previews } : {}),
       status: c.status,
       paused: !!c.paused,
       version: c.version,
@@ -982,8 +1036,8 @@ export class Game {
       leaderName: (
         this.db.prepare('SELECT name FROM players WHERE id = ?').get(c.owner_id) as { name: string }
       ).name,
-      members: members.map((member) => publicMember(member, world)),
-      turn: pending ? viewTurn(pending) : null,
+      members: members.map((member) => publicMember(member, world, playerId)),
+      turn: currentTurn,
       history: (
         this.db
           .prepare(
@@ -1007,7 +1061,7 @@ export class Game {
       .filter((m) => m.active && m.state.hp > 0)
       .map((m) => m.id);
     this.db
-      .prepare('INSERT INTO turns(id, campaign_id, number, phase, roster) VALUES(?, ?, ?, ?, ?)')
+      .prepare('INSERT INTO turns(id, campaign_id, number, phase, roster, combat_rules) VALUES(?, ?, ?, ?, ?, 2)')
       .run(randomUUID(), id, number, phase, json(roster));
     if (phase === 'collecting') this.queueIfReady(id);
   }
@@ -1018,7 +1072,9 @@ export class Game {
       if (!this.members(id).some((m) => m.active))
         throw new GameError('At least one player needs to join first.');
       if (this.members(id).some((m) => m.active && !m.state.equipmentChosen))
-        throw new GameError('Every player must choose two starting equipment pieces first.');
+        throw new GameError(
+          'Every player must choose one weapon and two non-weapon starting equipment pieces first.',
+        );
       this.db.prepare("UPDATE campaigns SET status = 'active' WHERE id = ?").run(id);
       this.newTurn(id, 0, 'queued');
     })();
@@ -1062,6 +1118,9 @@ export class Game {
     abilityName: string | null = null,
     supportAction: SupportAction | null = null,
     gatheringId: string | null = null,
+    combatSelection?: CombatSelection,
+    npcDeal?: Action['npcDeal'],
+    onSubmitted?: () => void,
   ) {
     this.db.transaction(() => {
       const row = this.pending(id);
@@ -1080,7 +1139,8 @@ export class Game {
         throw new GameError('Helping your ally has already used your action for this turn.');
       if (member.state.pendingLevelUps > 0)
         throw new GameError('Choose your level-up reward before taking another action.');
-      if (!member.state.equipmentChosen) throw new GameError('Choose two starting equipment pieces first.');
+      if (!member.state.equipmentChosen)
+        throw new GameError('Choose one weapon and two non-weapon starting equipment pieces first.');
       let gathering: Action['gathering'];
       if (gatheringId) {
         if (passed || abilityName || supportAction)
@@ -1105,11 +1165,44 @@ export class Game {
             : `I travel to the gathering at ${name}.`;
       }
       if (passed && abilityName) throw new GameError('Passing cannot use an ability.');
+      if (combatSelection) {
+        if (row.combat_rules !== 2 || passed || supportAction || gatheringId)
+          throw new GameError('Choose a combat action on the current turn.');
+        const scene: Scene = JSON.parse(this.campaign(id).scene!);
+        const place = memberScene(scene, member.id);
+        if (!hasCombat(place)) throw new GameError('There is no active combat here.');
+        if ((combatSelection.kind === 'ability') !== !!abilityName)
+          throw new GameError('The selected action must match the chosen ability.');
+        const ability = abilityName ? availableAbility(member.character, member.state, abilityName) : undefined;
+        if (ability?.kind === 'utility' && ability.effect === 'assist')
+          throw new GameError('Describe how you use this utility ability.');
+        const targets = combatSelection.targetIds;
+        if (!ability || ability.effect === 'strike') {
+          if (ability?.targeting === 'area' ? targets.length !== 0 :
+            !targets.length || (ability?.targeting !== 'multiple' && targets.length !== 1))
+            throw new GameError('Choose targets for the selected attack.');
+          if (targets.some((id) => !place.encounter!.enemies.some((enemy) => enemy.id === id && enemy.hp > 0 && !enemy.withdrawn)))
+            throw new GameError('Choose an available enemy here.');
+        } else if (ability.targeting === 'party' || ability.effect === 'rally') {
+          if (targets.length) throw new GameError('This ability chooses its own beneficiaries.');
+        } else {
+          const ally = targets.length ? this.members(id).find((candidate) => candidate.id === targets[0]) : member;
+          const escaped = !!ally?.state.conditions.includes('Escaped');
+          const casterEscaped = member.state.conditions.includes('Escaped') && isHealingAbility(ability);
+          if (targets.length > 1 || !ally ||
+            memberScene(scene, ally.id).location.id !== place.location.id ||
+            (!(JSON.parse(row.roster) as string[]).includes(ally.id) && !isDowned(ally.state) && !escaped) ||
+            escaped !== casterEscaped ||
+            (ally.state.hp <= 0 && !(isHealingAbility(ability) && isDowned(ally.state))))
+            throw new GameError('Choose an available ally here.');
+        }
+      }
       if (abilityName) {
         const scene: Scene = JSON.parse(this.campaign(id).scene!);
         const place = memberScene(scene, member.id);
         const inCombat = place.encounter && !place.encounter.victory && !place.encounter.escaped;
-        const ability = availableAbility(member.character, member.state, abilityName);
+        const ability = availableAbilities(member.character, member.state).find((ability) => ability.name === abilityName);
+        if (!ability) throw new GameError('Choose a current ability available to this character.');
         if (
           !inCombat &&
           ability.kind === 'combat' &&
@@ -1122,7 +1215,7 @@ export class Game {
       }
       this.db
         .prepare(
-          'INSERT INTO actions(turn_id, member_id, text, passed, accepts_lethal_risk, ability_name, support_action, gathering, submitted_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(turn_id, member_id) DO UPDATE SET text = excluded.text, passed = excluded.passed, accepts_lethal_risk = excluded.accepts_lethal_risk, ability_name = excluded.ability_name, support_action = excluded.support_action, gathering = excluded.gathering, submitted_at = excluded.submitted_at',
+          'INSERT INTO actions(turn_id, member_id, text, passed, accepts_lethal_risk, ability_name, support_action, gathering, submitted_at, combat_selection, npc_deal) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(turn_id, member_id) DO UPDATE SET text = excluded.text, passed = excluded.passed, accepts_lethal_risk = excluded.accepts_lethal_risk, ability_name = excluded.ability_name, support_action = excluded.support_action, gathering = excluded.gathering, submitted_at = excluded.submitted_at, combat_selection = excluded.combat_selection, npc_deal = excluded.npc_deal',
         )
         .run(
           turnId,
@@ -1134,7 +1227,10 @@ export class Game {
           supportAction ? json(supportAction) : null,
           gathering ? json(gathering) : null,
           new Date().toISOString(),
+          combatSelection ? json(combatSelection) : null,
+          npcDeal ? json(npcDeal) : null,
         );
+      onSubmitted?.();
       this.queueIfReady(id);
       this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
     })();
@@ -1150,8 +1246,32 @@ export class Game {
       if (!member || !(JSON.parse(row.roster) as string[]).includes(member.id))
         throw new GameError('You join the action from the next turn.', 403);
       this.db.prepare('DELETE FROM actions WHERE turn_id = ? AND member_id = ?').run(turnId, member.id);
+      this.combatPreviews.get(turnId)?.delete(member.id);
       this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
     })();
+    this.emit(id);
+  }
+  previewCombat(id: string, playerId: string, turnId: string, targetIds: string[]) {
+    const row = this.pending(id);
+    if (!row || row.id !== turnId || row.phase !== 'collecting' || row.combat_rules !== 2)
+      throw new GameError('This round is no longer collecting actions.', 409);
+    const member = this.members(id).find((candidate) => candidate.playerId === playerId);
+    const turn = this.turn(row);
+    if (!member || !turn.roster.includes(member.id) || member.state.hp <= 0 || incapacitatingCondition(member.state))
+      throw new GameError('This character cannot plan a combat action now.', 403);
+    if (turn.actions.some((action) => action.memberId === member.id))
+      throw new GameError('An action is already submitted.', 409);
+    const scene: Scene = JSON.parse(this.campaign(id).scene!);
+    const place = memberScene(scene, member.id);
+    if (!hasCombat(place) || targetIds.some((targetId) =>
+      !place.encounter!.enemies.some((enemy) => enemy.id === targetId && enemy.hp > 0 && !enemy.withdrawn)))
+      throw new GameError('Choose available enemies here.');
+    const previews = this.combatPreviews.get(turnId) ?? new Map<string, string[]>();
+    if (targetIds.length) previews.set(member.id, targetIds);
+    else previews.delete(member.id);
+    if (previews.size) this.combatPreviews.set(turnId, previews);
+    else this.combatPreviews.delete(turnId);
+    this.db.prepare('UPDATE campaigns SET version = version + 1 WHERE id = ?').run(id);
     this.emit(id);
   }
   private queueIfReady(id: string) {
@@ -1169,6 +1289,7 @@ export class Game {
       )
     )
       this.db.prepare("UPDATE turns SET phase = 'queued' WHERE id = ? AND phase = 'collecting'").run(row.id);
+      this.combatPreviews.delete(row.id);
   }
   private resolveSupport(id: string, turnId: string): SupportResult[] {
     return this.withDraft(id, turnId, (draft) => {
@@ -1196,13 +1317,13 @@ export class Game {
             throw new GameError('This character cannot use their main action while incapacitated.');
           restored =
             support.type === 'help-up'
-              ? helpUp(target.state)
+              ? helpUp(target.state, member.state)
               : target.state.hp >= target.state.maxHp
                 ? 0
                 : healWithItem(member.character, member.state, support.itemId!, target);
           log =
             support.type === 'help-up'
-              ? `${member.character.name} helps ${target.character.name} up at 1 HP. They can act next turn.`
+              ? `${member.character.name} helps ${target.character.name} up at ${restored} HP. They can act next turn.`
               : `${member.character.name} uses ${sourceName} on ${target.character.name}, restoring ${restored} HP.`;
         } catch (error) {
           log = `${member.character.name}'s ${sourceName} has no effect: ${(error as Error).message}. The main action is spent.`;
@@ -1271,6 +1392,7 @@ export class Game {
         const roster = (JSON.parse(row.roster) as string[]).filter((m) => m !== memberId);
         this.db.prepare('UPDATE turns SET roster = ? WHERE id = ?').run(json(roster), row.id);
         this.db.prepare('DELETE FROM actions WHERE turn_id = ? AND member_id = ?').run(row.id, memberId);
+        this.combatPreviews.get(row.id)?.delete(memberId);
       } else if (
         row?.phase === 'collecting' &&
         active &&
@@ -1332,6 +1454,7 @@ export class Game {
         (original.circumstances?.favorable ?? null) !== (check.circumstances?.favorable ?? null) ||
         (original.circumstances?.adverse ?? null) !== (check.circumstances?.adverse ?? null) ||
         original.lethal !== check.lethal ||
+        !isDeepStrictEqual(original.goal ?? null, check.goal ?? null) ||
         (original.abilityName ?? null) !== (check.abilityName ?? null) ||
         (original.assistsMemberId ?? null) !== (check.assistsMemberId ?? null) ||
         json([...(original.assistedBy ?? [])].sort()) !== json([...(check.assistedBy ?? [])].sort())
@@ -1341,6 +1464,7 @@ export class Game {
     }
     const result = this.withDraft(id, turnId, (draft) => {
       assertPublicFactionText(draft.factions, check.reason);
+      if (check.goal) assertPublicFactionText(draft.factions, `${check.goal.intent}\n${check.goal.success}`);
       const scene = memberScene(draft.scene, check.memberId);
       if ((draft.receipts.loot as { memberId?: string } | undefined)?.memberId === check.memberId)
         throw new GameError(
@@ -1448,7 +1572,7 @@ export class Game {
       const ownBonus = ability ? abilityBonus(ability) : 0;
       const assistanceBonus = Math.max(0, helperBonus - ownBonus);
       const bonus =
-        modifier(member.state.stats[check.stat]) +
+        modifier(effectiveStats(member.state)[check.stat]) +
         equipmentBonus(member.state, check.stat, 'checkBonus') +
         ownBonus +
         assistanceBonus -
@@ -1496,7 +1620,14 @@ export class Game {
       );
       const member = draft.members.find((member) => member.id === request.memberId);
       const prior = draft.receipts[planKey] as
-        { request: Investigation; source: InvestigationResult['source']; signature: string; narrativeVersion?: 1 } | undefined;
+        | {
+            request: Investigation;
+            source: InvestigationResult['source'];
+            signature: string;
+            narrativeVersion?: 1;
+            answer?: number;
+          }
+        | undefined;
       if (
         !action ||
         !member ||
@@ -1513,11 +1644,8 @@ export class Game {
           !startedCombats(draft)[memberScene(draft.scene, member.id).location.id!])
       )
         throw new GameError('Resolve combat actions through the combat engine.');
-      const bound = bindInvestigationSource(context, member.id, request.source);
-      if (
-        !prior && request.source.kind === 'place' &&
-        submittedActionObligations(context, member.id).some((obligation) => obligation.kind === 'talk')
-      )
+      const bound = bindInvestigationSource(context, member.id, request.source, request.intentId);
+      if (!prior && request.source.kind !== 'npc' && bound.intent?.kind === 'talk')
         throw new GameError(
           'Question the actual person using source kind:npc and their saved ID. An unnamed witness may be introduced with a stable new: role ID, name/role and description. A place source cannot replace the person answering.',
         );
@@ -1534,6 +1662,7 @@ export class Game {
           prior.source.kind !== bound.source.kind ||
           prior.source.locationId !== bound.source.locationId ||
           prior.request.answer !== request.answer ||
+          (prior.request.intentId && prior.request.intentId !== bound.intent?.id) ||
           prior.request.preparation.id !== request.preparation.id
         )
           throw new GameError(
@@ -1567,15 +1696,21 @@ export class Game {
         ...(request.preparation.locationId === 'current' ? { locationId: bound.source.locationId } : {}),
       };
       if (preparation.journey)
-        throw new GameError('Prepare journeys in scene notes on the submitted travel, not through an investigation.');
+        throw new GameError(
+          'Prepare journeys in scene notes on the submitted travel, not through an investigation.',
+        );
       const notes = prepareGMNotes(draft.gmMemory ?? [], [preparation]);
-      if (!notes[0].discoveries[request.answer]) throw new GameError('Select an existing prepared answer.');
+      const appended = preparation.appendDiscoveries;
+      if (appended && !appended[request.answer]) throw new GameError('Select a zero-based answer in appendDiscoveries.');
+      const answer = appended ? notes[0].discoveries.length - appended.length + request.answer : request.answer;
+      if (!notes[0].discoveries[answer]) throw new GameError('Select an existing prepared answer.');
       draft.gmMemory = updateGMMemory(draft.gmMemory ?? [], notes);
       const saved = {
-        request: { ...request, preparation },
+        request: { ...request, intentId: bound.intent?.id, preparation },
         source: bound.source,
         signature: `${bound.signature}:${request.check?.abilityName ?? 'ordinary'}`,
         narrativeVersion: 1 as const,
+        answer,
       };
       draft.receipts[planKey] = saved;
       return saved;
@@ -1585,8 +1720,9 @@ export class Game {
     const existing = draft.receipts[resultKey] as InvestigationResult | undefined;
     if (existing) return existing;
     const note = draft.gmMemory!.find((note) => note.id === plan.request.preparation.id)!;
+    const answer = plan.answer ?? plan.request.answer;
     const location = plan.source.locationId;
-    const attemptKey = investigationAttemptKey(note.id, plan.request.answer, plan.signature);
+    const attemptKey = investigationAttemptKey(note.id, answer, plan.signature);
     const localSearch =
       location === draft.scene.location.id || draft.scene.places?.[location]
         ? placeScene(draft.scene, location).searches?.[plan.source.id.toLowerCase()]
@@ -1598,12 +1734,13 @@ export class Game {
     const priorSearch = sourceSearch?.attempts?.[attemptKey] ?? sourceSearch;
     const cached = priorSearch?.investigation;
     const knownAnswer = knownInvestigationAnswer(
-      this.resolutionContext(draft, row), note.discoveries[plan.request.answer],
+      this.resolutionContext(draft, row),
+      note.discoveries[answer],
     );
     const sameTurn = investigationResults(this.resolutionContext(draft, row)).find(
       (result) =>
         result.hookId === note.id &&
-        result.answer === plan.request.answer &&
+        result.answer === answer &&
         result.source.kind === plan.source.kind &&
         result.source.id === plan.source.id &&
         result.signature === plan.signature,
@@ -1614,7 +1751,7 @@ export class Game {
       !!(
         cached &&
         cached.hookId === note.id &&
-        cached.answer === plan.request.answer &&
+        cached.answer === answer &&
         cached.signature === plan.signature
       );
     const actor = draft.members.find((member) => member.id === request.memberId)!;
@@ -1634,7 +1771,7 @@ export class Game {
         : (roll?.success ?? true);
       const branch = success ? plan.request.success : plan.request.failure;
       let finding = {
-        fact: success ? note.discoveries[plan.request.answer] : plan.request.failure.fact,
+        fact: success ? note.discoveries[answer] : plan.request.failure.fact,
         text: branch.text,
         lead: branch.lead.fact,
         leadLocationId:
@@ -1653,19 +1790,20 @@ export class Game {
                 ...(cached.narrativeVersion ? { narrativeVersion: cached.narrativeVersion } : {}),
               }
             : {
-                fact: note.discoveries[plan.request.answer],
-                text: note.discoveries[plan.request.answer],
+                fact: note.discoveries[answer],
+                text: note.discoveries[answer],
                 lead: branch.lead.fact,
                 leadLocationId: finding.leadLocationId,
               };
       const name = current.members.find((member) => member.id === request.memberId)!.character.name;
       const result: InvestigationResult = {
         memberId: request.memberId,
+        ...(plan.request.intentId ? { intentId: plan.request.intentId } : {}),
         source: plan.source,
         question: plan.request.question,
         thread: plan.request.thread ?? 'premise',
         hookId: note.id,
-        answer: plan.request.answer,
+        answer,
         signature: plan.signature,
         success,
         reused,
@@ -1722,6 +1860,7 @@ export class Game {
     bonus = 0,
     dc = 10,
     receiptKey?: string,
+    combatRoll?: CombatRollDetails,
   ) {
     const index = this.mechanicalIndex.get(turnId) ?? 0;
     if (!receiptKey) this.mechanicalIndex.set(turnId, index + 1);
@@ -1729,27 +1868,32 @@ export class Game {
     const prior = this.db
       .prepare('SELECT parameters, result FROM rolls WHERE turn_id = ? AND check_key = ?')
       .get(turnId, key) as { parameters: string; result: string } | undefined;
-    const parameters = { sides, actor, stat, bonus, dc, label };
+    const parameters = { sides, actor, stat, bonus, dc, label, ...(combatRoll ? { combatRoll } : {}) };
     if (prior) {
       if (prior.parameters !== json(parameters))
         throw new GameError(
           'Combat dice are locked. Retry the original actions without changing their mechanics.',
         );
-      return (JSON.parse(prior.result) as Roll).dice[0];
+      const receipt = JSON.parse(prior.result) as Roll;
+      return receipt.keptDie ?? receipt.dice[0];
     }
-    const die = this.die(id, sides);
-    if (!Number.isInteger(die) || die < 1 || die > sides) throw new GameError('Invalid randomness source.');
+    const mode = combatRoll?.mode ?? 'normal';
+    const dice = Array.from({ length: mode === 'normal' ? 1 : 2 }, () => this.die(id, sides));
+    if (dice.some((die) => !Number.isInteger(die) || die < 1 || die > sides))
+      throw new GameError('Invalid randomness source.');
+    const die = mode === 'advantage' ? Math.max(...dice) : mode === 'disadvantage' ? Math.min(...dice) : dice[0];
     const receipt: Roll = {
       id: randomUUID(),
       memberId: actor,
       stat,
       dc: dc as Check['dc'],
-      mode: 'normal',
+      mode,
       lethal: false,
-      reason: label,
+      reason: combatRoll?.reason || label,
       label,
       notation: `d${sides}`,
-      dice: [die],
+      dice,
+      ...(combatRoll ? { keptDie: die } : {}),
       modifier: bonus,
       total: die + bonus,
       success: sides === 20 ? die !== 1 && (die === 20 || die + bonus >= dc) : true,
@@ -1901,15 +2045,10 @@ export class Game {
       const roster = this.turn(this.pending(id)!).roster;
       const initiative = draft.members
         .filter((m) => present(m.id) && roster.includes(m.id) && m.state.hp > 0)
-        .map((m) => ({
-          id: m.id,
-          total:
-            die(20, `${m.character.name}: initiative`, m.id, 'DEX', modifier(m.state.stats.DEX)) +
-            modifier(m.state.stats.DEX) +
-            Object.values(m.state.equipment)
-              .filter((x, i, all) => x && all.findIndex((y) => y?.id === x.id) === i)
-              .reduce((n, x) => n + (x?.initiativePenalty ?? 0), 0),
-        }));
+        .map((m) => {
+          const bonus = initiativeBonus(m.state);
+          return { id: m.id, total: die(20, `${m.character.name}: initiative`, m.id, 'DEX', bonus) + bonus };
+        });
       const generated = enemies.map((e) => {
         const total = die(20, `${e.name}: initiative`, e.id, 'DEX');
         initiative.push({ id: e.id, total });
@@ -1931,8 +2070,10 @@ export class Game {
               );
         return { ...e, equipment, maxHp: e.maxHp ?? e.hp, initiative: total };
       });
-      for (const member of draft.members.filter((member) => present(member.id)))
+      for (const member of draft.members.filter((member) => present(member.id))) {
         delete member.state.respawnReady;
+        member.state.combatPerks = { round: 1 };
+      }
       const encounter: Encounter = {
         enemies: generated,
         round: 1,
@@ -1940,6 +2081,10 @@ export class Game {
         victory: false,
         escaped: false,
       };
+      prepareEnemyIntents(
+        draft.members.filter((member) => present(member.id) && roster.includes(member.id)),
+        encounter,
+      );
       for (const [index, enemy] of encounter.enemies.entries())
         rememberNPCReaction(draft.scene, enemy.id, proposed[index].name, targetId, enemy.description, true);
       saveNPCEncounter(draft.scene, targetId, encounter);
@@ -2067,7 +2212,7 @@ export class Game {
         !!this.db
           .prepare('SELECT id FROM rolls WHERE turn_id = ? AND check_key = ?')
           .get(turnId, 'mechanic:100');
-      const die = (sides: number, label: string, actor: string, stat: Stat, bonus = 0, dc = 10) =>
+      const die = (sides: number, label: string, actor: string, stat: Stat, bonus = 0, dc = 10, details?: CombatRollDetails) =>
         this.mechanicalDie(
           id,
           turnId,
@@ -2078,6 +2223,7 @@ export class Game {
           bonus,
           dc,
           legacyDice ? undefined : `combat:${targetId}:round:${draw++}`,
+          details,
         );
       const turn = this.turn(this.pending(id)!);
       const atEncounter = (memberId: string) => memberScene(draft.scene, memberId).location.id === targetId;
@@ -2091,11 +2237,13 @@ export class Game {
         throw new GameError(
           'Interpret exactly the submitted non-pass actions; never invent player decisions.',
         );
-      const journal = parsed.actions.some((action) => action.environment)
-        ? (this.db
-            .prepare('SELECT kind, name, detail FROM journal WHERE campaign_id = ?')
-            .all(id) as Outcome['journal'])
-        : [];
+      const journal =
+        parsed.actions.some((action) => action.environment || action.maneuver || action.rollEffect) ||
+        draft.members.some((member) => member.state.combatCover)
+          ? (this.db
+              .prepare('SELECT kind, name, detail FROM journal WHERE campaign_id = ?')
+              .all(id) as Outcome['journal'])
+          : [];
       for (const action of parsed.actions) {
         const submitted = turn.actions.find((submitted) => submitted.memberId === action.memberId)!;
         const member = draft.members.find((member) => member.id === action.memberId)!;
@@ -2104,6 +2252,13 @@ export class Game {
           if (json(checked) !== json(action.environment))
             throw new GameError('Reuse the saved validated environmental profile.');
         }
+        const combatContext = this.combatContext(this.resolutionContext(draft, this.pending(id)!), targetId);
+        validateCombatManeuver(combatContext, action);
+        if (turn.combatRules === 2 && action.maneuver &&
+          (action.maneuver.effect !== 'cover' || !['interact', 'defend'].includes(action.main)))
+          throw new GameError('Use the current combat roll effects.');
+        if (action.rollEffect && !combatRollEffect(combatContext, action, action.rollEffect))
+          throw new GameError('Reuse the validated combat roll effect.');
         if (submitted.supportAction) {
           const support = submitted.supportAction;
           if (
@@ -2126,13 +2281,14 @@ export class Game {
             action.dc ||
             action.effect ||
             action.environment ||
+            action.maneuver ||
             action.cureCondition ||
             action.reengage
           )
             throw new GameError('Combat orientation must remain an information-only interaction.');
           continue;
         }
-        const ability = requestedAbility(
+        const ability = submitted.combatSelection?.kind === 'attack' ? undefined : requestedAbility(
           member.character,
           submitted,
           undefined,
@@ -2155,23 +2311,38 @@ export class Game {
       );
       for (const member of active)
         if (member.state.hp > 0 && !place.encounter!.initiative.some((i) => i.id === member.id)) {
-          const mod = modifier(member.state.stats.DEX);
+          const mod = modifier(effectiveStats(member.state).DEX);
           const total = die(20, `${member.character.name}: joins initiative`, member.id, 'DEX', mod) + mod;
           place.encounter!.initiative.push({ id: member.id, total });
         }
       place.encounter!.initiative.sort((a, b) => b.total - a.total);
+      const coverFacts = environmentalFacts({ scene: place, journal });
+      for (const member of active) {
+        const cover = member.state.combatCover;
+        if (cover && !coverFacts[cover.sourceId]?.includes(cover.evidence)) delete member.state.combatCover;
+      }
       const events: CombatEvent[] = [];
+      draft.scene.npcs ??= knownNPCs(draft.scene);
+      const nearbyNPCs = Object.values(draft.scene.npcs).filter((npc) => npc.locationId === targetId);
+      for (const npc of nearbyNPCs) {
+        const enemy = place.encounter!.enemies.find((enemy) => enemy.id === npc.id);
+        if (enemy) npc.enemy = enemy;
+      }
       const logs = runCombat(
         active,
         place.encounter!,
         parsed,
-        (sides, label, actor, stat, bonus, dc) => die(sides, label, actor, stat, bonus, dc),
+        die,
         (event) => events.push(event),
         place.environment ??
           (parsed.actions.some((action) => action.environment)
             ? (place.environment = { sources: {}, spentResources: [] })
             : undefined),
+        nearbyNPCs,
+        turn.combatRules,
       );
+      // Backfill intentions after the first resumed round of an older saved encounter.
+      prepareEnemyIntents(active, place.encounter!);
       if (place.encounter!.victory) {
         logs.push(
           ...recoverAfterEncounter(
@@ -2248,7 +2419,11 @@ export class Game {
       if (!action || turn.number === 0 || !turn.roster.includes(use.memberId))
         throw new GameError('Only a character acting this turn can use a resource.');
       if (action.gathering) throw new GameError('Joining a gathering uses the whole turn for travel.');
-      const targetId = use.targetId ?? use.memberId;
+      const npc =
+        use.targetId && !draft.members.some((member) => member.id === use.targetId)
+          ? findNPC({ npcs: knownNPCs(draft.scene) }, use.targetId)
+          : undefined;
+      const targetId = npc?.id ?? use.targetId ?? use.memberId;
       const key = `resource:${use.itemId ? 'item' : 'ability'}:${use.memberId}`;
       const prior = draft.receipts[key] as ResourceReceipt | undefined;
       if (prior) {
@@ -2286,9 +2461,22 @@ export class Game {
         throw new GameError(`This character has already spent their ${slot} action.`);
       const member = draft.members.find((member) => member.id === use.memberId)!;
       const target = draft.members.find((member) => member.id === targetId);
-      if (!target) throw new GameError('Choose an ally in this campaign.');
+      if (!target && !npc) throw new GameError('Choose a saved party member or NPC in this campaign.');
+      if (targetId === member.id) {
+        const named = requestedHealingNPC({ npcs: knownNPCs(draft.scene) }, action.text);
+        const partyAbility =
+          use.abilityName &&
+          availableAbilities(member.character, member.state).some(
+            (ability) => ability.name === use.abilityName && ability.targeting === 'party',
+          );
+        if (named && !partyAbility)
+          throw new GameError(
+            `Preserve the healing recipient: ${named.name} (${named.id}); null means self.`,
+          );
+      }
       if (
-        memberScene(draft.scene, target.id).location.id !== memberScene(draft.scene, use.memberId).location.id
+        (npc ? npc.locationId : memberScene(draft.scene, target!.id).location.id) !==
+        memberScene(draft.scene, use.memberId).location.id
       )
         throw new GameError('That ally is at another location.');
       if (member.state.hp <= 0) throw new GameError('Only a conscious character can use a resource.');
@@ -2297,6 +2485,51 @@ export class Game {
         throw new GameError('This character cannot use that action while incapacitated.');
       if (action.supportAction)
         throw new GameError('This support action has already been resolved by the server.');
+      if (npc) {
+        if (use.itemId && requestedConsumable(member, action, use.itemId)?.id !== use.itemId)
+          throw new GameError('Use the consumable requested in the player’s action.');
+        if (
+          use.abilityName &&
+          requestedAbility(member.character, action, undefined, use.abilityName, member.state)?.name !==
+            use.abilityName
+        )
+          throw new GameError('Use a saved healing ability requested in the player’s action.');
+        let healingRoll = 0;
+        const effects = healNPCWithResource(
+          member.character,
+          member.state,
+          npc,
+          use,
+          (sides, label, _actor, stat, bonus, dc) =>
+            this.mechanicalDie(
+              id,
+              turnId,
+              sides,
+              label,
+              member.id,
+              stat,
+              bonus,
+              dc,
+              `${key}:${healingRoll++}`,
+            ),
+        );
+        (draft.scene.npcs ??= knownNPCs(draft.scene))[npc.id] = npc;
+        for (const place of [draft.scene, ...Object.values(draft.scene.places ?? {})]) {
+          const enemy = place.encounter?.enemies.find((enemy) => enemy.id === npc.id);
+          if (enemy && npc.enemy) Object.assign(enemy, structuredClone(npc.enemy));
+        }
+        const receipt: ResourceReceipt = {
+          ...use,
+          targetId,
+          slot,
+          ...effects,
+          state: structuredClone(member.state),
+          npcTarget: structuredClone(npc),
+        };
+        draft.receipts[key] = receipt;
+        return receipt;
+      }
+      if (!target) throw new GameError('Choose a saved party member or NPC in this campaign.');
       if (isDead(target.state)) throw new GameError('A dead character cannot be healed.');
       let restored = 0;
       let targets: ResourceReceipt['targets'];
@@ -2308,8 +2541,11 @@ export class Game {
         if (requestedConsumable(member, action, item.id)?.id !== item.id)
           throw new GameError('Use the consumable requested in the player’s action.');
         sourceName = item.name;
-        if (item.healing) restored = healWithItem(member.character, member.state, item.id, target);
-        else removeItem(member.state, item.id);
+        if (item.healing) {
+          if (target.state.hp >= target.state.maxHp)
+            throw new GameError('The target is already at full health; the consumable is preserved.');
+          restored = healWithItem(member.character, member.state, item.id, target);
+        } else removeItem(member.state, item.id);
       } else {
         if (
           requestedAbility(member.character, action, undefined, use.abilityName, member.state)?.name !==
@@ -2350,7 +2586,7 @@ export class Game {
             state: structuredClone(target.state),
           }));
           restored = targets.reduce((sum, result) => sum + result.restored, 0);
-        } else restored = mendWithAbility(member.character, member.state, sourceName, target, roll);
+        } else restored = mendWithAbility(member.character, member.state, sourceName, target!, roll);
       }
       const receipt: ResourceReceipt = {
         ...use,
@@ -2682,7 +2918,13 @@ export class Game {
         incapacitatingCondition(member.state)
       )
         continue;
-      const item = requestedConsumable(member, action);
+      // A general treatment already resolved by a check does not imply spending an unnamed item too.
+      const item = requestedConsumable(
+        member,
+        action,
+        null,
+        !turn.rolls.some((roll) => roll.memberId === member.id && !roll.notation),
+      );
       if (
         item &&
         !draft.receipts[`resource:item:${member.id}`] &&
@@ -2880,7 +3122,11 @@ export class Game {
           (pickup) => pickup.itemId === item.id,
         );
         if (!collected)
-          offerGroundItem(place, { ...baseItem(item.id, item.name, 'tool'), description: item.description, sourceId: item.sourceId });
+          offerGroundItem(place, {
+            ...baseItem(item.id, item.name, 'tool'),
+            description: item.description,
+            sourceId: item.sourceId,
+          });
         place.searchedLoot = { ...place.searchedLoot, [item.sourceId]: item.name };
         const feature = draft.scene.features?.[item.sourceId];
         if (feature && feature.locationId === place.location.id && feature.name === item.name)
@@ -2953,6 +3199,11 @@ export class Game {
         const questPlan = adjudication.version === 2 ? planQuests(questContext, adjudication) : undefined;
         const turn = this.turn(row);
         this.assertResolved(turn, draft, outcome);
+        for (const roll of turn.rolls.filter((roll) => !roll.notation && roll.success && roll.goal)) {
+          const actor = draft.members.find((member) => member.id === roll.memberId)!;
+          if (!outcome.journal.some((entry) => entry.detail === roll.goal!.success))
+            outcome.journal.push({ kind: 'fact', name: `${actor.character.name} · ${roll.goal!.intent}`.slice(0, 100), detail: roll.goal!.success });
+        }
         const events: TurnResolution['events'][number][] = structuredClone(adjudication.events);
         const add = (fact: string, memberId: string | null, receiptRefs: string[]) => {
           events.push({
@@ -2967,6 +3218,18 @@ export class Game {
             ...(adjudication.version === 2 ? { phase: 'aftermath' as const, result: null } : {}),
           });
         };
+        for (const action of turn.actions) {
+          if (!action.npcDeal?.cost) continue;
+          const resolved = adjudication.actions.find(a => a.memberId === action.memberId);
+          const main = adjudication.version === 2
+            ? adjudication.actions.find(a => a.memberId === action.memberId)?.components.main
+            : undefined;
+          const status = main?.status ?? resolved?.status;
+          if (status !== 'success') continue;
+          const member = draft.members.find(m => m.id === action.memberId)!;
+          member.state.currency -= action.npcDeal.cost;
+          add(`${member.character.name} paid ${action.npcDeal.cost} ${draft.scene.currencyName ?? 'currency'}.`, member.id, []);
+        }
         for (const [index, change] of outcome.changes.entries()) {
           const member = draft.members.find((member) => member.id === change.memberId)!;
           if (isDead(member.state)) throw new GameError('Permadeath cannot be undone by narrative changes.');
@@ -3063,9 +3326,15 @@ export class Game {
         const questResult =
           adjudication.version === 2 && questPlan && Object.keys(questPlan.quests).length
             ? applyQuestPlan(
-                questContext, adjudication, questPlan, draft.scene, draft.members,
-                (ref) => ref === 'current' ? questContext.scene.location.id! : (draft.placeRefs?.[ref] ?? ref),
-                (sides, key) => this.mechanicalDie(id, turnId, sides, 'Quest reward', 'world', 'INT', 0, 10, key),
+                questContext,
+                adjudication,
+                questPlan,
+                draft.scene,
+                draft.members,
+                (ref) =>
+                  ref === 'current' ? questContext.scene.location.id! : (draft.placeRefs?.[ref] ?? ref),
+                (sides, key) =>
+                  this.mechanicalDie(id, turnId, sides, 'Quest reward', 'world', 'INT', 0, 10, key),
               )
             : { facts: [], reputation: [] };
         if (questPlan?.claims.length) draft.receipts.quests = { claims: questPlan.claims, ...questResult };
@@ -3135,15 +3404,23 @@ export class Game {
                 !!prior?.rewardRolled ||
                 (Object.hasOwn(place.searchedLoot ?? {}, search.sourceId) &&
                   !(discovery?.sourceId === search.sourceId && discoveryPlace === place.location.id)),
+              setbackRewardRolled: !!prior?.setbackRewardRolled,
             };
             const check = turn.rolls.find((roll) => roll.memberId === member.id && !roll.notation);
-            if (check?.success && action.components.main?.status === 'success' && !record.rewardRolled) {
-              const key = `exploration:${place.location.id}:${search.sourceId}`;
+            const setback = !!check && !check.success && action.components.main?.status === 'failure';
+            if (
+              check &&
+              ((check.success && action.components.main?.status === 'success' && !record.rewardRolled) ||
+                (setback &&
+                  !record.setbackRewardRolled &&
+                  !Object.hasOwn(place.searchedLoot ?? {}, search.sourceId)))
+            ) {
+              const key = `${setback ? 'exploration-setback' : 'exploration'}:${place.location.id}:${search.sourceId}`;
               const chance = this.mechanicalDie(
                 id,
                 turnId,
                 100,
-                'Exploration bonus chance (15%)',
+                setback ? 'Exploration incidental find chance (5%)' : 'Exploration bonus chance (15%)',
                 member.id,
                 'WIS',
                 0,
@@ -3151,7 +3428,7 @@ export class Game {
                 `${key}:chance`,
               );
               let item: Item | null = null;
-              if (chance <= 15) {
+              if (chance <= (setback ? 5 : 15)) {
                 let draw = 0;
                 item = randomLoot(
                   `search-${tokenHash(`${turnId}:${key}`).slice(0, 24)}`,
@@ -3168,7 +3445,10 @@ export class Game {
                       10,
                       `${key}:item:${draw++}`,
                     ),
-                  search.reward ?? explorationPotion(config.language),
+                  setback
+                    ? explorationPotion(config.language)
+                    : (search.reward ?? explorationPotion(config.language)),
+                  setback ? 'Common' : undefined,
                 );
                 if (
                   item.kind !== 'consumable' &&
@@ -3184,9 +3464,10 @@ export class Game {
                     item.rarity,
                   );
                 offerGroundItem(place, item);
+                const rewardSourceId = setback ? `incidental:${search.sourceId}` : search.sourceId;
                 place.searchedLoot = {
                   ...place.searchedLoot,
-                  [search.sourceId]: place.searchedLoot?.[search.sourceId] ?? item.name,
+                  [rewardSourceId]: place.searchedLoot?.[rewardSourceId] ?? item.name,
                 };
                 add(
                   config.language === 'Nederlands'
@@ -3197,9 +3478,12 @@ export class Game {
                 );
                 const event = events.at(-1)! as import('../shared/turn-resolution').ResolvedEvent;
                 event.locationRef = place.location.id;
-                event.dependsOn = [{ eventId: `check:${check.id}`, requires: 'success' }];
+                event.dependsOn = [
+                  { eventId: `check:${check.id}`, requires: setback ? 'occurrence' : 'success' },
+                ];
               }
-              record.rewardRolled = true;
+              if (setback) record.setbackRewardRolled = true;
+              else record.rewardRolled = true;
               draft.receipts[key] = {
                 memberId: member.id,
                 locationId: place.location.id,
@@ -3244,8 +3528,13 @@ export class Game {
             })),
           ];
         }
+        const spokenFacts = [...new Set([
+          ...investigationResults(this.resolutionContext(draft, row)).map((result) => result.finding.fact),
+          ...turn.rolls.flatMap((roll) => !roll.notation && roll.success && roll.goal ? [roll.goal.success] : []),
+        ])];
         const resolution = turnResolutionSchema.parse({
           version: adjudication.version,
+          ...(spokenFacts.length ? { spokenFacts } : {}),
           ...(adjudication.version === 2 && adjudication.arrivals !== undefined
             ? {
                 arrivals: adjudication.arrivals.map((arrival) => ({
@@ -3294,7 +3583,10 @@ export class Game {
               .map((member) => [member.id, draft.scene.memberLocations![member.id]]),
           ),
           knownLocations: knownLocations(draft.scene),
-          worldMap: draft.scene.worldMap && { ...draft.scene.worldMap, connections: locationConnections(draft.scene) },
+          worldMap: draft.scene.worldMap && {
+            ...draft.scene.worldMap,
+            connections: locationConnections(draft.scene),
+          },
           structureStates: Object.values(draft.scene.structures ?? {}),
           npcStates: Object.values(knownNPCs(draft.scene)).map((npc) => ({
             id: npc.id,
@@ -3389,6 +3681,27 @@ export class Game {
     );
   }
 
+  private recordPlayability(id: string, row: TurnRow, draft: Draft) {
+    if (!draft.context || row.number === 0) return;
+    const previous = (
+      this.db
+        .prepare(
+          `SELECT a.member_id AS memberId, a.text, a.passed FROM actions a
+      WHERE a.turn_id=(SELECT id FROM turns WHERE campaign_id=? AND phase='complete' AND number<? ORDER BY number DESC LIMIT 1)`,
+        )
+        .all(id, row.number) as { memberId: string; text: string; passed: number }[]
+    ).map((action) => ({ ...action, passed: !!action.passed }));
+    const metrics = turnPlayability(
+      draft.context,
+      draft.adjudication?.version === 2 ? draft.adjudication : undefined,
+      draft.goalRecovery,
+      previous,
+    );
+    this.db
+      .prepare('INSERT INTO events(campaign_id,turn_id,kind,payload) VALUES(?,?,?,?)')
+      .run(id, row.id, 'turn_playability', json(metrics));
+  }
+
   private publish(id: string, turnId: string) {
     this.db.transaction(() => {
       const row = this.pending(id);
@@ -3457,6 +3770,9 @@ export class Game {
       this.db
         .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
         .run(id, turnId, 'turn_committed', json({ changes: resolution.changes, mechanics: draft.receipts }));
+      this.chats.recordResult(id, this.turn(row), memberId =>
+        draft.adjudication?.actions.find(a => a.memberId === memberId)?.fact ?? outcome.summary);
+      this.recordPlayability(id, row, draft);
       const members = this.members(id);
       const ended = members.length > 0 && members.every((member) => member.state.hp <= 0);
       this.db
@@ -3636,6 +3952,9 @@ export class Game {
       this.db
         .prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)')
         .run(id, turnId, 'turn_committed', json({ changes: outcome.changes, mechanics: draft.receipts }));
+      this.chats.recordResult(id, this.turn(row), memberId =>
+        draft.adjudication?.actions.find(a => a.memberId === memberId)?.fact ?? outcome.summary);
+      this.recordPlayability(id, row, draft);
       const currentMembers = this.members(id);
       const ended = currentMembers.length > 0 && currentMembers.every((m) => m.state.hp <= 0);
       this.db
@@ -3723,7 +4042,7 @@ export class Game {
                 ? 'A dead character cannot be healed.'
                 : 'Choose a living ally in this campaign.',
             );
-          if (action.type === 'help-up') helpUp(structuredClone(target.state));
+          if (action.type === 'help-up') helpUp(structuredClone(target.state), state);
           else {
             if (target.state.hp >= target.state.maxHp)
               throw new GameError('The target is already at full health.');
@@ -3959,6 +4278,7 @@ export class Game {
       budget.used = 0;
       budget.requests = [];
       budget.corrections = [];
+      budget.goalRecovery = undefined;
       budget.fallback = undefined;
       budget.signal = AbortSignal.timeout(['adjudication', 'factions'].includes(stage) ? 360_000 : 180_000);
       const attempt =
@@ -3994,6 +4314,12 @@ export class Game {
           this.emit(id);
           continue;
         }
+        if (error instanceof OpeningValidationError) {
+          const dutch = (JSON.parse(this.pending(id)?.draft ?? '{}') as Draft).context?.config.language === 'Nederlands';
+          throw new GameError(dutch
+            ? 'De spelleider kon de openingsscène niet afronden. Je campagne is opgeslagen.'
+            : 'The GM couldn’t finish preparing the opening. Your campaign is saved.', 500);
+        }
         throw new GameError(`${stage}: ${failure} Retry resumes from the last saved checkpoint.`, 500);
       } finally {
         this.db.prepare('INSERT INTO events(campaign_id, turn_id, kind, payload) VALUES(?, ?, ?, ?)').run(
@@ -4008,8 +4334,13 @@ export class Game {
             failure,
             failureCategory,
             requestDiagnostics: budget.requests,
+            memory:
+              stage === 'adjudication'
+                ? (JSON.parse(this.pending(id)?.draft ?? '{}') as Draft).context?.retrievedMemory?.diagnostics
+                : undefined,
             corrections: budget.corrections,
             fallback: budget.fallback,
+            goalRecovery: budget.goalRecovery,
           }),
         );
       }
@@ -4020,6 +4351,7 @@ export class Game {
     return {
       ...draft.context!,
       partialAdjudication: draft.partialAdjudication,
+      openingRepair: draft.openingRepair,
       gmMemory: draft.gmMemory ?? draft.context?.gmMemory,
       members: draft.members,
       startingMembers: draft.startingMembers,
@@ -4202,8 +4534,66 @@ export class Game {
     });
   }
 
+  private async initializeStartingStories(id: string, turnId: string, provider: GameMaster) {
+    const saved: Draft = JSON.parse(this.pending(id)!.draft!);
+    if (
+      saved.context!.turn.number !== 0 ||
+      saved.receipts.startingStories ||
+      saved.adjudication ||
+      saved.resolution ||
+      !provider.generateStartingStories
+    )
+      return;
+    const budget: StageBudget = { used: 0, limit: 3 };
+    await this.resolutionStage(id, turnId, 'adjudication', budget, async () => {
+      const stories = await provider.generateStartingStories!(structuredClone(saved.context!), budget);
+      const roster = saved.context!.turn.roster;
+      if (
+        stories.length !== roster.length ||
+        new Set(stories.map((story) => story.memberId)).size !== roster.length ||
+        stories.some((story) => !roster.includes(story.memberId))
+      )
+        throw new GameError('Provide one starting story for each participating character.');
+      if (new Set(stories.map((story) => story.rumour.trim().toLowerCase())).size !== stories.length)
+        throw new GameError('Give each character a different starting rumour.');
+      for (const story of stories) {
+        const member = saved.members.find((member) => member.id === story.memberId)!;
+        if (
+          ![...equippedItems(member.state), ...member.state.inventory].some(
+            (item) => item.id === story.itemId && item.kind !== 'consumable' && item.kind !== 'tool',
+          )
+        )
+          throw new GameError('Tie each starting hook to a real starting equipment item.');
+        if (
+          !story.hook.trim() ||
+          story.hook.length > 500 ||
+          !story.rumour.trim() ||
+          story.rumour.length > 700
+        )
+          throw new GameError('Starting hooks and rumours must be concise and nonempty.');
+      }
+      this.withDraft(
+        id,
+        turnId,
+        (draft) => {
+          for (const story of stories)
+            for (const member of [...draft.members, ...(draft.startingMembers ?? [])].filter(
+              (member) => member.id === story.memberId,
+            )) {
+              member.state.startingRumour = story.rumour;
+              for (const item of [...equippedItems(member.state), ...member.state.inventory])
+                if (item.id === story.itemId) item.storyHook = story.hook;
+            }
+          draft.context!.members = draft.members;
+          draft.receipts.startingStories = stories;
+        },
+        true,
+      );
+    });
+  }
   private async runResolvedTurn(id: string, turnId: string, provider: GameMaster) {
     await this.initializeFactions(id, turnId, provider);
+    await this.initializeStartingStories(id, turnId, provider);
     let saved = this.recoverTurnCheckpoints(id, turnId);
     const config = saved.context!.config;
     const budget: StageBudget = { used: 0, limit: 8 };
@@ -4229,7 +4619,8 @@ export class Game {
             (locationId === context.scene.location.id ? saved.receipts.combatInput : undefined) ??
             (await provider.planCombat?.(combatContext));
           const plan = this.withDraft(id, turnId, (draft) => {
-            const plan = normalizeCombatInput(combatContext, suggested);
+            const plan = combatContext.turn.combatRules === 2 && inputs?.[locationId]
+              ? inputs[locationId] : normalizeCombatInput(combatContext, suggested);
             draft.receipts.combatInputByLocation = { ...inputs, [locationId]: plan };
             draft.receipts.combatInput ??= plan;
             return plan;
@@ -4242,7 +4633,8 @@ export class Game {
           refresh(this.resolveSupport(id, turnId));
         }
         const execute = <T>(work: () => T, introduction = false): T => {
-          if (++toolCalls > 20) throw new GameError('Adjudication reached its twenty-tool limit.');
+          if (toolCalls >= 20) throw new ToolBudgetError();
+          toolCalls++;
           if (saved.receipts.encounterProposal && !introduction)
             throw new GameError(
               'Exploration outcomes are saved. Only introduce the required encounters; further actions wait for next submissions.',
@@ -4273,6 +4665,9 @@ export class Game {
             useResource: (input: ResourceUse) => execute(() => this.useResource(id, turnId, input)),
             investigate: (input: Investigation) => execute(() => this.investigate(id, turnId, input)),
             validateAdjudication: validate,
+            checkpointOpeningRepair: context.turn.number === 0
+              ? (repair: OpeningRepair) => this.withDraft(id, turnId, (draft) => { draft.openingRepair = repair; })
+              : undefined,
             checkpointAdjudication: (value: TurnAdjudication) => {
               const checked = validate(value);
               this.withDraft(id, turnId, (draft) => {
@@ -4285,26 +4680,84 @@ export class Game {
             validateResolution: (outcome: Outcome) => this.assertResolved(context.turn, saved, outcome),
           },
         );
-        const accepted = validate(
-          completedEncounterProposal(context) ?? (await provider.adjudicate!(context, tools)),
+        const plans = context.receipts?.combatInputByLocation as Record<string, CombatInput> | undefined;
+        const lightweight =
+          provider.lightweightCombat &&
+          !!context.combatResult &&
+          context.turn.actions.every((submitted) => {
+            if (submitted.passed) return true;
+            const at = memberScene(context.scene, submitted.memberId).location.id!;
+            const action = plans?.[at]?.actions.find((action) => action.memberId === submitted.memberId);
+            return (
+              action && (action.intent === 'instinct' || !['move', 'interact'].includes(action.main) || action.maneuver?.effect === 'cover')
+            );
+          });
+        const resolved = validate(
+          lightweight
+            ? compileSceneTurn(context, {
+                version: 3,
+                notes: [],
+                beats: Object.entries(combatReceipts(saved)).flatMap(([at, receipt]) => {
+                  const events = receipt.events!.filter((event) => event.presentation !== 'log');
+                  if (!events.length) return [];
+                  const place = placeScene(context.scene, at);
+                  const fact =
+                    context.config.language === 'Nederlands'
+                      ? 'Het vastgelegde gevecht toont het gevaar op deze locatie.'
+                      : 'The saved encounter establishes the danger at this location.';
+                  return [
+                    {
+                      kind: 'combat',
+                      at,
+                      text: events.map((event) => event.fact).join(' '),
+                    },
+                    ...(!place.encounterRisk
+                      ? [
+                          {
+                            kind: 'world',
+                            at,
+                            fact,
+                            text: fact,
+                            place: {
+                              name: place.location.name,
+                              atmosphere: place.location.atmosphere || fact,
+                              hazard: place.location.hazard,
+                              danger: 'dangerous',
+                              riskReason: fact,
+                            },
+                          },
+                        ]
+                      : []),
+                  ];
+                }),
+                summary:
+                  context.config.language === 'Nederlands'
+                    ? 'De combatronde is afgehandeld.'
+                    : 'The combat round has resolved.',
+              })
+            : (completedEncounterProposal(context) ?? (await provider.adjudicate!(context, tools))),
         );
+        const recovered = addInstinctObservations(context, resolved);
+        const accepted = recovered === resolved ? resolved : validate(recovered);
         for (const prior of saved.partialAdjudication?.actions ?? []) {
           const next = accepted.actions.find((action) => action.memberId === prior.memberId);
           for (const phase of ['main', 'minor', 'movement'] as const) {
             const part = prior.components[phase];
             if (part && !part.processingFailure && !isDeepStrictEqual(part, next?.components[phase]))
-              throw new GameError('Retry cannot replace an already resolved action component.', 500);
+              throw new GameError(`Retry cannot replace an already resolved action component (${prior.memberId}, ${phase}).`, 500);
           }
         }
         if (
           accepted.actions.some((action) =>
             Object.values(action.components).some((part) => part?.processingFailure),
           )
-        )
+        ) {
+          this.withDraft(id, turnId, (draft) => { draft.partialAdjudication = accepted; }, true);
           throw new GameError(
             'The GM could not finish processing all actions. Retry continues this turn with the saved dice and resources.',
             500,
           );
+        }
         if (accepted.encounterRisks !== undefined || context.receipts?.encounterChecks) {
           const required = tools.prepareEncounters!(accepted);
           if (required.length)
@@ -4314,9 +4767,12 @@ export class Game {
           id,
           turnId,
           (draft) => {
+            draft.receipts.lightweightCombat = !!lightweight;
             draft.adjudication = accepted;
             delete draft.partialAdjudication;
+            delete draft.openingRepair;
             draft.adjudicationFallback = budget.fallback;
+            draft.goalRecovery = budget.goalRecovery;
             draft.placeRefs ??= {};
             for (const update of accepted.placeUpdates ?? [])
               if (update.ref.startsWith('new:')) draft.placeRefs[update.ref] ??= randomUUID();
@@ -4337,15 +4793,20 @@ export class Game {
         const revision = saved.resolutionRevision ?? 0;
         if (saved.adjudicationFallback)
           narrationBudget.fallback =
-            'Narration skipped because adjudication fell back to saved receipts; no extra model requests can establish the missing world outcomes.';
+            'Published retained outcomes and observable local openings without another model request.';
         let proposed: TurnNarration;
         try {
-          if (saved.adjudication?.version === 2 && saved.adjudication.sceneDraft) {
+          if (saved.receipts.lightweightCombat) {
+            proposed = factualNarration(saved.resolution!, config.language, saved.context!.turn.combatRules === 2);
+          } else if (saved.adjudication?.version === 2 && saved.adjudication.sceneDraft) {
             proposed = sceneNarration(saved.adjudication, saved.resolution!);
             if (saved.resolution!.events.some((event) => event.kind === 'combat'))
               proposed = provider.reviewSceneNarration
                 ? await provider.reviewSceneNarration(
-                    structuredClone(saved.resolution!), config, proposed, narrationBudget,
+                    structuredClone(saved.resolution!),
+                    config,
+                    proposed,
+                    narrationBudget,
                   )
                 : factualNarration(saved.resolution!, config.language);
           } else {
@@ -4407,6 +4868,7 @@ export class Game {
     const internalMembers = this.members(id);
     const provider = this.providers(c.owner_id, snapshot.config);
     // Freeze before the first await: late joins and participation changes belong to the next turn.
+    let freshContext = false;
     const claim = this.db.transaction(() => {
       const claimed = this.db
         .prepare("UPDATE turns SET phase = 'resolving' WHERE id = ? AND phase = 'queued'")
@@ -4429,6 +4891,7 @@ export class Game {
         );
       }
       draft.startingMembers ??= structuredClone(draft.members);
+      freshContext = !draft.context;
       draft.context ??= {
         sceneProtocol: !!provider.sceneTurns && !executed,
         gmMemory: draft.gmMemory,
@@ -4461,6 +4924,13 @@ export class Game {
       return true;
     })();
     if (!claim) return;
+    if (freshContext) {
+      const frozen: Draft = JSON.parse(this.pending(id)!.draft!);
+      const memory = retrieveCampaignMemory(this.db, id, frozen.context!);
+      this.withDraft(id, row.id, (draft) => {
+        draft.context!.retrievedMemory = memory;
+      });
+    }
     const work = Promise.resolve().then(async () => {
       this.emit(id);
       try {
@@ -4483,6 +4953,7 @@ export class Game {
         const c = this.campaign(id);
         const s = this.snapshot(id, c.owner_id);
         const context: GMContext = {
+          retrievedMemory: route.context?.retrievedMemory,
           config: s.config,
           members: s.members.filter((m) => s.turn!.roster.includes(m.id) || isDowned(m.state)),
           pendingReplacements: s.members
@@ -4523,7 +4994,8 @@ export class Game {
             (locationId === context.scene.location.id ? current.receipts.combatInput : undefined) ??
             (await provider.planCombat?.(combatContext));
           const plan = this.withDraft(id, row.id, (draft) => {
-            const plan = normalizeCombatInput(
+            const plan = combatContext.turn.combatRules === 2 && inputs?.[locationId]
+              ? inputs[locationId] : normalizeCombatInput(
               this.combatContext({ ...context, scene: draft.scene, members: draft.members }, locationId),
               suggested,
             );

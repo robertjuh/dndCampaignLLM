@@ -7,3 +7,8 @@ data/
 test-results/
 playwright-report/
 *.log
+.venv-icons/
+__pycache__/
+COMBAT_IMPROVEMENT_PLAN.md
+GAMEPLAYLOOPPROMPT.md
+RAG_IMPLEMENTATION_PLAN.md

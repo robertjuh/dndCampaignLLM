@@ -13,7 +13,7 @@ for (const condition of ['Stunned', 'Frozen', 'Electrocuted']) {
     page,
   }) => {
     const character = templateCharacter('Mira');
-    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
     const saved = await post<{ id: string }>(page.request, '/api/characters', character);
     const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
       ruleset: 'roguelike-v1',
@@ -71,7 +71,7 @@ for (const condition of ['Stunned', 'Frozen', 'Electrocuted']) {
     ).toBeVisible();
     await expect(page.getByLabel('Your action', { exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Submit action', exact: true })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Pass', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Pass', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Use ability', exact: true })).toHaveCount(0);
     await expect(page.getByText('0 / 1 ready', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Equipment & backpack' }).click();
@@ -87,7 +87,7 @@ for (const condition of ['Stunned', 'Frozen', 'Electrocuted']) {
     snapshot.turn.number++;
     await page.reload();
     await expect(page.getByLabel('Your action', { exact: true })).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Pass', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Pass', exact: true })).toHaveCount(0);
     await expect(page.getByText('0 / 2 ready', { exact: true })).toBeVisible();
   });
 }

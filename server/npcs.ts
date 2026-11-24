@@ -4,6 +4,7 @@ import type { Enemy, Encounter, NPCState, Scene } from '../shared/schema';
 import type { TurnAdjudication, ResolvedEvent } from '../shared/turn-resolution';
 import { combatActive, memberScene } from '../shared/locations';
 import { ensureUniqueEnemyNames, npcNameKey, npcNames } from '../shared/npcs';
+import { rememberJournalFact } from '../shared/journal';
 import { gatheringOptions, memberLocationAtEvent, turnConnections } from './world-map';
 import { structureSceneAtEvent, witnessedLocations } from './structures';
 
@@ -178,12 +179,12 @@ export function validateNPCUpdates(
   const established = knownNPCs(context.scene);
   for (const event of value.events)
     if (event.npcIds)
-      event.npcIds = event.npcIds.map((id) => {
+      event.npcIds = [...new Set(event.npcIds.map((id) => {
         const proposed = value.npcUpdates?.find((update) => update.npcId === id);
         return proposed
           ? (npcIdentity(context.scene, proposed.npcId, proposed.name, proposed.aliases)?.id ?? id)
           : id;
-      });
+      }))];
   for (const event of value.events) {
     if (!event.npcIds) continue;
     if (
@@ -440,9 +441,7 @@ export function journalWithNPCInteractions(
         result.push(entry);
       }
       if (!entry.detail.includes(event.fact)) {
-        const detail = [entry.detail, event.fact].filter(Boolean).join('\n');
-        // Current journal memory is bounded; full exchanges remain in completed event history.
-        entry.detail = detail.length <= 1500 ? detail : event.fact.slice(0, 1500);
+        entry.detail = rememberJournalFact(entry.detail, event.fact);
       }
     }
   return result;

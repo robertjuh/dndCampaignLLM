@@ -115,19 +115,21 @@ export function validateConnections(
   return connections;
 }
 
-export function publicMember(member: Member, world?: FactionWorld): Member {
+export function publicMember(member: Member, world?: FactionWorld, viewerId?: string): Member {
   const known = new Set(publicFactions(world).map((faction) => faction.id));
   const {
     factionAchievements: _achievements,
     factionInitialized: _initialized,
     factionReputation,
     factionAffiliation,
+    startingRumour,
     ...state
   } = member.state;
   return {
     ...member,
     state: {
       ...state,
+      ...(member.playerId === viewerId && startingRumour ? { startingRumour } : {}),
       ...(factionReputation
         ? {
             factionReputation: Object.fromEntries(

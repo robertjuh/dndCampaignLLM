@@ -1,5 +1,6 @@
-import type { Ability, Action, Character, CharacterState, Member } from '../shared/schema';
+import type { Ability, Action, Character, CharacterState, Member, Scene } from '../shared/schema';
 import { availableAbilities } from '../shared/rules';
+import { npcNames } from '../shared/npcs';
 
 const resourceText = (text: string) =>
   text
@@ -14,10 +15,24 @@ const resourceText = (text: string) =>
 const mentionsName = (text: string, name: string) =>
   new RegExp(`(?:^|\\W)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|\\W)`, 'i').test(text);
 
+export function requestedHealingNPC(scene: Pick<Scene, 'npcs'>, text: string) {
+  const treatment = resourceText(text).split(/\b(?:and|then|while|en|dan|terwijl)\b/i).filter((clause) =>
+    /\b(?:heal\w*|treat\w*|mend|revive\w*|genees\w*|(?:use|apply|gebruik\w*)\b.*\bon)\b/i.test(clause) &&
+    !/\b(?:myself|self|me|mijzelf|mezelf|drink\w*)\b/i.test(clause),
+  ).join(' ');
+  const matches = Object.values(scene.npcs ?? {}).filter((npc) => npcNames(npc).some((name) => {
+    const parts = name.split(/\s+/);
+    return mentionsName(treatment, name) || [parts[0], parts.at(-1)!].some(
+      (part) => part.length > 3 && mentionsName(treatment, part),
+    );
+  }));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function requestsAbility(text: string): boolean {
   // ponytail: English/Dutch intent guard; the model handles other languages and idioms.
   text = resourceText(text);
-  return /\b(?:use(?:d)?|using|activate(?:d)?|activating|invoke(?:d)?|perform|with|try|gebruik\w*|activeer\w*|met|zet\w*)\s+(?:(?:my|the|a|an|one|of|own|special|combat|utility|mijn|de|een|eigen|speciale)\s+)*(?:abilit(?:y|ies)|power|skill|technique|special move|vaardighe(?:id|den)|kracht|techniek|vermogen|speciale (?:aanval|actie|zet))\b/i.test(
+  return /\b(?:use(?:d)?|using|activate(?:d)?|activating|invoke(?:d)?|perform|with|try|gebruik\w*|activeer\w*|met|zet\w*)\s+(?:(?!(?:no|not|never|without|geen|niet|zonder|to|om|and|en|his|her|their|zijn|haar|hun|recharge|regain|restore|recover)\b)[\p{L}\p{M}'’\-]+\s+){0,5}(?:abilit(?:y|ies)|powers?|skills?|techniques?|magic|spells?|special move|vaardighe(?:id|den)|krachten?|techniek(?:en)?|vermogen(?:s)?|magie|spreuk(?:en)?|speciale (?:aanval|actie|zet))\b/iu.test(
     text,
   );
 }
@@ -63,6 +78,7 @@ export function requestedConsumable(
   member: Pick<Member, 'character' | 'state'>,
   action: Action,
   suggestedId?: string | null,
+  inferHealing = true,
 ): CharacterState['inventory'][number] | undefined {
   if (action.passed || action.supportAction || action.gathering) return undefined;
   let text = resourceText(action.text);
@@ -86,7 +102,7 @@ export function requestedConsumable(
       text,
     );
   const healing = /\b(?:heal\w*|revive|genees\w*)\b/i.test(text);
-  if (!concrete && (!healing || action.abilityName || requestsAbility(text) || ability))
+  if (!concrete && (!inferHealing || !healing || action.abilityName || requestsAbility(text) || ability))
     return undefined;
   return items.find((item) => item.id === suggestedId) ?? items.find((item) => item.healing > 0);
 }

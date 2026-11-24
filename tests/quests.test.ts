@@ -7,6 +7,8 @@ import { openDatabase } from '../server/db';
 import { PracticeGM } from '../server/providers';
 import { compileSceneTurn, type SceneTurn } from '../server/scene-turn';
 import { planQuests, applyQuestPlan } from '../server/quests';
+import { retainAdjudicationProgress, applyAdjudicationRepair } from '../server/adjudication-recovery';
+import { validateAdjudication } from '../server/turn-resolution';
 import { applyFeatureUpdates } from '../server/scene-state';
 import { saveNPCEncounter } from '../server/npcs';
 import { baseItem, initialScene, initialState, takeItem } from '../shared/rules';
@@ -180,6 +182,59 @@ function accepted(context: GMContext, quest = definition()) {
   step(context, 'Ask Ada about her request.', [{ type: 'offer', quest }]);
   step(context, 'I accept Ada’s request.', [{ type: 'accept', questId: quest.id }]);
 }
+
+it('requires an actual saved offer and acceptance for explicit quest requests', () => {
+  const context = fixture();
+  action(context, 'Zoek een quest');
+  expect(() => compileSceneTurn(context, sceneTurn(context))).toThrow(/submitted search|saved quest offer/);
+  step(context, 'Zoek een quest', [{ type: 'offer', quest: definition() }]);
+  action(context, 'Ik accepteer de quest en ga op pad');
+  expect(() => compileSceneTurn(context, sceneTurn(context))).toThrow(/submitted acceptance/);
+  step(context, 'Ik accepteer de quest', [{ type: 'accept', questId: 'repair-pump' }]);
+  expect(context.scene.quests!['repair-pump'].status).toBe('active');
+});
+
+it('saves a quest offered during an investigation conversation without a second main action', () => {
+  const context = fixture();
+  action(context, 'Ask Ada about work.');
+  const actor = context.members[0].id;
+  const finding = 'Ada offers work repairing the pump for 25 guild scrip and a healing potion.';
+  context.receipts![`investigation:${actor}`] = {
+    memberId: actor, source: { kind: 'npc', id: 'ada', name: 'Ada', locationId: context.scene.location.id! },
+    question: 'What work is available?', thread: 'premise', hookId: 'pump-job', answer: 0,
+    signature: 'ordinary-offer', success: true, reused: true,
+    actionFact: `Mira asks Ada about work: ${finding}`,
+    finding: { fact: finding, text: '{{finding}} {{lead}}', lead: 'The broken pump is beside Ada.',
+      leadLocationId: context.scene.location.id!, narrativeVersion: 1 },
+  };
+  const value = compileSceneTurn(context, { version: 3, notes: [], summary: finding,
+    beats: [{ kind: 'investigate', actor, quests: [{ type: 'offer', quest: definition() }] }],
+  });
+  expect(planQuests(context, value).quests['repair-pump']).toMatchObject({ status: 'offered', reward: definition().reward });
+  expect(value.events.filter((event) => event.kind === 'action' && event.phase === 'main' && event.memberId === actor)).toHaveLength(1);
+});
+
+it('retains quest offers and their terms across partial scene recovery and repairs', () => {
+  const context = fixture();
+  action(context, 'Ask Ada about work.');
+  const candidate = compileSceneTurn(context, sceneTurn(context, [{ type: 'offer', quest: definition() }]));
+  const fallback = compileSceneTurn(context, sceneTurn(context));
+  const incomplete = structuredClone(candidate);
+  incomplete.events.push({ ...candidate.events.at(-1)!, id: 'unsupported', sequence: candidate.events.length,
+    fact: 'An unsupported event depends on a missing act.', dependsOn: [{ eventId: 'missing', requires: 'success' }],
+  });
+  const retained = retainAdjudicationProgress(context, incomplete, fallback,
+    (input) => validateAdjudication(context, input));
+  expect(retained.value.questUpdates).toEqual(candidate.questUpdates);
+  const repaired = applyAdjudicationRepair(retained, { events: [] }, context);
+  expect(repaired.questUpdates).toEqual(candidate.questUpdates);
+  expect(planQuests(context, repaired).quests['repair-pump']).toMatchObject({
+    status: 'offered', reward: definition().reward,
+  });
+  expect(() => applyAdjudicationRepair(retained, { questUpdates: [{ ...candidate.questUpdates![0],
+    operation: { type: 'offer', quest: definition({ name: 'Changed reward terms' }) },
+  }] }, context)).toThrow(/retained world evidence/);
+});
 
 it('saves and fulfills a concrete social agreement without inventing mechanical rewards', () => {
   const context = fixture();
@@ -827,7 +882,7 @@ it('persists a complete turn-in through a Game restart and preserves local share
       const m = game.members(c.id).find((m) => m.playerId === p.id)!;
       game.manageCharacter(c.id, p.id, {
         type: 'starter',
-        itemIds: m.state.starterEquipment.slice(0, 2).map((item) => item.id),
+        itemIds: m.state.starterEquipment.slice(0, 3).map((item) => item.id),
       });
     }
     game.start(c.id, host.id);

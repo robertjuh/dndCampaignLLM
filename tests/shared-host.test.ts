@@ -161,6 +161,7 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
           ],
         },
       ]);
+    if (first.schemaExample?.stories) return completed([{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ stories: first.schemaExample.stories.map((story: object, index: number) => ({ ...story, rumour: `A witness gives account ${index + 1} of the harbor mystery.` })) }) }] }]);
     const context = generating
       ? first
       : [...body.input]
@@ -305,7 +306,7 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     });
     expect(generated.statusCode).toBe(200);
     expect(generated.json()).toMatchObject({ name: core.name, species: core.species, abilities: [] });
-    expect(generated.json().equipmentOptions).toHaveLength(5);
+    expect(generated.json().equipmentOptions).toHaveLength(7);
     const generatedSheet = generated.json();
     generatedSheet.abilities = ['combat', 'utility'].map((kind) =>
       generatedSheet.abilityOptions.find((a: { kind: string }) => a.kind === kind),
@@ -334,7 +335,7 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     const member = game.snapshot(campaign.id, owner).members[0];
     game.manageCharacter(campaign.id, owner, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     const second = game.identify();
     const secondCharacter = game.saveCharacter(second.id, { ...sheet, name: 'Second adventurer' });
@@ -342,7 +343,7 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     const secondMember = game.snapshot(campaign.id, second.id).members.find((m) => m.playerId === second.id)!;
     game.manageCharacter(campaign.id, second.id, {
       type: 'starter',
-      itemIds: secondMember.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: secondMember.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     game.start(campaign.id, owner);
     await game.idle();
@@ -354,19 +355,15 @@ it('uses the saved host connection for a fresh phone’s library, invite generat
     expect(fetcher.mock.calls).toHaveLength(beforeActions);
     game.submit(campaign.id, second.id, turn.id, 'Read the inscriptions.', false);
     await game.idle();
-    const failed = game.snapshot(campaign.id, owner).turn!;
-    expect(failed.phase).toBe('failed');
-    expect(failed.rolls).toHaveLength(2);
-    expect(failed.error).toContain('subscription_sharing_usage_limit_exceeded');
-    expect(game.snapshot(campaign.id, owner).members.every((m) => m.state.xp === 0)).toBe(true);
-    game.retry(campaign.id, owner);
-    await game.idle();
     const finished = game.snapshot(campaign.id, owner);
+    expect(finished.turn?.phase).toBe('collecting');
     expect(finished.turn?.number).toBe(turn.number + 1);
-    expect(finished.history.find((t) => t.id === turn.id)?.rolls.filter((roll) => !roll.notation)).toEqual(
-      failed.rolls,
-    );
-    expect(finished.members.every((m) => m.state.xp === 20)).toBe(true);
+    const recovered = finished.history.find((saved) => saved.id === turn.id)!;
+    expect(recovered.rolls.filter((roll) => !roll.notation)).toHaveLength(2);
+    expect(recovered.result?.narration).toContain('notices');
+    expect(finished.members.every((member) => member.state.xp === 0)).toBe(true);
+    const diagnostic = db.prepare("SELECT payload FROM events WHERE turn_id = ? AND kind = 'stage:adjudication'").get(turn.id) as { payload: string };
+    expect(diagnostic.payload).toContain('subscription_sharing_usage_limit_exceeded');
     const disconnect = await app.inject({
       method: 'POST',
       url: '/api/chatgpt/disconnect',

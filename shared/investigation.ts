@@ -28,6 +28,7 @@ export type InvestigationSource = z.infer<typeof investigationSourceSchema>;
 export const investigationSchema = z
   .object({
     memberId: z.string().uuid(),
+    intentId: ref.nullable().optional(),
     source: investigationSourceSchema,
     question: prose,
     thread: ref.optional(),
@@ -41,6 +42,7 @@ export const investigationSchema = z
 export type Investigation = z.infer<typeof investigationSchema>;
 export type InvestigationResult = {
   memberId: string;
+  intentId?: string;
   source: InvestigationSource & { name: string };
   question: string;
   thread: string;

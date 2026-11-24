@@ -469,7 +469,7 @@ it('restarts and publishes the failed gathering checkpoint without repeating sav
         itemIds: game
           .members(campaign.id)
           .find((m) => m.id === member.id)!
-          .state.starterEquipment.slice(0, 2)
+          .state.starterEquipment.slice(0, 3)
           .map((item) => item.id),
       });
     }

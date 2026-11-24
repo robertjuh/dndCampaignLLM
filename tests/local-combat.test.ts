@@ -119,7 +119,7 @@ async function table(legacy = false) {
   });
   for (const [index, player] of players.entries()) {
     const character = templateCharacter(`Scout ${index}`);
-    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
     const saved = game.saveCharacter(player.id, character);
     game.join(campaign.inviteCode!, player.id, saved.id);
   }
@@ -171,6 +171,47 @@ async function table(legacy = false) {
     saveScene,
   };
 }
+
+it('keeps target previews local and resolves a structured attack despite a conflicting GM suggestion', async () => {
+  const f = await table(true);
+  const scene = f.snapshot().scene;
+  scene.memberLocations![f.members[2].id] = ravine;
+  const first = enemy('first');
+  const second = enemy('second');
+  scene.places![ravine].encounter = {
+    enemies: [first, second].map((enemy) => ({ ...enemy, maxHp: enemy.hp, initiative: 1 })),
+    initiative: [{ id: f.members[0].id, total: 20 }, { id: first.id, total: 1 }, { id: second.id, total: 1 }],
+    round: 1, victory: false, escaped: false,
+  };
+  f.saveScene(scene);
+  const turnId = f.snapshot().turn!.id;
+  const view = (index: number) => f.game.snapshot(f.campaign.id, f.players[index].id);
+  f.game.previewCombat(f.campaign.id, f.players[0].id, turnId, [second.id]);
+  expect(view(2).combatPreviews).toEqual([{ memberId: f.members[0].id, targetIds: [second.id] }]);
+  expect(view(1).combatPreviews).toBeUndefined();
+  expect(view(2).turn!.actions).toEqual([]);
+  const attack = { kind: 'attack' as const, targetIds: [second.id] as [string] };
+  const submitAttack = () => f.game.submit(f.campaign.id, f.players[0].id, turnId, '', false, false, null, null, null, attack);
+  submitAttack();
+  expect(view(2).combatPreviews).toBeUndefined();
+  f.game.cancelAction(f.campaign.id, f.players[0].id, turnId);
+  expect(view(2).turn!.actions).toEqual([]);
+  const plan = vi.fn(async (context: GMContext) => ({
+    actions: [{ memberId: f.members[0].id, main: 'attack', targetId: first.id, weaponSlot: 'natural' }],
+  }));
+  f.provider.planCombat = plan;
+  submitAttack();
+  f.game.submit(f.campaign.id, f.players[1].id, turnId, '', true);
+  f.game.submit(f.campaign.id, f.players[2].id, turnId, '', true);
+  await f.game.idle();
+  expect(f.snapshot().turn!.phase, f.snapshot().turn!.error ?? '').toBe('collecting');
+  const saved = f.snapshot().history.find((turn) => turn.id === turnId)!;
+  expect(saved.actions.find((action) => action.memberId === f.members[0].id)?.combatSelection).toEqual(attack);
+  const [untouched, hit] = placeScene(f.snapshot().scene, ravine).encounter!.enemies;
+  expect(untouched.hp).toBe(first.hp);
+  expect(hit.hp).toBeLessThan(second.hp);
+  expect(saved.rolls.some((roll) => roll.label?.includes('attack with Short sword'))).toBe(true);
+});
 
 it.each([false, true])(
   'resolves two occupied fights independently of an inn focus and reuses both receipts after restart (legacy=%s)',

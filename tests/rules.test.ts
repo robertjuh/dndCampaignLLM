@@ -25,6 +25,7 @@ import {
   unequip,
   grantXp,
   healWithItem,
+  healNPCWithResource,
   heal,
   helpUp,
   recoverAfterEncounter,
@@ -58,6 +59,65 @@ import {
 } from '../shared/rules';
 import { localDice } from '../server/random';
 import { conditionDuration } from '../shared/ailments';
+
+it.each(['item', 'mend', 'cleanse'] as const)(
+  'applies NPC %s to saved HP and ailments without changing identity',
+  (source) => {
+    const hero = member();
+    const npc = {
+      id: 'worker',
+      name: 'Worker',
+      aliases: [],
+      locationId: 'platform',
+      status: 'alive' as const,
+      allegiance: null,
+      fact: 'A wounded worker.',
+      enemy: {
+        ...enemySchema.parse({
+          id: 'worker',
+          name: 'Worker',
+          tier: 'normal',
+          hp: 7,
+          defense: 10,
+          attack: 0,
+          damage: '1d4',
+          description: 'Worker',
+          tactic: 'Wait',
+        }),
+        maxHp: 18,
+        initiative: 1,
+        conditions: ['Bleeding'],
+        conditionTurns: { Bleeding: 2 },
+      },
+    };
+    const item = { ...baseItem('gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 1 };
+    hero.state.inventory.push(item);
+    const ability = hero.character.abilities[0];
+    Object.assign(ability, {
+      name: 'Treatment',
+      effect: source === 'cleanse' ? 'cleanse' : 'mend',
+      cures: ['Bleeding'],
+    });
+    const result = healNPCWithResource(
+      hero.character,
+      hero.state,
+      npc,
+      { itemId: source === 'item' ? item.id : null, abilityName: source === 'item' ? null : ability.name },
+      () => 4,
+    );
+    expect(npc.enemy.hp).toBe(7 + result.restored);
+    expect(npc.enemy.hp).toBeLessThanOrEqual(18);
+    expect(npc.id).toBe('worker');
+    if (source === 'item') {
+      expect(result.restored).toBe(6);
+      expect(hero.state.inventory.some((item) => item.id === 'gel')).toBe(false);
+    } else {
+      expect(npc.enemy.conditions).not.toContain('Bleeding');
+      expect(hero.state.abilityUses?.[ability.name]).toBe(1);
+      if (source === 'cleanse') expect(npc.enemy.hp).toBe(7);
+    }
+  },
+);
 
 describe('atomic loot pickup and equipment swaps', () => {
   it('equips scene loot directly into an empty slot with a full backpack', () => {
@@ -553,6 +613,7 @@ describe('customized roguelike mechanics', () => {
         natural: true,
       },
     ];
+    c.equipmentOptions = rollStartingEquipment(c, () => 1);
     expect(normalizeCharacter(c).stats).toEqual({ STR: 8, DEX: 6, INT: 4, CHA: 5, CON: 5, WIS: 5 });
     expect([modifier(4), modifier(5), modifier(6), modifier(9)]).toEqual([-1, 0, 0, 2]);
     c.traits[0].stats = { ...blankTrait().stats, STR: 4, DEX: 4, INT: 4 };
@@ -1133,75 +1194,65 @@ it('does not alter the inventory when stacking would exceed capacity', () => {
   expect(occupiedSlots(m.state)).toBe(8);
 });
 
-it('rolls five independent equipment types, allows repeated types, and selects exactly two usable pieces', () => {
+it('offers two usable weapons and five non-weapons and validates both selection quotas atomically', () => {
   const character = templateCharacter('Spectre');
   character.traits = [{ ...blankTrait('Incorporeal'), blocked: ['body', 'head'], heavyRestricted: true }];
-  const allWeapons = rollStartingEquipment(character, () => 1);
-  expect(allWeapons.map((item) => item.kind)).toEqual(Array(5).fill('weapon'));
-  for (let roll = 1; roll <= 5; roll++) {
+  for (let roll = 1; roll <= 6; roll++) {
     const items = rollStartingEquipment(character, (sides) => Math.min(roll, sides));
-    expect(items).toHaveLength(5);
+    expect(items).toHaveLength(7);
+    expect(items.filter((item) => item.kind === 'weapon')).toHaveLength(2);
+    expect(new Set(items.map((item) => item.id)).size).toBe(7);
     expect(items.every((item) => usableSlots(character, character.stats, item).length > 0)).toBe(true);
     expect(items.some((item) => ['armour', 'helmet'].includes(item.kind))).toBe(false);
+    expect(items.every((item) => !/\d$/.test(item.name))).toBe(true);
   }
   const corporeal = templateCharacter();
-  const draws = [2, 1, 2, 1, 2, 1, 2, 1, 5];
-  corporeal.equipmentOptions = rollStartingEquipment(corporeal, () => draws.shift()!);
-  expect(corporeal.equipmentOptions.map((item) => item.kind)).toEqual([
-    'armour',
-    'armour',
-    'armour',
-    'armour',
-    'shield',
-  ]);
   const state = initialState(corporeal, 'test');
-  const ids = state.starterEquipment.slice(0, 2).map((item) => item.id);
+  const ids = state.starterEquipment.slice(0, 3).map((item) => item.id);
   const before = structuredClone(state);
   for (const invalid of [
-    [],
-    [ids[0]],
-    [ids[0], ids[0]],
-    [ids[0], 'forged'],
-    [...ids, state.starterEquipment[2].id],
+    [], [ids[0]], [ids[0], ids[1]], [ids[0], ids[1], ids[1]],
+    [ids[0], ids[1], 'forged'], [ids[0], ids[1], state.starterEquipment[3].id],
+    [ids[1], ids[2], state.starterEquipment[4].id], [...ids, state.starterEquipment[3].id],
   ]) {
-    expect(() => chooseStartingEquipment(corporeal, state, invalid)).toThrow('exactly two');
+    expect(() => chooseStartingEquipment(corporeal, state, invalid)).toThrow('one weapon and two');
     expect(state).toEqual(before);
   }
   chooseStartingEquipment(corporeal, state, ids);
   expect(state.equipmentChosen).toBe(true);
-  expect(state.equipment.body?.id).toBe(ids[0]);
-  expect(state.inventory.find((item) => item.id === ids[1])).toBeDefined();
+  expect(state.equipment.right?.id).toBe(ids[0]);
+  expect(state.equipment.body?.id).toBe(ids[1]);
+  expect(state.equipment.boots?.id).toBe(ids[2]);
   expect(() => chooseStartingEquipment(corporeal, state, ids)).toThrow('already chosen');
   const bootsOnly = templateCharacter();
   bootsOnly.traits = [{ ...blankTrait(), blocked: ['left', 'right', 'body', 'head', 'relic'] }];
-  expect(
-    rollStartingEquipment(bootsOnly, () => {
-      throw new Error('Only one choice; no die needed');
-    }).every((item) => item.kind === 'boots'),
-  ).toBe(true);
+  expect(() => rollStartingEquipment(bootsOnly, () => 1)).toThrow('one hand usable');
 });
 
-it('equips one starting relic and stows another when both selected pieces share the relic slot', () => {
+it('equips the selected weapon and stows a second relic when the non-weapons share a slot', () => {
   const character = templateCharacter();
   character.equipmentOptions = rollStartingEquipment(character, (sides) => sides);
-  expect(character.equipmentOptions.every((item) => item.kind === 'relic')).toBe(true);
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  expect(character.equipmentOptions.filter((item) => item.kind === 'weapon')).toHaveLength(2);
+  const relic = character.equipmentOptions.find((item) => item.kind === 'relic')!;
+  character.equipmentOptions[1] = { ...relic, id: 'starter-1' };
+  character.equipmentOptions[2] = { ...relic, id: 'starter-2' };
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   const state = initialState(character, 'test');
-  expect(state.equipment.relic?.id).toBe('test-starter-0');
+  expect(state.equipment.right?.id).toBe('test-starter-0');
+  expect(state.equipment.relic?.id).toBe('test-starter-1');
   expect(state.equipment.left).toBeNull();
-  expect(state.equipment.right).toBeNull();
-  expect(state.inventory.find((item) => item.id === 'test-starter-1')?.quantity).toBe(1);
+  expect(state.inventory.find((item) => item.id === 'test-starter-2')?.quantity).toBe(1);
 });
 
-it('preserves generated abilities and equips saved picks when a new campaign begins', () => {
+it('preserves generated abilities and equips all three saved picks when a new campaign begins', () => {
   const character = templateCharacter();
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   const normalized = normalizeCharacter(character);
   expect(normalized.abilities).toEqual(character.abilities);
   const state = initialState(normalized, 'campaign');
   expect(state.equipmentChosen).toBe(true);
-  expect([state.equipment.right?.name, state.equipment.left?.name]).toEqual(
-    character.equipmentOptions.slice(0, 2).map((item) => item.name),
+  expect([state.equipment.right?.name, state.equipment.body?.name, state.equipment.boots?.name]).toEqual(
+    character.equipmentOptions.slice(0, 3).map((item) => item.name),
   );
 });
 
@@ -1241,13 +1292,15 @@ it('uses a combat ability’s saved attribute, real damage, upgrade strength, an
   expect(records[0]).toEqual({ stat: 'INT', bonus: 2 });
   expect(e.enemies[0].hp).toBe(21); // 2d6 (3+3) + INT modifier 1 + level-two bonus 2.
   expect(m.state.abilityUses?.[ability.name]).toBe(1);
-  const dice = vi.fn(() => 20);
+  const dice = vi.fn((sides: number) => sides === 20 ? 12 : 2);
   const logs = runCombat([m], e, action, dice);
   expect(logs).toContain(
     `${m.character.name}'s ${ability.name} has already been used. It recharges after a successful encounter. The main action is spent.`,
   );
-  expect(dice).not.toHaveBeenCalled();
-  expect(e.enemies[0].hp).toBe(21);
+  expect(dice.mock.calls.map(([sides]) => sides)).toEqual([20, 4]);
+  expect(logs.join(' ')).toContain('acts on instinct with an innate strike');
+  expect(m.state.abilityUses?.[ability.name]).toBe(1);
+  expect(e.enemies[0].hp).toBe(19);
 });
 
 it('spends a strike use on a miss, preserves it while stunned, and doubles ability dice on a critical', () => {
@@ -1434,6 +1487,81 @@ it('depletes Barrier across hits after shields, preserves ailments, and expires 
   expect(ally.state.abilityBarrier).toBeUndefined();
 });
 
+it('casts Rally before a faster attack and keeps healing in initiative', () => {
+  const caster = member('Rallier');
+  const attacker = member('Attacker');
+  const healer = member('Healer');
+  const rally = { ...caster.character.abilities[0], effect: 'rally' as const };
+  const heal = { ...healer.character.abilities[0], effect: 'mend' as const };
+  caster.character.abilities = [rally];
+  healer.character.abilities = [heal];
+  attacker.state.hp -= 5;
+  const fight = encounter([attacker, healer, caster]);
+  fight.initiative = [
+    { id: attacker.id, total: 20 }, { id: fight.enemies[0].id, total: 15 },
+    { id: healer.id, total: 10 }, { id: caster.id, total: 1 },
+  ];
+  const plan = input(attacker);
+  plan.actions.push(
+    input(caster, { main: 'ability', abilityName: rally.name, targetId: null }).actions[0],
+    input(healer, { main: 'ability', abilityName: heal.name, targetId: attacker.id }).actions[0],
+  );
+  const logs = runCombat([attacker, healer, caster], fight, plan, (sides) => Math.min(sides, 14), undefined, undefined, [], 2);
+  expect(logs.findIndex((line) => line.includes('Rallier uses'))).toBeLessThan(logs.findIndex((line) => line.includes('Attacker attacks with advantage and +')));
+  expect(logs.findIndex((line) => line.includes('Healer uses'))).toBeGreaterThan(logs.findIndex((line) => line.includes('Attacker attacks with advantage and +')));
+  expect(caster.state.abilityUses?.[rally.name]).toBe(1);
+});
+
+it('keeps an early Barrier through the caster’s normal slot and expires it before the next round', () => {
+  const caster = member('Caster');
+  const ally = member('Protected ally');
+  const barrier = { ...caster.character.abilities[0], effect: 'barrier' as const, dice: '1d8' as const };
+  caster.character.abilities = [barrier];
+  const fight = encounter([caster, ally], { attack: 5, damage: '1d4' });
+  fight.initiative = [
+    { id: caster.id, total: 20 }, { id: fight.enemies[0].id, total: 15 }, { id: ally.id, total: 5 },
+  ];
+  const plan = input(caster, { main: 'ability', abilityName: barrier.name, targetId: ally.id });
+  plan.enemyTargets = [{ enemyId: fight.enemies[0].id, memberId: ally.id }];
+  const hp = ally.state.hp;
+  runCombat([caster, ally], fight, plan, (sides) => sides === 20 ? 12 : sides === 8 ? 7 : 2, undefined, undefined, [], 2);
+  expect(ally.state.hp).toBe(hp);
+  expect(ally.state.abilityBarrier).toMatchObject({ sourceId: caster.id, expiresRound: fight.round });
+  runCombat([caster, ally], fight, { ...plan, actions: [] }, (sides) => sides === 20 ? 12 : 2, undefined, undefined, [], 2);
+  expect(ally.state.abilityBarrier).toBeUndefined();
+  expect(ally.state.hp).toBeLessThan(hp);
+});
+
+it('keeps a Rally opening for the specified enemy when the ally attacks another target first', () => {
+  const caster = member('Caster');
+  const ally = member('Ally');
+  const rally = { ...caster.character.abilities[0], effect: 'rally' as const };
+  caster.character.abilities = [rally];
+  const fight = encounter([ally, caster]);
+  const target = { ...structuredClone(fight.enemies[0]), id: 'second', name: 'Second enemy' };
+  fight.enemies.push(target);
+  fight.initiative = [{ id: ally.id, total: 20 }, { id: caster.id, total: 1 }];
+  const plan = input(ally);
+  plan.actions.push(input(caster, {
+    main: 'ability', abilityName: rally.name, targetId: null,
+    rollEffect: {
+      effect: 'ally-advantage', targetId: target.id, beneficiaryId: ally.id,
+      intent: 'I call out the second enemy’s opening.', reason: 'The second enemy overextended.',
+    },
+  }).actions[0]);
+  const attackModes: { mode?: string; bonus?: number }[] = [];
+  const roll: Parameters<typeof runCombat>[3] = (sides, label, _actor, _stat, bonus, _dc, details) => {
+    if (sides === 20 && label.startsWith('Ally:')) attackModes.push({ mode: details?.mode, bonus });
+    return Math.min(sides, 14);
+  };
+  runCombat([caster, ally], fight, plan, roll, undefined, undefined, [], 2);
+  expect(attackModes).toEqual([{ mode: 'advantage', bonus: 2 }]);
+  expect(target.rallyOpenings?.[ally.id]).toBe('The second enemy overextended.');
+  runCombat([caster, ally], fight, input(ally, { targetId: target.id }), roll, undefined, undefined, [], 2);
+  expect(attackModes[1]).toEqual({ mode: 'advantage', bonus: 0 });
+  expect(target.rallyOpenings?.[ally.id]).toBeUndefined();
+});
+
 it('rallies only living allies in the same combat and never stacks attack bonuses', () => {
   const caster = member('Rallier');
   const ally = member('Ally');
@@ -1507,10 +1635,10 @@ it('shows compact formulas and correct support ranges without obstacle-check boi
 
 it('gives every rolled focus and relic a usable bonus and scales loot power with rarity', () => {
   const character = templateCharacter();
-  for (const kindRoll of [6, 7]) {
-    const items = rollStartingEquipment(character, (sides) => (sides === 7 ? kindRoll : 3));
+  for (const kindRoll of [5, 6]) {
+    const items = rollStartingEquipment(character, (sides) => (sides === 6 ? kindRoll : 3));
     expect(
-      items.every((item) => item.scaling.length && (item.attackBonus === 1 || item.checkBonus === 1)),
+      items.filter((item) => ['focus', 'relic'].includes(item.kind)).every((item) => item.scaling.length && (item.attackBonus === 1 || item.checkBonus === 1)),
     ).toBe(true);
   }
   for (const kind of ['focus', 'relic'] as const) {

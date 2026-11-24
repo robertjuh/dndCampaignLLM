@@ -10,6 +10,14 @@ it('retains the recorded unchecked canal search separately from arrival', () => 
 });
 
 it.each([
+  'I attack the warden.',
+  'Attack the nearest guard while yelling "take that idiot!"',
+  'Ik val de incassocrawler aan',
+])('retains the explicit attack for target-aware combat validation: %s', (text) => {
+  expect(actionObligations(text).map((obligation) => obligation.kind)).toEqual(['attack']);
+});
+
+it.each([
   ['Probe the camera security system and try to get access to the camera controls', 'get access to the camera controls'],
   ['Hack the depot cameras', 'Hack the depot cameras'],
   ['I bypass the security lock', 'bypass the security lock'],
@@ -64,8 +72,8 @@ it.each([
   'I follow the search party.',
   'I cry and wave goodbye to the pilot.',
   'I wait.',
-  'I attack the warden.',
-  'Attack the nearest guard while yelling "take that idiot!"',
+  'I do not attack the warden.',
+  'Ik val de incassocrawler niet aan',
   'I say "go to the canal and search it".',
   "I say 'search Oren's tent' and go to the canal.",
   'The pilot says “inspect the wreck”. I walk to the canal.',

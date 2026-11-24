@@ -5,6 +5,7 @@ import type { NPCState, Scene } from '../shared/schema';
 import type { Investigation, InvestigationSource, InvestigationResult } from '../shared/investigation';
 import { knownLocations, memberScene } from '../shared/locations';
 import { bindNPCSource, knownNPCs } from './npcs';
+import { submittedActionObligations } from './action-intent';
 
 export const investigationKey = (value: string) =>
   value
@@ -15,11 +16,12 @@ export const investigationKey = (value: string) =>
 const key = investigationKey;
 export const investigationFact = (finding: InvestigationResult['finding']) =>
   key(finding.fact).includes(key(finding.lead)) ? finding.fact : `${finding.fact}\n${finding.lead}`;
-/** Prose and durable records serve different purposes; do not narrate each record again. */
+/** Narrate the selected public finding even when model prose omits part of its saved answer. */
 export function investigationNarration(finding: InvestigationResult['finding']) {
-  if (finding.narrativeVersion === 1 || key(finding.text).includes(key(finding.lead))) return finding.text;
-  // Saved receipts predating the complete-prose contract may not have narrated their lead.
-  return `${finding.text}\n${finding.lead}`;
+  let text = finding.text.replaceAll('{{finding}}', finding.fact).replaceAll('{{lead}}', finding.lead);
+  if (!key(text).includes(key(finding.fact))) text += `\n${finding.fact}`;
+  if (finding.narrativeVersion !== 1 && !key(text).includes(key(finding.lead))) text += `\n${finding.lead}`;
+  return text;
 }
 export const investigationAttemptKey = (hookId: string, answer: number, signature: string) =>
   createHash('sha256')
@@ -147,7 +149,9 @@ export function investigationSources(context: GMContext) {
   return sources;
 }
 
-export function bindInvestigationSource(context: GMContext, memberId: string, input: InvestigationSource) {
+export function bindInvestigationSource(
+  context: GMContext, memberId: string, input: InvestigationSource, intentId?: string | null,
+) {
   const origin = memberScene(context.scene, memberId).location.id!;
   let source = {
     ...input,
@@ -214,8 +218,35 @@ export function bindInvestigationSource(context: GMContext, memberId: string, in
   )
     throw new Error('That object or person already exists. Use its saved ID instead of recreating it.');
   const action = context.turn.actions.find((action) => action.memberId === memberId);
+  const obligations = submittedActionObligations(context, memberId);
+  const scopes = obligations.map((intent, index) => {
+    // One evidence span can contain a nested request, such as "use a scanner to inspect the cart".
+    const next = obligations[index + 1];
+    const text = next && next.index < intent.index + intent.evidence.length
+      ? intent.evidence.slice(0, next.index - intent.index) : intent.evidence;
+    // Names after these prepositions describe the topic or instrument, rather than the source.
+    const target = text.split(/\b(?:about|regarding|for|using|over|omtrent|naar)\b|\b(?:with|met)\b(?!\s*$)/iu)[0];
+    const submitted = ` ${key(intent.kind === 'talk' ? text.split(/\b(?:about|regarding|over|omtrent)\b/iu)[0] : target)} `;
+    return { intent, named: sources.filter((candidate) => candidate.kind !== 'place' &&
+      (intent.kind !== 'talk' || candidate.kind === 'npc') &&
+      names(candidate).some((name) => name.length > 3 && submitted.includes(` ${name} `))) };
+  });
+  const matches = (scope: typeof scopes[number]) => scope.named.some(
+    (candidate) => candidate.kind === source.kind && candidate.id === source.id,
+  );
+  let selected = intentId ? scopes.find((scope) => scope.intent.id === intentId) : undefined;
+  if (intentId && !selected) throw new Error('Use an intentId from this character’s submitted actionObligations.');
+  if (!selected) {
+    const compatible = scopes.filter((scope) => source.kind === 'npc' || scope.intent.kind !== 'talk');
+    selected = compatible.find(matches) ??
+      (compatible.length === 1 ? compatible[0] : compatible.filter((scope) => !scope.named.length).length === 1
+        ? compatible.find((scope) => !scope.named.length) : undefined) ??
+      (scopes.length === 1 ? scopes[0] : undefined);
+    if (scopes.length > 1 && !selected)
+      throw new Error('Specify the investigation intentId from actionObligations; preserve that intent’s target.');
+  }
   const submitted = ` ${key(action?.text ?? '')} `;
-  const named = sources.filter(
+  const named = selected?.named ?? sources.filter(
     (candidate) =>
       candidate.kind !== 'place' &&
       names(candidate).some((name) => name.length > 3 && submitted.includes(` ${name} `)),
@@ -249,6 +280,7 @@ export function bindInvestigationSource(context: GMContext, memberId: string, in
   } : value;
   return {
     source: canonical,
+    intent: selected?.intent,
     signature: createHash('sha256').update(JSON.stringify(signatureValue)).digest('hex'),
     introduced: !found,
   };

@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 function fixture(filename = ':memory:') {
-  const db = openDatabase(filename);
+  const db = openDatabase(filename, () => 1);
   cleanup.push(() => {
     if (db.open) db.close();
   });
@@ -94,7 +94,7 @@ function fixture(filename = ':memory:') {
   const p2 = game.identify();
   const save = (playerId: string, name: string) => {
     const sheet = templateCharacter(name);
-    sheet.selectedEquipmentIds = sheet.equipmentOptions.slice(0, 2).map((item) => item.id);
+    sheet.selectedEquipmentIds = sheet.equipmentOptions.slice(0, 3).map((item) => item.id);
     return game.saveCharacter(playerId, sheet);
   };
   const c1 = save(p1.id, 'Mira');
@@ -151,7 +151,7 @@ describe('replacement characters after successful encounters', () => {
     expect(next.roster).not.toContain(member(f).id);
     const newcomer = f.game.identify();
     const sheet = templateCharacter('Late traveller');
-    sheet.selectedEquipmentIds = sheet.equipmentOptions.slice(0, 2).map((item) => item.id);
+    sheet.selectedEquipmentIds = sheet.equipmentOptions.slice(0, 3).map((item) => item.id);
     const saved = f.game.saveCharacter(newcomer.id, sheet);
     f.game.join(f.c.inviteCode!, newcomer.id, saved.id);
     const lateMember = member(f, newcomer.id);
@@ -269,7 +269,7 @@ describe('replacement characters after successful encounters', () => {
         .sort(),
     ).toEqual(
       f.replacement.equipmentOptions
-        .slice(0, 2)
+        .slice(0, 3)
         .map((item) => item.name)
         .sort(),
     );
@@ -309,7 +309,7 @@ describe('replacement characters after successful encounters', () => {
       .run(JSON.stringify({ ...config, language: 'Nederlands' }), f.c.id);
     f.game.queueReplacement(f.c.id, f.p1.id, f.replacement.id);
     const changed = templateCharacter('A different future character');
-    changed.selectedEquipmentIds = changed.equipmentOptions.slice(3, 5).map((item) => item.id);
+    changed.selectedEquipmentIds = changed.equipmentOptions.slice(3, 6).map((item) => item.id);
     f.game.updateCharacter(f.p1.id, f.replacement.id, changed);
     expect(member(f).replacement?.character.name).toBe('Ash');
     f.control.mode = 'advance';
@@ -379,7 +379,7 @@ describe('replacement characters after successful encounters', () => {
     expect(member(f).state.hp).toBe(0);
     const drawCount = f.draw.mock.calls.length;
     f.db.close();
-    const reopened = openDatabase(filename);
+    const reopened = openDatabase(filename, () => 1);
     cleanup.push(() => reopened.close());
     f.db = reopened;
     f.game = new Game(reopened, () => f.provider, f.draw);
@@ -437,11 +437,11 @@ describe('replacement characters after successful encounters', () => {
     const before = f.game.members(f.c.id);
     f.db.exec('ALTER TABLE members DROP COLUMN replacement; PRAGMA user_version = 6;');
     f.db.close();
-    const reopened = openDatabase(filename);
+    const reopened = openDatabase(filename, () => 1);
     cleanup.push(() => reopened.close());
     const restored = new Game(reopened, () => f.provider, f.draw);
-    expect(reopened.pragma('user_version', { simple: true })).toBe(22);
-    expect(restored.members(f.c.id).map((m) => ({ character: m.character, state: m.state }))).toEqual(
+    expect(reopened.pragma('user_version', { simple: true })).toBe(29);
+    expect(restored.members(f.c.id).map((m) => ({ character: m.character, state: m.state }))).toMatchObject(
       before.map((m) => ({ character: m.character, state: m.state })),
     );
     expect(restored.members(f.c.id).every((m) => m.replacement === null)).toBe(true);

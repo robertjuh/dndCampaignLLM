@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { initialState } from '../../shared/rules';
 import { templateCharacter, type Action, type Snapshot } from '../../shared/schema';
 
-test('an escaped player can explore, update, pass, and reengage while the encounter continues', async ({
+test('an escaped player can explore, update, wait, and reengage while the encounter continues', async ({
   page,
 }) => {
   const response = await page.request.post('/api/campaigns', {
@@ -125,8 +125,10 @@ test('an escaped player can explore, update, pass, and reengage while the encoun
   await action.fill(update);
   await page.getByRole('button', { name: 'Update action', exact: true }).click();
   await expect(page.locator('.action-bubble')).toContainText(update);
-  await page.getByRole('button', { name: 'Pass', exact: true }).click();
-  await expect(page.locator('.action-bubble')).toContainText('Passes this turn.');
+  await expect(page.getByRole('button', { name: 'Pass', exact: true })).toHaveCount(0);
+  await action.fill('I wait and observe the corridor.');
+  await page.getByRole('button', { name: 'Update action', exact: true }).click();
+  await expect(page.locator('.action-bubble')).toContainText('I wait and observe the corridor.');
   await expect(action).toBeEnabled();
 
   snapshot.turn = { ...snapshot.turn!, id: 'reengage-turn', number: 3, actions: [] };
@@ -140,7 +142,7 @@ test('an escaped player can explore, update, pass, and reengage while the encoun
   expect(submissions).toEqual([
     { turnId: 'escape-turn', text: exploration, passed: false, abilityName: null },
     { turnId: 'escape-turn', text: update, passed: false, abilityName: null },
-    { turnId: 'escape-turn', text: '', passed: true },
+    { turnId: 'escape-turn', text: 'I wait and observe the corridor.', passed: false, abilityName: null },
     { turnId: 'reengage-turn', text: reengage, passed: false, abilityName: null },
   ]);
 });

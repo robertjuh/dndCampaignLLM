@@ -21,14 +21,15 @@ async function join(browser: Browser, code: string, name: string, origin: string
   );
   await page.getByLabel('Character concept').fill(name + ' the adventurer');
   await page.getByRole('button', { name: 'Generate from my concept' }).click();
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   await page.getByRole('button', { name: 'Save character', exact: true }).click();
   await page.getByRole('button', { name: 'Join the party', exact: true }).click();
   await expect(page).toHaveURL(/\/campaign\//);
   await expect(page.getByRole('heading', { name: 'Prepare your character' })).toBeVisible();
   await page.getByRole('button', { name: 'Review my character', exact: true }).click();
-  await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(2);
+  await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(3);
   await expect(page.locator('.character-sheet input, .character-sheet textarea')).toHaveCount(0);
   await page.getByRole('button', { name: 'Save character', exact: true }).click();
   await expect(
@@ -71,7 +72,7 @@ test('a phone can join from the lobby QR link or a four-character code', async (
   try {
     const player = await context.newPage();
     const character = templateCharacter('QR traveler');
-    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
     const saved = await player.request.post(`${origin}/api/characters`, { headers, data: character });
     expect(saved.ok()).toBe(true);
     await player.goto(joinLink);

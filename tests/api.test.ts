@@ -33,7 +33,7 @@ it('cancels only the authenticated player’s own submission while the turn is c
     const member = game.members(campaign.id)[0];
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     game.start(campaign.id, host.id);
     await game.idle();
@@ -208,7 +208,7 @@ it('lets only the host persist a supported output language between GM generation
     const member = game.snapshot(campaign.id, player.id).members[0];
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     const endpoint = `/api/campaigns/${campaign.id}/language`;
     const change = (payload: Record<string, unknown>, token = host.token!, extraCookies = {}) =>

@@ -10,7 +10,7 @@ async function table(page: Page, language: string) {
     return response.json();
   };
   const character = templateCharacter('Mira');
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   const saved = await post('/api/characters', character);
   const campaign = await post('/api/campaigns', {
     name: 'Playtest improvements',

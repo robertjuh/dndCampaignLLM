@@ -3,6 +3,7 @@ import type { TurnAdjudication } from '../shared/turn-resolution';
 import { memberScene, placeScene } from '../shared/locations';
 import { worldProgressionStateSchema, type WorldProgressionState } from '../shared/world-progression';
 import { memberLocationAtEvent } from './world-map';
+import { rememberJournalFact } from '../shared/journal';
 
 export { worldProgressEvidenceSchema, worldProgressionStateSchema } from '../shared/world-progression';
 
@@ -143,6 +144,14 @@ export function validateWorldProgression(
       previous.detail.length + update.detail.length + 1 <= (update.kind === 'faction' ? 6000 : 1500)
     ) {
       update.detail = `${previous.detail}\n${update.detail}`;
+    }
+    if (!frozen && update.kind !== 'faction' && update.detail.length > 1500) {
+      const required = [...new Set(value.worldProgress
+        .filter((item) => item.journal.kind === update.kind && item.journal.name === update.name)
+        .map((item) => value.events.find((saved) => saved.id === item.eventId)?.fact)
+        .filter((fact): fact is string => !!fact))];
+      if (required.join('\n').length <= 1500)
+        update.detail = rememberJournalFact(update.detail.split('\n').filter((line) => !required.includes(line)).join('\n'), required.join('\n'));
     }
     if (update.detail.length > (update.kind === 'faction' ? 6000 : 1500))
       throw new JournalCapacityError(

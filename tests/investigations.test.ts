@@ -5,6 +5,7 @@ import type { Investigation, InvestigationResult } from '../shared/investigation
 import { initialScene, initialState } from '../shared/rules';
 import { templateCharacter } from '../shared/schema';
 import { bindNPCSource } from '../server/npcs';
+import { submittedActionObligations } from '../server/action-intent';
 import {
   bindInvestigationSource,
   investigationFact,
@@ -99,6 +100,70 @@ function receipt(ctx: GMContext): InvestigationResult {
     },
   };
 }
+
+function compoundContext(text: string) {
+  const ctx = context();
+  ctx.turn.actions[0].text = text;
+  ctx.scene.features = Object.fromEntries([
+    ['crane', 'Rescue Crane'], ['cart', 'Ore Cart'], ['scanner', 'Survey Scanner'],
+  ].map(([id, name]) => [id, {
+    id, name, aliases: [], locationId: 'canal', properties: {}, fact: `${name} is here.`,
+  }]));
+  ctx.scene.npcs = Object.fromEntries(['Oren Vale', 'Nell Voss'].map((name, index) => [String(index), {
+    id: String(index), name, aliases: [], locationId: 'canal', status: 'alive' as const,
+    allegiance: null, fact: `${name} is helping with the rescue.`,
+  }]));
+  return ctx;
+}
+
+it.each([
+  'Talk to the people here to learn about the monsters. I help with the Rescue Crane.',
+  'Talk to the people here and help with the Rescue Crane.',
+  'Praat met de mensen hier over de monsters en help met de Rescue Crane.',
+])('keeps the conversation target separate from another requested activity: %s', (text) => {
+  const ctx = compoundContext(text);
+  const bound = bindInvestigationSource(ctx, ctx.members[0].id, { kind: 'npc', id: '0', locationId: 'canal' });
+  expect(bound.source.id).toBe('0');
+  expect(bound.intent?.kind).toBe('talk');
+});
+
+it.each([
+  ['Inspect the Rescue Crane and talk to Oren Vale about the Ore Cart.', 'crane', '0'],
+  ['Inspecteer de Rescue Crane en praat met Oren Vale over de Ore Cart.', 'crane', '0'],
+])('binds each investigation to its own intent and rejects changing that target: %s', (text, featureId, npcId) => {
+  const ctx = compoundContext(text);
+  const intents = submittedActionObligations(ctx, ctx.members[0].id);
+  const inspection = intents.find((intent) => intent.kind === 'inspect')!;
+  const conversation = intents.find((intent) => intent.kind === 'talk')!;
+  expect(inspection).toBeDefined();
+  for (const explicit of [false, true]) {
+    expect(bindInvestigationSource(ctx, ctx.members[0].id,
+      { kind: 'feature', id: featureId, locationId: 'canal' }, explicit ? inspection.id : undefined).intent?.id)
+      .toBe(inspection.id);
+    expect(bindInvestigationSource(ctx, ctx.members[0].id,
+      { kind: 'npc', id: npcId, locationId: 'canal' }, explicit ? conversation.id : undefined).intent?.id)
+      .toBe(conversation.id);
+  }
+  expect(() => bindInvestigationSource(ctx, ctx.members[0].id,
+    { kind: 'feature', id: 'cart', locationId: 'canal' }, inspection.id)).toThrow('Rescue Crane');
+  expect(() => bindInvestigationSource(ctx, ctx.members[0].id,
+    { kind: 'npc', id: '1', locationId: 'canal' }, conversation.id)).toThrow('Oren Vale');
+  expect(() => bindInvestigationSource(ctx, ctx.members[0].id,
+    { kind: 'npc', id: npcId, locationId: 'canal' }, 'intent:other-actor')).toThrow('intentId');
+});
+
+it('does not mistake an instrument, conversation topic or incidental mention for the investigation target', () => {
+  const ctx = compoundContext('Use the Survey Scanner to inspect the Rescue Crane and wave at the Ore Cart.');
+  const inspection = submittedActionObligations(ctx, ctx.members[0].id).find((intent) => intent.kind === 'inspect')!;
+  expect(bindInvestigationSource(ctx, ctx.members[0].id,
+    { kind: 'feature', id: 'crane', locationId: 'canal' }, inspection.id).source.id).toBe('crane');
+  ctx.turn.actions[0].text = 'Inspect the Rescue Crane and wave at the Ore Cart.';
+  expect(() => bindInvestigationSource(ctx, ctx.members[0].id,
+    { kind: 'feature', id: 'cart', locationId: 'canal' })).toThrow('Rescue Crane');
+  ctx.turn.actions[0].text = 'Talk to Oren Vale about the Rescue Crane.';
+  expect(bindInvestigationSource(ctx, ctx.members[0].id,
+    { kind: 'npc', id: '0', locationId: 'canal' }).source.id).toBe('0');
+});
 
 it('recognizes a successful answer across hooks and sources without treating hidden or failed answers as known', () => {
   const ctx = context();
@@ -259,12 +324,21 @@ it('shares a person introduced by another selected investigation receipt before 
   expect(ctx.scene.npcs).toBeUndefined();
 });
 
-it('renders finished investigation prose once and keeps durable facts separate, including legacy receipts', () => {
+it('preserves the entire selected clue in spoken prose, including incomplete and legacy receipts', () => {
   const finding = receipt(context()).finding;
-  expect(investigationNarration(finding)).toBe(finding.text);
+  expect(investigationNarration(finding)).toBe(`${finding.text}\n${finding.fact}`);
   expect(investigationFact(finding)).toBe(`${finding.fact}\n${finding.lead}`);
   const legacy = { ...finding, narrativeVersion: undefined, text: 'The marking belongs to Tavi.' };
-  expect(investigationNarration(legacy)).toBe(`${legacy.text}\n${legacy.lead}`);
+  expect(investigationNarration(legacy)).toBe(`${legacy.text}\n${legacy.fact}\n${legacy.lead}`);
   legacy.text += '\nTAVI’S MOORING IS AT THE LANDING!';
-  expect(investigationNarration(legacy)).toBe(legacy.text);
+  expect(investigationNarration(legacy)).toBe(`${legacy.text}\n${legacy.fact}`);
+  const complete = { ...finding, text: 'The boatman explains: {{finding}} {{lead}}' };
+  const prose = investigationNarration(complete);
+  expect(prose).toBe(`The boatman explains: ${finding.fact} ${finding.lead}`);
+  expect(investigationNarration({ ...complete, text: prose })).toBe(prose);
+  const password = { ...finding,
+    fact: "The survivors have little food. Their challenge is 'Who keeps the road?' and response 'The last traveler.'",
+    text: 'The survivors have water but little food.',
+  };
+  expect(investigationNarration(password)).toContain("'Who keeps the road?' and response 'The last traveler.'");
 });

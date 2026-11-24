@@ -20,6 +20,33 @@ const storyProse = z
 
 // Translate fixed engine phrasing; keep names, mechanics and submitted text exact.
 const dutchCombatPhrases: [string, string][] = [
+  [' acts on instinct with an innate strike.', ' reageert instinctief met een innate strike.'],
+  [' acts on instinct and defends (+2 defense).', ' reageert instinctief en verdedigt zich (+2 defense).'],
+  [' observes the nearby surroundings: ', ' neemt de directe omgeving waar: '],
+  [' acts on instinct, observing the nearby surroundings while keeping their distance.', ' reageert instinctief en bekijkt de directe omgeving op veilige afstand.'],
+  [' bonus damage to ', ' extra damage bij '],
+  [' deal ', ' veroorzaken '],
+  [' creates an opening against ', ' creëert een opening tegen '],
+  ['the next ally', 'de volgende bondgenoot'],
+  [' gains advantage on their next attack against this enemy, until ', ' krijgt advantage op de volgende attack tegen deze vijand, tot de volgende beurt van '],
+  ["'s next turn.", '.'],
+  [' disrupts ', ' hindert '],
+  ['. Its next attack has disadvantage.', '. De volgende aanval krijgt disadvantage.'],
+  [' has advantage on their next attack against ', ' krijgt advantage op de volgende aanval tegen '],
+  [' attacks with a normal roll.', ' valt aan met een gewone worp.'],
+  [' attacks with advantage', ' valt aan met advantage'],
+  ['Rally gives advantage and ', 'Rally geeft advantage en '],
+  ['The selected ability gives advantage.', 'De gekozen vaardigheid geeft advantage.'],
+  ['An ally created an opening.', 'Een bondgenoot heeft een opening gemaakt.'],
+  ['Advantage and disadvantage cancel.', 'Advantage en disadvantage heffen elkaar op.'],
+  ['until next round’s support phase.', 'tot de ondersteuningsfase van de volgende ronde.'],
+  [': disadvantage on their next attack.', ': disadvantage op de volgende attack.'],
+  ['; disadvantage on their next attack.', '; disadvantage op de volgende attack.'],
+  [' pushes ', ' duwt '],
+  [' establishes cover for ', ' maakt dekking voor '],
+  [': +2 defense until they leave the cover.', ': +2 defense totdat het personage de dekking verlaat.'],
+  ["'s intended target is unavailable; they turn toward ", ' heeft geen bereikbaar oorspronkelijk doelwit en richt zich op '],
+  [' attacks with disadvantage.', ' voert een attack uit met disadvantage.'],
   [' is no longer Stunned.', ' is niet langer Stunned.'],
   [
     ' its loaded shot is spent and it needs reloading.',
@@ -265,6 +292,8 @@ export function combatFact(
     .filter(Boolean)
     .sort((a, b) => b.length - a.length);
   const protectedText: string[] = [];
+  fact = fact.replace(/“[^”]*”|"[^"\r\n]*"/g,
+    (quote) => `\u0000${protectedText.push(quote) - 1}\u0000`);
   if (names.length)
     fact = fact.replace(
       new RegExp(names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g'),
@@ -374,16 +403,18 @@ export function narrationBeats(
           const target = context.members.find(
             (member) => member.id === (receipt.targetId ?? action.memberId),
           );
+          const targetName = receipt.npcTarget?.name ?? target?.character.name ?? name;
+          const civilian = receipt.npcTarget && !receipt.npcTarget.enemy;
           facts.push(
             dutch
-              ? `${name} gebruikt ${receipt.sourceName}, ${receipt.itemId ? 'waarbij één item wordt verbruikt' : 'waarbij de ability use wordt verbruikt'}${receipt.restored > 0 ? `, en herstelt ${receipt.restored} HP bij ${target?.character.name ?? name}` : ''}.`
-              : `${name} uses ${receipt.sourceName}, ${receipt.itemId ? 'consuming one item' : 'spending its ability use'}${receipt.restored > 0 ? `, restoring ${receipt.restored} HP to ${target?.character.name ?? name}` : ''}.`,
+              ? `${name} gebruikt ${receipt.sourceName}, ${receipt.itemId ? 'waarbij één item wordt verbruikt' : 'waarbij de ability use wordt verbruikt'}${receipt.restored > 0 ? civilian ? `, en geeft ${receipt.restored} HP genezing aan ${targetName}` : `, en herstelt ${receipt.restored} HP bij ${targetName}` : ''}.`
+              : `${name} uses ${receipt.sourceName}, ${receipt.itemId ? 'consuming one item' : 'spending its ability use'}${receipt.restored > 0 ? civilian ? `, providing ${receipt.restored} HP of healing to ${targetName}` : `, restoring ${receipt.restored} HP to ${targetName}` : ''}.`,
           );
           if (receipt.cured?.length)
             facts.push(
               dutch
-                ? `${receipt.sourceName} verwijdert ${receipt.cured.join(' en ')} bij ${target?.character.name ?? name}.`
-                : `${receipt.sourceName} removes ${receipt.cured.join(' and ')} from ${target?.character.name ?? name}.`,
+                ? `${receipt.sourceName} verwijdert ${receipt.cured.join(' en ')} bij ${targetName}.`
+                : `${receipt.sourceName} removes ${receipt.cured.join(' and ')} from ${targetName}.`,
             );
         }
         for (const change of changes.filter((change) => change.memberId === action.memberId)) {

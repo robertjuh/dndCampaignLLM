@@ -215,7 +215,7 @@ function fixture(overrides: Partial<GameMaster> = {}, databasePath = ':memory:')
     const member = game.members(c.id).find((member) => member.playerId === player.id)!;
     game.manageCharacter(c.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
   }
   const start = async () => {
@@ -236,6 +236,69 @@ function fixture(overrides: Partial<GameMaster> = {}, databasePath = ':memory:')
     JSON.parse((db.prepare('SELECT draft FROM turns WHERE id = ?').get(turnId) as { draft: string }).draft);
   return { db, game, host, p1, p2, c, draw, provider, adjudicate, narrate, factory, start, submit, draft };
 }
+
+it('records unfinished goals and repeated next-turn inputs without adding interpretation calls', async () => {
+  const f = fixture();
+  await f.start();
+  const read = (id: string) => JSON.parse((f.db.prepare("SELECT payload FROM events WHERE turn_id=? AND kind='turn_playability'").get(id) as { payload: string }).payload);
+  const first = f.submit();
+  await f.game.idle();
+  expect(read(first)).toMatchObject({ unfinishedGoals: 0, repeatedInputs: 0 });
+  const second = f.submit();
+  await f.game.idle();
+  expect(read(second)).toMatchObject({ unfinishedGoals: 0, repeatedInputs: 2 });
+  expect(JSON.stringify(read(second))).not.toContain('Open de deur');
+  expect(f.adjudicate).toHaveBeenCalledTimes(3);
+  expect(f.draw).not.toHaveBeenCalled();
+});
+
+it('publishes a recovered successful unlock exactly once through interruption and restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gather-goal-recovery-'));
+  cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+  const f = fixture({}, join(directory, 'game.sqlite'));
+  await f.start();
+  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+  scene.features = { ...scene.features, gate: { id: 'gate', name: 'Iron gate', aliases: [], locationId: scene.location.id!,
+    properties: { locked: true }, fact: 'An iron gate is locked.' } };
+  f.db.prepare('UPDATE campaigns SET scene=? WHERE id=?').run(JSON.stringify(scene), f.c.id);
+  const fetcher = vi.fn(async () => completed({ malformed: true }));
+  const gm = new ChatGPTGM(auth, 'owner', 'model', fetcher);
+  const actor = f.game.members(f.c.id)[0];
+  const adjudicate = vi.fn(async (context: GMContext, tools: GameTools) => {
+    tools({ memberId: actor.id, stat: 'DEX', dc: 10, mode: 'normal', lethal: false, reason: 'Unlock the iron gate.' });
+    return gm.adjudicate(context, tools);
+  });
+  f.provider.adjudicate = adjudicate;
+  f.provider.sceneTurns = true;
+  f.db.exec("CREATE TRIGGER interrupt_recovered_goal BEFORE UPDATE OF phase ON turns WHEN NEW.phase='complete' BEGIN SELECT RAISE(ABORT, 'publication interrupted'); END;");
+  const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+  f.game.submit(f.c.id, f.p1.id, turn.id, 'Unlock the iron gate.', false);
+  f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+  await f.game.idle();
+  expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('failed');
+  const saved = f.draft(turn.id);
+  expect(saved.scene.features.gate.properties.locked).toBe(false);
+  expect(saved.goalRecovery[0].goalState).toBe('resolved');
+  expect(f.game.snapshot(f.c.id, f.host.id).scene.features!.gate.properties.locked).toBe(true);
+  expect(f.draw).toHaveBeenCalledTimes(1);
+  f.db.exec('DROP TRIGGER interrupt_recovered_goal');
+  const filename = f.db.name;
+  f.db.close();
+  const db = openDatabase(filename);
+  cleanup.push(() => db.close());
+  const restarted = new Game(db, f.factory, f.draw);
+  restarted.retry(f.c.id, f.host.id);
+  await restarted.idle();
+  const snapshot = restarted.snapshot(f.c.id, f.host.id);
+  expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+  expect(snapshot.scene.features!.gate.properties.locked).toBe(false);
+  expect(adjudicate).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(f.draw).toHaveBeenCalledTimes(1);
+  const events = db.prepare("SELECT payload FROM events WHERE turn_id=? AND kind='turn_playability'").all(turn.id) as { payload: string }[];
+  expect(events).toHaveLength(1);
+  expect(JSON.parse(events[0].payload)).toMatchObject({ unfinishedGoals: 0, outcomes: [expect.objectContaining({ goalState: 'resolved', recovered: true })] });
+});
 
 it('finalizes explicit pickup once and resumes publication after a restart without another interpretation', async () => {
   const f = fixture();
@@ -264,6 +327,7 @@ it('finalizes explicit pickup once and resumes publication after a restart witho
   f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
   await f.game.idle();
   expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM events WHERE turn_id=? AND kind='turn_playability'").get(turn.id)).toEqual({ count: 0 });
   const saved = f.draft(turn.id);
   expect(saved.members[0].state.inventory.find((item: any) => item.id === 'ampoules').quantity).toBe(1);
   expect(saved.scene.loot.some((item: any) => item.id === 'ampoules')).toBe(false);
@@ -282,6 +346,7 @@ it('finalizes explicit pickup once and resumes publication after a restart witho
   expect(vi.mocked(f.provider.adjudicate!).mock.calls).toHaveLength(calls);
   expect(f.narrate.mock.calls).toHaveLength(narrations);
   expect(f.draft(turn.id).resolution).toEqual(saved.resolution);
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM events WHERE turn_id=? AND kind='turn_playability'").get(turn.id)).toEqual({ count: 1 });
 });
 
 it('records causal routine outcomes and discovery XP, without dice or copied prompts', async () => {
@@ -513,7 +578,7 @@ it('restarts from a saved resolution, preserves concurrent participation, and us
   const lateMember = restarted.members(f.c.id).find((member) => member.playerId === late.id)!;
   restarted.manageCharacter(f.c.id, late.id, {
     type: 'starter',
-    itemIds: lateMember.state.starterEquipment.slice(0, 2).map((item) => item.id),
+    itemIds: lateMember.state.starterEquipment.slice(0, 3).map((item) => item.id),
   });
   const next = restarted.snapshot(f.c.id, f.host.id).turn!;
   f.provider.adjudicate = async (context) => {
@@ -669,6 +734,53 @@ function resolution(): Extract<TurnResolution, { version: 2 }> {
   };
 }
 
+it('speaks the Mercy Spur finding once in normal and recovery narration, preserving leads and event coverage', () => {
+  const r = resolution();
+  const finding = 'Nell kan de overeenkomende vrachtreferenties schriftelijk bevestigen en het ontvangstbewijs voor tijdelijke kliniekvrijgave opstellen. Cora kan als vervoerder de ontvangst door de kliniek laten bevestigen; een buitenstaander hoeft geen borg of schuld over te nemen. Hollis kan de vrijgave hier op papier autoriseren, zonder heraansluiting van het loket.';
+  const lead = 'Hollis staat bij hetzelfde loket klaar om de documenten te bekijken.';
+  const facts = [
+    'The West World Connaisseur bereikt Nell bij het loket.',
+    `The West World Connaisseur onderzoekt Nell Voss: ${finding}`,
+    `The West World Connaisseur onderzoekt Nell Voss: ${finding}`,
+    `${finding} ${lead}`,
+    `The West World Connaisseur onderzoekt Nell Voss: ${finding}`,
+    'Joe rogan vraagt Cora naar een opdracht.',
+    'Romgore wrikt het laadluik open. Zijn STR check is 15 tegen DC 15. De laadruimte is toegankelijk.',
+  ];
+  r.events = facts.map((fact, sequence) => ({ ...r.events[0],
+    id: `mercy:${sequence}`, sequence, fact, dependsOn: [],
+  }));
+  r.spokenFacts = [finding];
+  const before = structuredClone(r);
+  const fallback = factualNarration(r, 'Nederlands');
+  const text = narrationParagraphs(r, fallback).join('\n\n');
+  expect(text.split(finding)).toHaveLength(2);
+  expect(text).toContain(lead);
+  expect(text).toContain('Joe rogan');
+  expect(text).toContain('De laadruimte is toegankelijk.');
+  expect(text).not.toMatch(/tegen\s*\.|DC 15/);
+  expect(fallback.version === 2 && fallback.passages.flatMap((passage) => passage.eventIds)).toEqual(r.events.map((event) => event.id));
+  expect(r).toEqual(before);
+  const normal = assembleResolvedNarration(r, {
+    version: 2, turnId: r.turnId, closing: '', summary: 'Hollis kan de vrijgave autoriseren.',
+    passages: facts.map((text, index) => ({ eventIds: [r.events[index].id],
+      text: index === 6 ? 'Romgore opent het laadluik.' : text })),
+  });
+  expect(narrationParagraphs(r, normal).join('\n\n').split(finding)).toHaveLength(2);
+});
+
+it('counts closing text in the complete opening budget', () => {
+  const r = resolution();
+  r.turnNumber = 0;
+  const narration = { version: 2, turnId: r.turnId,
+    passages: [{ eventIds: r.events.map((event) => event.id), text: 'Nell '.repeat(100).trim() }],
+    closing: 'Cora '.repeat(21).trim(), summary: 'The clinic shipment is disputed.',
+  };
+  expect(() => assembleResolvedNarration(r, narration)).toThrow(/80–120/);
+  narration.closing = 'Cora '.repeat(20).trim();
+  expect(() => assembleResolvedNarration(r, narration)).not.toThrow();
+});
+
 function survivingSpiderContext() {
   const c = context();
   c.turn.actions = [c.turn.actions[0]];
@@ -801,6 +913,13 @@ it('uses saved turn numbers for opening narration and keeps legacy resolutions r
     const r = data.resolution as TurnResolution;
     seen.push(r.turnNumber);
     expect(body.instructions.includes('Opening narration:')).toBe(r.turnNumber === 0);
+    if (r.turnNumber === 0) {
+      expect(body.instructions).toContain('80–120 words total across two or three short paragraphs');
+      expect(body.instructions).toContain('Explain the saved party gathering in one short sentence');
+      expect(body.instructions).toContain('two or three immediately available people, objects or routes');
+      expect(body.instructions).toContain('fuller NPC introductions and faction history emerge through interaction');
+      expect(body.instructions).not.toContain('400–650');
+    }
     return completed({
       version: 2,
       turnId: r.turnId,
@@ -822,7 +941,7 @@ it('uses saved turn numbers for opening narration and keeps legacy resolutions r
   delete opening.turnNumber;
   const legacy = await gm.narrate(opening, config);
   expect(assembleResolvedNarration(opening, legacy)).toEqual(legacy);
-  expect(seen).toEqual([0, 0, 1, undefined]);
+  expect(seen).toEqual([0, 1, undefined]);
 });
 
 it('narrates the whole party after a partially completed investigation instead of falling back to rolls', async () => {
@@ -1301,6 +1420,7 @@ it('bounds multi-request adjudication context and reconstructs saved engine even
   for (const request of requests) {
     // Bound the fixed contract including situational checks, factions, exploration and locations.
     expect(request.instructions.length).toBeLessThan(36_000);
+    expect(request.instructions).toContain('Autonomous constructs use NPC identities');
     expect(request.instructions).toContain('Batch independent tool calls');
     expect(request.instructions).toContain(
       'one ordinary move to an adjacent location plus one explicitly submitted main action there',
@@ -1423,15 +1543,39 @@ it('publishes a narration timeout from finalized facts without another adjudicat
   expect(f.game.members(f.c.id).map((member) => member.state.xp)).toEqual([10, 10]);
 });
 
+it('keeps an approved concise opening without expanding it toward the old length target', async () => {
+  const r = resolution();
+  r.turnNumber = 0;
+  r.actions = [];
+  r.events = [{ ...r.events.at(-1)!, dependsOn: [] }];
+  const story = [
+    'Water pours down the sanctuary steps as a warning bell sounds overhead. Your interrupted ferry journey brought you here together. Beside the open entrance, a watchman struggles with a rope. “Someone is trapped below,” he calls. “The water is climbing.”',
+    'A bellkeeper holds the stairwell lantern above the flood; its light catches a bronze sun disk and the markings of the lost caravan. Across the lane, residents carry blankets toward higher ground. The rope reaches the submerged landing, and the upper sanctuary door stands open. A second bell answers from below.',
+  ].join('\n\n');
+  expect(story.split(/\s+/).length).toBeGreaterThanOrEqual(80);
+  expect(story.split(/\s+/).length).toBeLessThanOrEqual(120);
+  const fetcher = vi.fn(async (_url, init) => {
+    const data = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+    return completed(data.candidate
+      ? { approved: true, feedback: '' }
+      : {
+          version: 2, turnId: r.turnId,
+          passages: [{ eventIds: r.events.map((event) => event.id), text: story }],
+          closing: '', summary: 'Water rises at the open entrance; someone rings a bell inside.',
+        });
+  }) as unknown as typeof fetch;
+  const narrated = await new ChatGPTGM(auth, 'owner', 'model', fetcher).narrate(r, config);
+  expect(narrationParagraphs(r, narrated)).toEqual([story]);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
 it.each([
   ['arrival', 'approved'],
   ['arrival', 'rejected'],
   ['arrival', 'disconnected'],
   ['opening', 'approved'],
-  ['opening', 'rejected'],
-  ['opening', 'disconnected'],
 ] as const)(
-  'expands a short %s within the existing budget and keeps approved prose when polish is %s',
+  'preserves a short %s while optional arrival polish is %s',
   async (scene, polish) => {
     const r = resolution();
     r.turnNumber = 20;
@@ -1475,7 +1619,7 @@ it.each([
       if (writing === 2) {
         expect(body.input.at(-1).content).toContain('outcomes are approved');
         expect(body.input.at(-1).content).toContain(
-          scene === 'opening' ? '400–650 words' : 'frozen player personality',
+          scene === 'opening' ? '200–350 words' : 'frozen player personality',
         );
         if (scene === 'opening')
           expect(body.input.at(-1).content).toContain('leaving player dialogue and choices open');
@@ -1491,10 +1635,10 @@ it.each([
     }) as unknown as typeof fetch;
     const budget: StageBudget = { used: 0, limit: 4 };
     const narrated = await new ChatGPTGM(auth, 'owner', 'model', fetcher).narrate(r, config, budget);
-    expect(narrationParagraphs(r, narrated)).toEqual([polish === 'approved' ? expanded : story]);
-    expect(writing).toBe(2);
-    expect(reviewing).toBe(polish === 'disconnected' ? 1 : 2);
-    expect(fetcher).toHaveBeenCalledTimes(polish === 'disconnected' ? 3 : 4);
+    expect(narrationParagraphs(r, narrated)).toEqual([scene === 'arrival' && polish === 'approved' ? expanded : story]);
+    expect(writing).toBe(scene === 'opening' ? 1 : 2);
+    expect(reviewing).toBe(scene === 'opening' || polish === 'disconnected' ? 1 : 2);
+    expect(fetcher).toHaveBeenCalledTimes(scene === 'opening' ? 2 : polish === 'disconnected' ? 3 : 4);
     expect(budget.used).toBeLessThanOrEqual(4);
     expect(budget.fallback).toBeUndefined();
     expect(r).toEqual(before);
@@ -2013,7 +2157,7 @@ it('completes a saved turn after repeated narration rejection and retains feedba
 });
 
 it.each([false, true])(
-  'keeps unresolved story consequences retriable with saved checks and resources (item executed: %s)',
+  'keeps unresolved processing retryable with exact saved checks/resources (item executed: %s)',
   async (executeItem) => {
     const f = fixture();
     await f.start();
@@ -2057,15 +2201,15 @@ it.each([false, true])(
     f.game.submit(f.c.id, f.p2.id, turn.id, 'Inspect the door.', false);
     await f.game.idle();
     const snapshot = f.game.snapshot(f.c.id, f.host.id);
-    expect(snapshot.turn!.id).toBe(turn.id);
     expect(snapshot.turn!.phase).toBe('failed');
-    expect(snapshot.turn!.error).toContain('could not finish the story consequences');
+    expect(snapshot.turn!.id).toBe(turn.id);
     expect(snapshot.turn!.rolls).toHaveLength(1);
     expect(snapshot.turn!.rolls[0]).toMatchObject({ memberId: ally.id, success: true });
     expect(f.draw).toHaveBeenCalledTimes(1);
     const checkpoint = f.draft(turn.id);
     expect(checkpoint.adjudication).toBeUndefined();
     expect(checkpoint.resolution).toBeUndefined();
+    expect(checkpoint.partialAdjudication.actions[0].components.main?.processingFailure).toBe(true);
     const unchanged = checkpoint.members.find((member: any) => member.id === actor.id)!;
     expect(unchanged.state.hp).toBe(executeItem ? actor.state.maxHp : actor.state.hp);
     expect(unchanged.state.inventory.find((item: any) => item.id === potion.id)?.quantity ?? 0).toBe(
@@ -2078,19 +2222,8 @@ it.each([false, true])(
       .get(turn.id);
     expect(narrationStage).toBeUndefined();
     expect(snapshot.members.map((member) => member.state.xp)).toEqual([0, 0]);
-    f.provider.adjudicate = async (context) => {
-      const value = proposal(context);
-      value.actions[0].components.main!.basis = 'none';
-      return changeMain(value, actor.id, 'blocked', 'The requested teleport is unavailable.');
-    };
-    f.game.retry(f.c.id, f.host.id);
-    await f.game.idle();
-    const resumed = f.game.snapshot(f.c.id, f.host.id);
-    expect(resumed.turn?.phase, resumed.turn?.error ?? '').toBe('collecting');
-    expect(resumed.history.at(-1)!.rolls).toEqual(snapshot.turn!.rolls);
-    expect(f.draw).toHaveBeenCalledTimes(1);
-    expect(resumed.members.find((member) => member.id === actor.id)!.state.inventory).toEqual(
-      unchanged.state.inventory,
+    expect(snapshot.members.find((member) => member.id === actor.id)!.state.inventory).toEqual(
+      actor.state.inventory,
     );
   },
 );
@@ -2127,6 +2260,17 @@ it('uses saved action outcomes when check events contain only mechanical results
   expect(narration.summary).not.toContain('WIS check');
   expect(assembleResolvedNarration(r, narration)).toEqual(narration);
   expect(r).toEqual(before);
+});
+
+it('keeps an authoritative revealed clue in the spoken story after prose repair or factual fallback', () => {
+  const r = resolution();
+  const clue = "The challenge is 'Who keeps the road?' and the response is 'The last traveler.'";
+  r.spokenFacts = [clue];
+  const fallback = factualNarration(r, 'English');
+  expect(narrationParagraphs(r, fallback).join('\n')).toContain(clue);
+  const repaired = { ...fallback, closing: 'The survivors still need food.' };
+  expect(narrationParagraphs(r, repaired).join('\n')).toContain(clue);
+  expect(narrationParagraphs(r, { ...repaired, closing: clue }).join('\n').split(clue)).toHaveLength(2);
 });
 
 it('covers check receipts without repeating their later fictional outcomes in the fallback', () => {
@@ -2600,27 +2744,31 @@ it.each(['repaired', 'malformed', 'rewrites retained facts', 'oversized response
       expect(fetcher).toHaveBeenCalledTimes(2);
       return;
     }
-    if (repair !== 'repaired') {
-      expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('failed');
-      expect(f.draft(id).adjudication).toBeUndefined();
-      expect(f.draft(id).partialAdjudication.actions[0].status).toBe('success');
-      expect(f.narrate).toHaveBeenCalledTimes(narrationCalls);
-      f.game.retry(f.c.id, f.host.id);
-      await f.game.idle();
-    }
     const snapshot = f.game.snapshot(f.c.id, f.host.id);
+    if (repair !== 'repaired') {
+      expect(snapshot.turn?.phase).toBe('failed');
+      expect(snapshot.turn?.id).toBe(id);
+      expect(f.draft(id).partialAdjudication.actions[0].status).toBe('success');
+      expect(f.draft(id).partialAdjudication.actions[1].components.main?.processingFailure).toBe(true);
+      expect(f.draft(id).adjudication).toBeUndefined();
+      expect(f.narrate).toHaveBeenCalledTimes(narrationCalls);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(f.draw).not.toHaveBeenCalled();
+      return;
+    }
     expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
     const done = snapshot.history.at(-1)!;
     expect(done.id).toBe(id);
-    expect(done.resolution!.actions.map((action) => action.status)).toEqual(['success', 'success']);
+    expect(done.resolution!.actions.map((action) => action.status)).toEqual(['success', repair === 'repaired' ? 'success' : 'blocked']);
     expect(done.result!.narration).toContain('unlocks the recessed closure');
-    expect(done.result!.narration).toContain('bronze sun disk');
+    if (repair === 'repaired') expect(done.result!.narration).toContain('bronze sun disk');
+    else expect(done.result!.narration).not.toContain('bronze sun disk');
     expect(done.result!.narration).not.toContain('different action');
-    expect(f.draft(id).adjudicationFallback).toBeUndefined();
-    expect(f.narrate).toHaveBeenCalledTimes(narrationCalls + 1);
-    expect(fetcher).toHaveBeenCalledTimes(repair === 'repaired' ? 2 : 3);
+    expect(!!f.draft(id).adjudicationFallback).toBe(repair !== 'repaired');
+    expect(f.narrate).toHaveBeenCalledTimes(narrationCalls + (repair === 'repaired' ? 1 : 0));
+    expect(fetcher).toHaveBeenCalledTimes(2);
     expect(f.draw).not.toHaveBeenCalled();
-    expect(snapshot.members.map((member) => member.state.xp)).toEqual([10, 10]);
+    expect(snapshot.members.map((member) => member.state.xp)).toEqual(repair === 'repaired' ? [10, 10] : [0, 0]);
   },
 );
 
@@ -2986,7 +3134,7 @@ it('saves every group-healing recipient, excludes distant allies and resumes nar
   const distant = f.game.members(f.c.id).find((member) => member.playerId === distantPlayer.id)!;
   f.game.manageCharacter(f.c.id, distantPlayer.id, {
     type: 'starter',
-    itemIds: distant.state.starterEquipment.slice(0, 2).map((item) => item.id),
+    itemIds: distant.state.starterEquipment.slice(0, 3).map((item) => item.id),
   });
   await f.start();
   const [actor, target] = f.game.members(f.c.id);
@@ -3202,7 +3350,7 @@ it('rejects an unknown explicit resource target before spending the item', async
         abilityName: null,
         targetId: randomUUID(),
       }),
-    ).toThrow('Choose an ally');
+    ).toThrow('Choose a saved party member or NPC');
     throw new Error('No item spent for the invalid recipient.');
   };
   const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
@@ -3213,6 +3361,164 @@ it('rejects an unknown explicit resource target before spending the item', async
   expect(f.game.snapshot(f.c.id, f.host.id).turn!.error).toContain('No item spent');
   expect(saved.members[0].state.inventory.some((item: { id: string }) => item.id === potion.id)).toBe(true);
   expect(Object.keys(saved.receipts).some((key) => key.startsWith('resource:'))).toBe(false);
+});
+
+it.each(['item', 'combat ability', 'utility ability'] as const)(
+  'heals a civilian NPC with a %s exactly once across a saved-turn retry',
+  async (source) => {
+    const f = fixture();
+    await f.start();
+    const actor = f.game.members(f.c.id)[0];
+    const potion = { ...baseItem('rescue-gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 2 };
+    actor.state.inventory.push(potion);
+    const ability = actor.character.abilities[0];
+    Object.assign(ability, {
+      name: 'Worker Mend',
+      effect: 'mend',
+      kind: source === 'utility ability' ? 'utility' : 'combat',
+    });
+    f.db
+      .prepare('UPDATE members SET state=?, sheet=? WHERE id=?')
+      .run(JSON.stringify(actor.state), JSON.stringify(actor.character), actor.id);
+    const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+    scene.npcs = {
+      worker: {
+        id: 'worker',
+        name: 'Injured Rail Worker',
+        aliases: [],
+        locationId: scene.location.id!,
+        status: 'alive',
+        allegiance: null,
+        fact: 'The Injured Rail Worker has a wounded leg.',
+      },
+    };
+    f.db.prepare('UPDATE campaigns SET scene=? WHERE id=?').run(JSON.stringify(scene), f.c.id);
+    let fail = true;
+    const receipts: unknown[] = [];
+    f.provider.adjudicate = async (context, tools) => {
+      const input = {
+        memberId: actor.id,
+        itemId: source === 'item' ? potion.id : null,
+        abilityName: source === 'item' ? null : ability.name,
+        targetId: 'worker',
+      };
+      const receipt = tools.useResource!(input);
+      receipts.push(receipt);
+      expect(tools.useResource!(input)).toEqual(receipt);
+      expect(engineEvents(context)).toContainEqual(
+        expect.objectContaining({
+          phase: 'main',
+          fact: expect.stringContaining('Injured Rail Worker receives'),
+        }),
+      );
+      if (fail) throw new Error('Interrupted after NPC treatment.');
+      return proposal(context);
+    };
+    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(
+      f.c.id,
+      f.p1.id,
+      turn.id,
+      source === 'item'
+        ? 'Heal the wounded worker with Rescue Gel.'
+        : 'Use Worker Mend on the Injured Rail Worker.',
+      false,
+      false,
+      source === 'item' ? null : ability.name,
+    );
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+    const draws = f.draw.mock.calls.length;
+    expect(f.game.snapshot(f.c.id, f.host.id).scene.npcs!.worker.treatment).toBeUndefined();
+    fail = false;
+    f.game.retry(f.c.id, f.host.id);
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.c.id, f.host.id);
+    expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+    expect(receipts[1]).toEqual(receipts[0]);
+    expect(f.draw.mock.calls.length).toBe(draws);
+    expect(snapshot.scene.npcs!.worker.treatment).toMatchObject({
+      sourceName: source === 'item' ? potion.name : ability.name,
+      healing: expect.any(Number),
+    });
+    expect(snapshot.scene.npcs!.worker.enemy).toBeUndefined();
+    expect(snapshot.members[0].state.inventory.find((item) => item.id === potion.id)?.quantity).toBe(
+      source === 'item' ? 1 : 2,
+    );
+    if (source !== 'item') expect(snapshot.members[0].state.abilityUses?.[ability.name]).toBe(1);
+  },
+);
+
+it.each(['unknown', 'dead', 'remote', 'self'] as const)(
+  'preserves a healing item when an NPC recipient is %s',
+  async (recipient) => {
+    const f = fixture();
+    await f.start();
+    const actor = f.game.members(f.c.id)[0];
+    actor.state.hp = 5;
+    const potion = { ...baseItem('rescue-gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 1 };
+    actor.state.inventory.push(potion);
+    f.db.prepare('UPDATE members SET state=? WHERE id=?').run(JSON.stringify(actor.state), actor.id);
+    const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+    scene.npcs = {
+      worker: {
+        id: 'worker',
+        name: 'Injured Rail Worker',
+        aliases: [],
+        locationId: recipient === 'remote' ? 'another-place' : scene.location.id!,
+        status: recipient === 'dead' ? 'dead' : 'alive',
+        allegiance: null,
+        fact: 'The worker is wounded.',
+      },
+    };
+    f.db.prepare('UPDATE campaigns SET scene=? WHERE id=?').run(JSON.stringify(scene), f.c.id);
+    f.provider.adjudicate = async (_context, tools) => {
+      expect(() =>
+        tools.useResource!({
+          memberId: actor.id,
+          itemId: potion.id,
+          abilityName: null,
+          targetId: recipient === 'unknown' ? 'made-up-worker' : recipient === 'self' ? null : 'worker',
+        }),
+      ).toThrow();
+      throw new Error('Invalid recipient left the item untouched.');
+    };
+    const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+    f.game.submit(f.c.id, f.p1.id, turn.id, 'Heal the wounded worker with Rescue Gel.', false);
+    f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+    await f.game.idle();
+    const saved = f.draft(turn.id);
+    expect(f.game.snapshot(f.c.id, f.host.id).turn!.error).toContain('Invalid recipient left');
+    expect(saved.members[0].state.hp).toBe(5);
+    expect(saved.members[0].state.inventory).toContainEqual(potion);
+    expect(Object.keys(saved.receipts).some((key) => key.startsWith('resource:'))).toBe(false);
+  },
+);
+
+it('accepts checked field treatment without forcing an unnamed healing item', async () => {
+  const f = fixture();
+  await f.start();
+  const actor = f.game.members(f.c.id)[0];
+  actor.state.inventory.push({ ...baseItem('gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 1 });
+  f.db.prepare('UPDATE members SET state=? WHERE id=?').run(JSON.stringify(actor.state), actor.id);
+  f.provider.adjudicate = async (context, tools) => {
+    tools({
+      memberId: actor.id,
+      stat: 'INT',
+      dc: 10,
+      mode: 'normal',
+      reason: 'Stabilize the wounded worker.',
+      lethal: false,
+    });
+    return proposal(context);
+  };
+  const turn = f.game.snapshot(f.c.id, f.host.id).turn!;
+  f.game.submit(f.c.id, f.p1.id, turn.id, 'Heal the wounded worker.', false);
+  f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+  await f.game.idle();
+  expect(f.game.snapshot(f.c.id, f.host.id).turn?.phase).toBe('collecting');
+  expect(f.game.members(f.c.id)[0].state.inventory.some((item) => item.id === 'gel')).toBe(true);
 });
 
 it.each(['successful check', 'failed check', 'routine act'] as const)(

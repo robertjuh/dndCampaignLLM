@@ -81,6 +81,14 @@ test('players target local enemies while the shared screen shows each occupied f
     { ...wolves[0], id: randomUUID(), name: 'Ravine wolf (2)' },
     { ...wolves[0], id: randomUUID(), name: 'Fallen wolf', hp: 0 },
   );
+  wolves[0].intent = { targetId: snapshot.members[0].id, round: 2 };
+  wolves[0].hindered = true;
+  wolves[0].opening = {
+    sourceId: snapshot.members[1].id,
+    beneficiaryId: snapshot.members[0].id,
+    expiresRound: 3,
+  };
+  wolves[0].position = 'the narrow doorway';
   snapshot.turn = {
     id: randomUUID(),
     number: 3,
@@ -105,6 +113,12 @@ test('players target local enemies while the shared screen shows each occupied f
   await attach(page);
   await expect(page.getByRole('region', { name: 'Combat at Ravine', exact: true })).toBeVisible();
   await expect(page.locator('.combat-panel')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Pass', exact: true })).toHaveCount(0);
+  const localFight = page.getByRole('region', { name: 'Combat at Ravine', exact: true });
+  await expect(localFight.getByText(/Intent: attack Mira/)).toBeVisible();
+  await expect(localFight.getByText(/Disadvantage on next attack/)).toBeVisible();
+  await expect(localFight.getByText(/Opening: next eligible ally/)).toBeVisible();
+  await expect(localFight.getByText(/Position: the narrow doorway/)).toBeVisible();
   await page.getByRole('button', { name: 'Add Ravine wolf to your action' }).click();
   await expect(page.getByRole('textbox', { name: 'Your action', exact: true })).toHaveValue(
     'I attack Ravine wolf.',
@@ -118,6 +132,35 @@ test('players target local enemies while the shared screen shows each occupied f
   await action.fill('');
   await page.getByRole('button', { name: 'Add Ravine wolf (2) to your action' }).press('Enter');
   await expect(action).toHaveValue('I attack Ravine wolf (2).');
+
+  snapshot.turn!.combatRules = 2;
+  const quickEnemy = wolves[1];
+  await page.route(`**/api/campaigns/${snapshot.id}/action/preview`, async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ turnId: snapshot.turn!.id, targets: [quickEnemy.id] });
+    snapshot.combatPreviews = [{ memberId: snapshot.members[0].id, targetIds: [quickEnemy.id] }];
+    await route.fulfill({ json: snapshot });
+  });
+  let submittedQuickAttack = false;
+  await page.route(`**/api/campaigns/${snapshot.id}/action`, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      text: '', abilityName: null, combatSelection: { kind: 'attack', targetIds: [quickEnemy.id] },
+    });
+    submittedQuickAttack = true;
+    await route.fulfill({ json: snapshot });
+  });
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.reload();
+  await page.getByRole('button', { name: `Select ${quickEnemy.name}`, exact: true }).click();
+  await expect(page.getByText('Mira · planning')).toBeVisible();
+  await page.getByRole('button', { name: 'Attack', exact: true }).click();
+  await expect.poll(() => submittedQuickAttack).toBe(true);
+
+  snapshot.config.language = 'Nederlands';
+  await page.reload();
+  await expect(page.getByRole('button', { name: `Kies ${quickEnemy.name}`, exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Aanvallen', exact: true })).toBeEnabled();
+  await expect(page.getByText('Mira · in voorbereiding')).toBeVisible();
+  snapshot.config.language = 'English';
 
   const shared = await context.newPage();
   await attach(shared, true);

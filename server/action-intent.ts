@@ -2,7 +2,7 @@ import type { GMContext } from './game';
 import { requestsPickup, unquotedActionText } from './turn-pickups';
 
 export type ActionObligation = {
-  kind: 'search' | 'inspect' | 'talk' | 'collect' | 'use' | 'overcome';
+  kind: 'search' | 'inspect' | 'talk' | 'collect' | 'use' | 'overcome' | 'attack';
   /** The player's actual words, for a correction that names the omitted action. */
   evidence: string;
   index: number;
@@ -11,7 +11,7 @@ export type ActionObligation = {
 };
 
 const verbs =
-  /\b(search(?:ing)?|investigat(?:e|ing)|doorzoek(?:en)?|onderzoek(?:en)?|zoek(?:en)?|inspect(?:ing)?|examin(?:e|ing)|inspecteer|bekijk(?:en)?|ask(?:ing)?|question(?:ing)?|talk(?:ing)?\s+(?:to|with)|speak(?:ing)?\s+(?:to|with)|meet(?:ing)?\s+(?:with\s+)?|vraag|ondervraag|praat\s+(?:met|tegen)|spreek\s+met|hack(?:ing|en)?|bypass(?:ing)?|unlock(?:ing)?|breach(?:ing)?|(?:get|gain)\s+access\b|omzeil(?:en)?|ontgrendel(?:en)?|use|using|gebruik|take|collect|grab|pocket|pick\s+(?:\w+\s+){0,3}up|neem|pak|verzamel|raap)\b/giu;
+  /\b(search(?:ing)?|investigat(?:e|ing)|doorzoek(?:en)?|onderzoek(?:en)?|zoek(?:en)?|inspect(?:ing)?|examin(?:e|ing)|inspecteer|bekijk(?:en)?|ask(?:ing)?|question(?:ing)?|talk(?:ing)?\s+(?:to|with)|speak(?:ing)?\s+(?:to|with)|meet(?:ing)?\s+(?:with\s+)?|vraag|ondervraag|praat\s+(?:met|tegen)|spreek\s+met|hack(?:ing|en)?|bypass(?:ing)?|unlock(?:ing)?|breach(?:ing)?|(?:get|gain)\s+access\b|omzeil(?:en)?|ontgrendel(?:en)?|use|using|gebruik|take|collect|grab|pocket|pick\s+(?:\w+\s+){0,3}up|neem|pak|verzamel|raap|attack(?:ing)?|strike|punch|shoot|stab|sla|schiet|steek|val\b[^.;!\n]*?\baan)\b/giu;
 const nonAction =
   /\b(?:not|never|don['’]t|won['’]t|can['’]t|cannot|would|could|might|if|unless|niet|nooit|geen|zou|zouden|misschien|als|tenzij)\b/iu;
 const travel =
@@ -47,6 +47,7 @@ export function actionObligations(text: string): ActionObligation[] {
         const verb = match[0].toLowerCase();
         const before = raw.slice(0, match.index);
         const after = raw.slice(match.index! + match[0].length);
+        if (/^(?:val)/iu.test(verb) && /\b(?:niet|nooit|geen)\b/iu.test(verb)) continue;
         if (/^\s+(?:not|niet|nooit|geen)\b/iu.test(after)) continue;
         // Looking for a place to reach is navigation, not an invented local search.
         if (
@@ -73,7 +74,9 @@ export function actionObligations(text: string): ActionObligation[] {
                 ? 'overcome'
                 : /^(?:use|using|gebruik)$/u.test(verb)
                   ? 'use'
-                  : 'collect';
+                  : /^(?:attack|strike|punch|shoot|stab|sla|schiet|steek|val)/u.test(verb)
+                    ? 'attack'
+                    : 'collect';
         if (kind !== 'talk' && /\b(?:niet|nooit|geen)\b/iu.test(after)) continue;
         // Reuse the inventory consent guard, including its movement/observation idioms.
         if (kind === 'collect' && !requestsPickup(raw.slice(match.index))) continue;

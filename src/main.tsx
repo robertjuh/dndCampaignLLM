@@ -1,3 +1,4 @@
+import { NPCChat } from './NPCChat';
 import { FactionCard, CharacterFactions } from './Factions';
 import { Gathering } from './Gathering';
 import { QuestJournal } from './QuestJournal';
@@ -44,11 +45,13 @@ import {
   slots,
   templateCharacter,
   type CampaignConfig,
+  type CampaignImprovement,
   type Character,
   type AbilityChoiceStats,
   type Item,
   type Member,
   type Action,
+  type CombatSelection,
   type Roll,
   type Turn,
   type Snapshot,
@@ -66,6 +69,11 @@ import {
   isInCombat,
   canInteract,
   incapacitatingCondition,
+  effectiveStats,
+  startingEquipmentSelected,
+  perkBonus,
+  availableAbilities,
+  isHealingAbility,
 } from '../shared/rules';
 import { ailments, conditionDescription, conditionDuration } from '../shared/ailments';
 import {
@@ -294,7 +302,7 @@ function App() {
         {match ? (
           <Campaign id={match[2]} screen={screen} />
         ) : joinEntry ? (
-          <JoinCodePage />
+          <JoinCodePage me={me} />
         ) : path.startsWith('/join/') || joinCode ? (
           <Join code={joinCode ?? path.split('/')[2]} me={me} />
         ) : path === '/characters' ? (
@@ -342,13 +350,35 @@ function SessionCodeForm({ autoFocus = false }: { autoFocus?: boolean }) {
   );
 }
 
-function JoinCodePage() {
+function ResumeCampaigns({ campaigns }: { campaigns: Me['campaigns'] }) {
+  const resumable = campaigns.filter(
+    (campaign) => campaign.status === 'lobby' || campaign.status === 'active',
+  );
+  if (!resumable.length) return null;
+  return (
+    <section className="form-panel resume-campaigns" aria-label="Resume a campaign">
+      <h2>Resume a campaign</h2>
+      <p>Your character and progress are saved. No session code needed.</p>
+      <div className="button-row">
+        {resumable.map((campaign) => (
+          <a key={campaign.id} className="button secondary" href={`/campaign/${campaign.id}`}>
+            <span>Resume {campaign.config.name}</span>
+            <ArrowRight size={16} />
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function JoinCodePage({ me }: { me: Me }) {
   return (
     <div className="page narrow join-entry">
       <span className="eyebrow">YOUR SEAT AT THE TABLE</span>
       <h1>Join a session</h1>
+      <ResumeCampaigns campaigns={me.campaigns} />
       <p>Enter the four-character code shown on your campaign leader’s screen.</p>
-      <SessionCodeForm autoFocus />
+      <SessionCodeForm autoFocus={!me.campaigns.length} />
       <p className="small muted">Connect to the same Wi-Fi as your campaign leader.</p>
       <a className="back-link" href="/campaigns">
         Your campaigns
@@ -379,7 +409,6 @@ function Dashboard({ me }: { me: Me }) {
           <h2>
             Enter the slopcampaign with ai slop.
             <br />
-            
           </h2>
           <p>Your imagination, your companions, and a game master ready to follow you into the unknown.</p>
           <a href="/new" className="button light">
@@ -421,7 +450,10 @@ function Dashboard({ me }: { me: Me }) {
                     <Users size={14} />
                     {c.isHost ? 'You are the leader' : 'Party member'}
                   </span>
-                  <ArrowRight {...icon} />
+                  <span className="text-link">
+                    {c.status === 'lobby' || c.status === 'active' ? 'Resume' : 'View campaign'}
+                    <ArrowRight {...icon} />
+                  </span>
                 </div>
               </div>
             </a>
@@ -467,6 +499,12 @@ function CreateCampaign() {
   const [config, setConfig] = useState<CampaignConfig>(defaultCampaign);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [improving, setImproving] = useState(false);
+  const [improvementError, setImprovementError] = useState('');
+  const improvement = useRef<AbortController | null>(null);
+  const improvementSeed = useRef<CampaignConfig | null>(null);
+  const previousImprovement = useRef<CampaignImprovement | null>(null);
+  useEffect(() => () => improvement.current?.abort(), []);
   useEffect(() => {
     const from = new URLSearchParams(location.search).get('from');
     if (from)
@@ -474,10 +512,41 @@ function CreateCampaign() {
         .then((s) => setConfig({ ...s.config, name: `${s.config.name} — new run` }))
         .catch((e) => setError(errorText(e)));
   }, []);
-  const change = <K extends keyof CampaignConfig>(key: K, value: CampaignConfig[K]) =>
+  const change = <K extends keyof CampaignConfig>(key: K, value: CampaignConfig[K]) => {
+    improvementSeed.current = null;
+    previousImprovement.current = null;
     setConfig((c) => ({ ...c, [key]: value }));
+  };
+  async function improvePremise() {
+    if (improvement.current || busy) return;
+    const controller = new AbortController();
+    improvement.current = controller;
+    setImproving(true);
+    setImprovementError('');
+    improvementSeed.current ??= structuredClone(config);
+    try {
+      const result = await api<CampaignImprovement>(
+        '/api/campaigns/improve-premise',
+        {
+          ...improvementSeed.current,
+          ...(previousImprovement.current ? { previousDraft: previousImprovement.current } : {}),
+        },
+        controller.signal,
+      );
+      if (!controller.signal.aborted) {
+        previousImprovement.current = result;
+        setConfig((current) => ({ ...current, ...result }));
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setImprovementError(errorText(error));
+    } finally {
+      improvement.current = null;
+      setImproving(false);
+    }
+  }
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (improving || busy) return;
     setBusy(true);
     setError('');
     try {
@@ -503,177 +572,204 @@ function CreateCampaign() {
         <Compass className="heading-icon" size={46} strokeWidth={1} />
       </div>
       <form onSubmit={submit} className="form-panel">
-        <div className="form-section">
-          <h3>The world</h3>
-          <Field label="Campaign name">
-            <input
-              value={config.name}
-              maxLength={100}
-              onChange={(e) => change('name', e.target.value)}
-              placeholder="What will this story be called?"
-              required
-            />
-          </Field>
-          <Field label="Setting">
-            <textarea
-              value={config.setting}
-              maxLength={1700}
-              onChange={(e) => change('setting', e.target.value)}
-              placeholder="A world, a city, a time, or a feeling…"
-              required
-              rows={2}
-            />
-          </Field>
-          <Field label="The premise">
-            <textarea
-              value={config.premise}
-              maxLength={2000}
-              onChange={(e) => change('premise', e.target.value)}
-              placeholder="What brings the party together? Leave room for a surprise."
-              rows={3}
-            />
-          </Field>
-          <Field label="Party goal (optional)">
-            <textarea
-              value={config.partyGoal ?? ''}
-              maxLength={1000}
-              rows={4}
-              onChange={(e) => change('partyGoal', e.target.value)}
-              placeholder="What does your group want to achieve? You can change this later."
-            />
-          </Field>
-          <div className="">
-            <Field label="Tone & themes">
-              <textarea
-                value={config.tone}
-                rows={4}
-                maxLength={1000}
-                onChange={(e) => change('tone', e.target.value)}
-              />
-            </Field>
-            <Field label="GM output language">
-              <select
-                aria-label="GM output language"
-                aria-describedby="gm-language-help"
-                value={config.language}
-                onChange={(e) => change('language', e.target.value as CampaignConfig['language'])}
-              >
-                <option>English</option>
-                <option>Nederlands</option>
-              </select>
-              <small id="gm-language-help">
-                GM text uses this language. Game mechanics terms stay in English.
-              </small>
-            </Field>
-          </div>
-        </div>
-        <div className="form-section">
-          <h3>Make it yours</h3>
-          <Field label="Extra instructions">
-            <textarea
-              value={config.instructions}
-              maxLength={3000}
-              onChange={(e) => change('instructions', e.target.value)}
-              placeholder="More intrigue, less combat, a particular play style…"
-              rows={2}
-            />
-          </Field>
-          {config.custom.map((f, i) => (
-            <div className="custom-row" key={i}>
+        <fieldset disabled={busy || improving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          <div className="form-section">
+            <h3>The world</h3>
+            <Field label="Campaign name">
               <input
-                aria-label={`Custom field ${i + 1} name`}
-                placeholder="Field name"
-                value={f.key}
-                onChange={(e) =>
-                  change(
-                    'custom',
-                    config.custom.map((x, n) => (n === i ? { ...x, key: e.target.value } : x)),
-                  )
-                }
+                value={config.name}
+                maxLength={100}
+                onChange={(e) => change('name', e.target.value)}
+                placeholder="What will this story be called?"
                 required
               />
-              <input
-                aria-label={`Custom field ${i + 1} value`}
-                placeholder="Value"
-                value={f.value}
-                onChange={(e) =>
-                  change(
-                    'custom',
-                    config.custom.map((x, n) => (n === i ? { ...x, value: e.target.value } : x)),
-                  )
-                }
+            </Field>
+            <Field label="Setting">
+              <textarea
+                value={config.setting}
+                maxLength={1700}
+                onChange={(e) => change('setting', e.target.value)}
+                placeholder="A world, a city, a time, or a feeling…"
+                required
+                rows={2}
               />
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={`Remove ${f.key || 'field'}`}
-                onClick={() =>
-                  change(
-                    'custom',
-                    config.custom.filter((_, n) => n !== i),
-                  )
-                }
-              >
-                <X size={16} />
-              </button>
+            </Field>
+            <Field label="The premise">
+              <textarea
+                value={config.premise}
+                maxLength={2000}
+                onChange={(e) => change('premise', e.target.value)}
+                placeholder="What brings the party together? Leave room for a surprise."
+                rows={3}
+                disabled={improving}
+              />
+            </Field>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={improvePremise}
+              disabled={
+                busy ||
+                improving ||
+                config.provider !== 'chatgpt' ||
+                (!config.premise.trim() && !config.setting.trim())
+              }
+            >
+              {improving ? <LoaderCircle className="spin" {...icon} /> : <Sparkles {...icon} />}
+              {improving ? 'Improving campaign…' : 'Improve prompt'}
+            </button>
+            <p className="muted small" role="status">
+              {config.provider === 'practice'
+                ? 'Prompt improvement is available with ChatGPT.'
+                : 'Generate a setting, premise, tone, party goal and extra instructions from your idea, with an immediate opening situation. Existing instructions are preserved. Press again for a fresh version, or edit any field before creating your campaign.'}
+            </p>
+            <ErrorBox error={improvementError} />
+            <Field label="Party goal (optional)">
+              <textarea
+                value={config.partyGoal ?? ''}
+                maxLength={1000}
+                rows={4}
+                onChange={(e) => change('partyGoal', e.target.value)}
+                placeholder="What does your group want to achieve? You can change this later."
+              />
+            </Field>
+            <div className="">
+              <Field label="Tone & themes">
+                <textarea
+                  value={config.tone}
+                  rows={4}
+                  maxLength={1000}
+                  onChange={(e) => change('tone', e.target.value)}
+                />
+              </Field>
+              <Field label="GM output language">
+                <select
+                  aria-label="GM output language"
+                  aria-describedby="gm-language-help"
+                  value={config.language}
+                  onChange={(e) => change('language', e.target.value as CampaignConfig['language'])}
+                >
+                  <option>English</option>
+                  <option>Nederlands</option>
+                </select>
+                <small id="gm-language-help">
+                  GM text uses this language. Game mechanics terms stay in English.
+                </small>
+              </Field>
             </div>
-          ))}
-          <button
-            type="button"
-            className="text-link"
-            disabled={config.custom.length >= 20}
-            onClick={() => change('custom', [...config.custom, { key: '', value: '' }])}
-          >
-            <Plus size={16} />
-            Add a custom field
-          </button>
-        </div>
-        <div className="form-section">
-          <h3>Your game master</h3>
-          <div className="mode-options">
-            <label className={config.provider === 'chatgpt' ? 'mode selected' : 'mode'}>
-              <input
-                type="radio"
-                name="provider"
-                value="chatgpt"
-                checked={config.provider === 'chatgpt'}
-                onChange={() => change('provider', 'chatgpt')}
-              />
-              <Sparkles size={22} />
-              <b>ChatGPT</b>
-              <span>
-                Uses the leader's connected plan.
-                <br />
-                Connect in Settings before starting.
-              </span>
-            </label>
-            <label className={config.provider === 'practice' ? 'mode selected' : 'mode'}>
-              <input
-                type="radio"
-                name="provider"
-                value="practice"
-                checked={config.provider === 'practice'}
-                onChange={() => change('provider', 'practice')}
-              />
-              <Dices size={22} />
-              <b>Practice table</b>
-              <span>
-                A scripted scene with real rolls.
-                <br />
-                No AI usage or credits needed.
-              </span>
-            </label>
           </div>
-          {config.provider === 'chatgpt' && (
-            <ModelSelect value={config.model} onChange={(value) => change('model', value)} disabled={busy} />
-          )}
-        </div>
+          <div className="form-section">
+            <h3>Make it yours</h3>
+            <Field label="Extra instructions">
+              <textarea
+                value={config.instructions}
+                maxLength={3000}
+                onChange={(e) => change('instructions', e.target.value)}
+                placeholder="More intrigue, less combat, a particular play style…"
+                rows={2}
+              />
+            </Field>
+            {config.custom.map((f, i) => (
+              <div className="custom-row" key={i}>
+                <input
+                  aria-label={`Custom field ${i + 1} name`}
+                  placeholder="Field name"
+                  value={f.key}
+                  onChange={(e) =>
+                    change(
+                      'custom',
+                      config.custom.map((x, n) => (n === i ? { ...x, key: e.target.value } : x)),
+                    )
+                  }
+                  required
+                />
+                <input
+                  aria-label={`Custom field ${i + 1} value`}
+                  placeholder="Value"
+                  value={f.value}
+                  onChange={(e) =>
+                    change(
+                      'custom',
+                      config.custom.map((x, n) => (n === i ? { ...x, value: e.target.value } : x)),
+                    )
+                  }
+                />
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Remove ${f.key || 'field'}`}
+                  onClick={() =>
+                    change(
+                      'custom',
+                      config.custom.filter((_, n) => n !== i),
+                    )
+                  }
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="text-link"
+              disabled={config.custom.length >= 20}
+              onClick={() => change('custom', [...config.custom, { key: '', value: '' }])}
+            >
+              <Plus size={16} />
+              Add a custom field
+            </button>
+          </div>
+          <div className="form-section">
+            <h3>Your game master</h3>
+            <div className="mode-options">
+              <label className={config.provider === 'chatgpt' ? 'mode selected' : 'mode'}>
+                <input
+                  type="radio"
+                  name="provider"
+                  value="chatgpt"
+                  checked={config.provider === 'chatgpt'}
+                  onChange={() => change('provider', 'chatgpt')}
+                />
+                <Sparkles size={22} />
+                <b>ChatGPT</b>
+                <span>
+                  Uses the leader's connected plan.
+                  <br />
+                  Connect in Settings before starting.
+                </span>
+              </label>
+              <label className={config.provider === 'practice' ? 'mode selected' : 'mode'}>
+                <input
+                  type="radio"
+                  name="provider"
+                  value="practice"
+                  checked={config.provider === 'practice'}
+                  onChange={() => change('provider', 'practice')}
+                />
+                <Dices size={22} />
+                <b>Practice table</b>
+                <span>
+                  A scripted scene with real rolls.
+                  <br />
+                  No AI usage or credits needed.
+                </span>
+              </label>
+            </div>
+            {config.provider === 'chatgpt' && (
+              <ModelSelect
+                value={config.model}
+                onChange={(value) => change('model', value)}
+                disabled={busy}
+              />
+            )}
+          </div>
+        </fieldset>
         <ErrorBox error={error} />
         <div className="form-actions">
           <a href="/" className="muted">
             Cancel
           </a>
-          <Button disabled={busy}>
+          <Button disabled={busy || improving}>
             {busy ? <LoaderCircle className="spin" {...icon} /> : <Plus {...icon} />}Create campaign
           </Button>
         </div>
@@ -784,13 +880,21 @@ function Library({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
 }
 
 function Join({ code, me }: { code: string; me: Me }) {
-  const [invite, setInvite] = useState<{ name: string; setting: string; provider: string } | null>(null);
+  const [invite, setInvite] = useState<{
+    id: string;
+    name: string;
+    setting: string;
+    provider: string;
+  } | null>(null);
   const [name, setName] = useState(me.name === 'Adventurer' ? '' : me.name);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [characters, setCharacters] = useState(me.characters);
   const [selected, setSelected] = useState(me.characters[0]?.id ?? '');
   const [editing, setEditing] = useState(false);
+  const returningCampaign = me.campaigns.find(
+    (campaign) => campaign.id === invite?.id && (campaign.status === 'lobby' || campaign.status === 'active'),
+  );
   useEffect(() => {
     api<typeof invite>(`/api/invites/${code}`)
       .then(setInvite)
@@ -820,8 +924,9 @@ function Join({ code, me }: { code: string; me: Me }) {
       </div>
       <ErrorBox error={error} />
 
+      {returningCampaign && <ResumeCampaigns campaigns={[returningCampaign]} />}
       <ProfileAccess name={me.name} />
-      {invite && (
+      {invite && (!returningCampaign || returningCampaign.isHost) && (
         <>
           <form className="form-panel join-form" onSubmit={join}>
             <Badge green>
@@ -1105,8 +1210,8 @@ function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
           </Badge>
         </div>
         <p>
-          Character text and gameplay use the connected ChatGPT plan and its usage limits. Optional character
-          portraits use separate OpenAI API billing.
+          Character text and gameplay use the connected ChatGPT plan and its usage limits. Portraits and
+          icons use the host’s local image model with no image API fees.
         </p>
         {auth?.connected ? (
           <>
@@ -1212,7 +1317,7 @@ function Settings({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
 
 const conditionDescriptions: Partial<Record<string, string>> = {
   ...Object.fromEntries(ailments.map((name) => [name, conditionDescription(name)])),
-  Downed: 'At 0 HP and unable to act. An ally can help you up to 1 HP or heal you.',
+  Downed: 'At 0 HP and unable to act. An ally can help you up to 1 HP plus their Rescuer bonuses, or heal you.',
   Escaped: 'You have left the fight. Rejoining combat removes this condition.',
 };
 
@@ -1220,8 +1325,8 @@ function ItemInspection({ item, currencyName }: { item: Item; currencyName?: str
   return (
     <details className="item-inspection">
       <summary>
-        <ItemIcon kind={item.kind} />
-        {item.currencyValue ? currencyName ?? 'currency' : item.name} <small>({item.kind})</small>
+        <ItemIcon kind={item.kind} iconId={item.iconId} />
+        {item.currencyValue ? (currencyName ?? 'currency') : item.name} <small>({item.kind})</small>
       </summary>
       <ItemDetails item={item} currencyName={currencyName} />
     </details>
@@ -1229,6 +1334,7 @@ function ItemInspection({ item, currencyName }: { item: Item; currencyName?: str
 }
 
 function MemberCard({
+  talkingTo,
   member,
   ready,
   current,
@@ -1240,6 +1346,7 @@ function MemberCard({
   dutch = false,
   currencyName = 'currency',
 }: {
+  talkingTo?: string;
   currencyName?: string;
   factions?: PublicFaction[];
   dutch?: boolean;
@@ -1264,6 +1371,7 @@ function MemberCard({
         <CharacterPortrait character={member.character} />
         <span>
           <b>{member.character.name}</b>
+          {talkingTo && <small className="chat-indicator"><MessageCircle size={13} /> Talking to {talkingTo}</small>}
           <small>
             {member.character.species} · Lv {state.level}
           </small>
@@ -1302,11 +1410,13 @@ function MemberCard({
       <div className="hud-line">
         <span>XP {state.xp}/100</span>
         <span>DEF {defense(member.character, state)}</span>
-        <span>{state.currency} {currencyName}</span>
+        <span>
+          {state.currency} {currencyName}
+        </span>
       </div>
       {downed && (
         <>
-          <p className="downed-hint">An ally can spend their turn to help them up with 1 HP.</p>
+          <p className="downed-hint">An ally can spend their turn to help them up with 1 HP plus Rescuer bonuses.</p>
           {onHelpUp && (
             <Button secondary disabled={helpDisabled} onClick={onHelpUp}>
               Help up {member.character.name}
@@ -1324,15 +1434,16 @@ function MemberCard({
           <div key={stat}>
             <span>{stat}</span>
             <b>
-              {state.stats[stat]}{' '}
+              {effectiveStats(state)[stat]}{' '}
               <small>
-                ({modifier(state.stats[stat]) >= 0 ? '+' : ''}
-                {modifier(state.stats[stat])})
+                ({modifier(effectiveStats(state)[stat]) >= 0 ? '+' : ''}
+                {modifier(effectiveStats(state)[stat])})
               </small>
             </b>
           </div>
         ))}
       </div>
+      {state.combatCover && <p className="small">Cover · +2 defense · {state.combatCover.evidence}</p>}
       {state.conditions.length > 0 && (
         <div className="conditions">
           {state.conditions
@@ -1370,7 +1481,11 @@ function MemberCard({
             {slots.map((slot) => (
               <li key={slot}>
                 <b>{slotLabels[slot]}</b>
-                {state.equipment[slot] ? <ItemInspection item={state.equipment[slot]} currencyName={currencyName} /> : <span>None</span>}
+                {state.equipment[slot] ? (
+                  <ItemInspection item={state.equipment[slot]} currencyName={currencyName} />
+                ) : (
+                  <span>None</span>
+                )}
               </li>
             ))}
           </ul>
@@ -1421,10 +1536,12 @@ function WorldStatus({
   snapshot: s,
   onTarget,
   memberId,
+  selectedTargets,
 }: {
   snapshot: Snapshot;
-  onTarget?: (name: string) => void;
+  onTarget?: (name: string, id: string) => void;
   memberId?: string;
+  selectedTargets?: string[];
 }) {
   const scene = memberId ? memberScene(s.scene, memberId) : s.scene;
   const hazard = locationHazard(scene.location.hazard);
@@ -1448,7 +1565,8 @@ function WorldStatus({
     <div className="world-status">
       <div className="location-banner">
         <span className="eyebrow">
-          {split ? 'CURRENT SCENE · PARTY SPLIT' : 'CURRENT LOCATION'} · {locationPath(s.scene, scene.location.id!)}
+          {split ? 'CURRENT SCENE · PARTY SPLIT' : 'CURRENT LOCATION'} ·{' '}
+          {locationPath(s.scene, scene.location.id!)}
         </span>
         {/* <h3>{s.scene.location.name}</h3>
         <p>{s.scene.location.atmosphere || s.config.premise}</p> */}
@@ -1496,25 +1614,50 @@ function WorldStatus({
                   key={e.id}
                   role={onTarget ? 'button' : undefined}
                   tabIndex={onTarget && e.hp > 0 && !e.withdrawn ? 0 : undefined}
-                  aria-label={onTarget ? `Add ${e.name} to your action` : undefined}
+                  aria-label={onTarget ? selectedTargets
+                    ? (s.config.language === 'Nederlands' ? `Kies ${e.name}` : `Select ${e.name}`)
+                    : `Add ${e.name} to your action` : undefined}
+                  aria-pressed={onTarget && selectedTargets ? selectedTargets.includes(e.id) : undefined}
                   aria-disabled={onTarget && (e.hp === 0 || !!e.withdrawn)}
-                  onClick={() => e.hp > 0 && !e.withdrawn && onTarget?.(e.name)}
+                  onClick={() => e.hp > 0 && !e.withdrawn && onTarget?.(e.name, e.id)}
                   onKeyDown={(event) => {
                     if (onTarget && e.hp > 0 && !e.withdrawn && ['Enter', ' '].includes(event.key)) {
                       event.preventDefault();
-                      onTarget(e.name);
+                      onTarget(e.name, e.id);
                     }
                   }}
                 >
                   <span className="eyebrow">{e.tier}</span>
                   <b>{e.name}</b>
                   <p>{e.description}</p>
+                  {e.hp > 0 && !e.withdrawn && (
+                    <p className="small">
+                      {e.stunned
+                        ? 'Interrupted · next attack skipped'
+                        : e.intent?.round === encounter.round
+                          ? `${s.config.language === 'Nederlands' ? 'Doelwit' : 'Intent: attack'} ${s.members.find((member) => member.id === e.intent!.targetId)?.character.name ?? (s.config.language === 'Nederlands' ? 'een groepslid' : 'a party member')}`
+                          : ''}
+                      {e.hindered ? ' · Disadvantage on next attack' : ''}
+                      {e.opening ? ' · Opening: next eligible ally attacks with advantage' : ''}
+                      {e.position ? ` · Position: ${e.position}` : ''}
+                    </p>
+                  )}
                   <span>
                     {e.withdrawn ? 'Withdrawn · ' : ''}HP {e.hp}/{e.maxHp} · Defense{' '}
                     {e.defense - (e.conditions?.includes('Chilled') ? 2 : 0)} · Attack{' '}
                     {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0) >= 0 ? '+' : ''}
                     {e.attack - (e.conditions?.includes('Weakened') ? 2 : 0)} · Damage {e.damage}
                   </span>
+                  {s.turn?.combatRules === 2 && e.hp > 0 && !e.withdrawn && s.members.map((member) => {
+                    if (memberScene(s.scene, member.id).location.id !== place.location.id) return null;
+                    const submitted = s.turn?.actions.find((action) => action.memberId === member.id);
+                    const ids = submitted?.combatSelection?.targetIds ?? s.combatPreviews?.find((preview) => preview.memberId === member.id)?.targetIds;
+                    if (!ids?.includes(e.id)) return null;
+                    const status = s.config.language === 'Nederlands'
+                      ? (submitted ? 'ingediend' : 'in voorbereiding')
+                      : (submitted ? 'submitted' : 'planning');
+                    return <span className="small" key={member.id}>{member.character.name} · {status}</span>;
+                  })}
                   {!!e.conditions?.length && (
                     <div className="conditions">
                       {e.conditions.map((condition) => (
@@ -1552,7 +1695,11 @@ function ReplacementPicker({
     setError('');
     try {
       const me = await api<Me>('/api/me', undefined, signal);
-      setCharacters(me.characters.filter((character) => character.selectedEquipmentIds.length === 2));
+      setCharacters(
+        me.characters.filter((character) =>
+          startingEquipmentSelected(character.equipmentOptions, character.selectedEquipmentIds),
+        ),
+      );
     } catch (e) {
       if (!signal?.aborted) setError(errorText(e));
     } finally {
@@ -1571,8 +1718,9 @@ function ReplacementPicker({
     <section className="replacement-picker" aria-label="Next-turn character">
       <h3>Return with a new character</h3>
       <p>
-        Create and save a new character with two starting pieces, then queue them here. After a successful
-        encounter, the game master introduces them on the next turn at level 1 with zero experience.
+        Create and save a new character with one weapon and two non-weapon pieces, then queue them here. After
+        a successful encounter, the game master introduces them on the next turn at level 1 with zero
+        experience.
       </p>
       {member.replacement && (
         <p className="replacement-ready" role="status">
@@ -1595,7 +1743,10 @@ function ReplacementPicker({
         </select>
       </Field>
       {!loading && !characters.length && (
-        <p>Save a character and choose their two starting pieces in the character library first.</p>
+        <p>
+          Save a character and choose their one weapon and two non-weapon pieces in the character library
+          first.
+        </p>
       )}
       <ErrorBox error={error} />
       <div className="button-row">
@@ -1670,7 +1821,7 @@ function CharacterControls({
         <p>
           {s.status === 'ended'
             ? 'No party member remains able to help. This run has ended in defeat.'
-            : 'You cannot act while downed. An ally can spend their turn to help you up with 1 HP, or heal you. Once helped, you can act on the next turn. Going down again in this encounter is permanent death.'}
+            : 'You cannot act while downed. An ally can spend their turn to help you up with 1 HP plus Rescuer bonuses, or heal you. Once helped, you can act on the next turn. Going down again in this encounter is permanent death.'}
         </p>
       </div>
     );
@@ -1692,6 +1843,13 @@ function CharacterControls({
     );
   return (
     <div className="character-controls">
+      {state.startingRumour && (
+        <section className="starting-loadout" aria-label="Your starting rumour">
+          <h3>Your starting rumour</h3>
+          <p>{state.startingRumour}</p>
+          <small>Unverified information. Only you can see this rumour; you decide what to share.</small>
+        </section>
+      )}
       {!state.equipmentChosen && (
         <section>
           <CharacterSheet character={member.character} />
@@ -1704,7 +1862,7 @@ function CharacterControls({
             disabled={locked}
           />
           <Button
-            disabled={locked || selected.length !== 2}
+            disabled={locked || !startingEquipmentSelected(state.starterEquipment, selected)}
             onClick={() => manage({ type: 'starter', itemIds: selected })}
           >
             Confirm starting equipment
@@ -1790,7 +1948,7 @@ function CharacterControls({
         <section>
           <h3>Help a downed ally</h3>
           <p>
-            Use Help up on their party card to spend your turn helping them recover with 1 HP. Healing an ally
+            Use Help up on their party card to spend your turn helping them recover with {1 + perkBonus(state, 'rescuer')} HP. Healing an ally
             with an item or ability also uses your turn. They can act on the next turn.
           </p>
         </section>
@@ -1899,6 +2057,9 @@ function RollReceipt({ roll, members, action }: { roll: Roll; members: Member[];
         <dd>{roll.reason}</dd>
         <dt>Roll mode</dt>
         <dd>{roll.mode}</dd>
+        {roll.dice.length > 1 && roll.keptDie !== undefined && (
+          <><dt>Kept die</dt><dd>{roll.keptDie}</dd></>
+        )}
         {!!roll.assistanceBonus && (
           <>
             <dt>Ability assistance</dt>
@@ -1950,6 +2111,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   const [mobilePanel, setMobilePanel] = useState<'action' | 'abilities' | 'equipment' | null>(null);
   const actionComposerOpen = mobilePanel === 'action';
   const [abilityName, setAbilityName] = useState<string | null>(null);
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
+  const [selectedAlly, setSelectedAlly] = useState('');
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -1984,6 +2147,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
   useEffect(() => {
     setAction('');
     setAbilityName(null);
+    setSelectedTargets(s?.combatPreviews?.find((preview) => preview.memberId === s.myMemberId)?.targetIds ?? []);
+    setSelectedAlly('');
   }, [s?.turn?.id]);
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -2080,6 +2245,44 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
     !busy &&
     !!myCharacter &&
     isInCombat(localScene, myCharacter.state);
+  const quickCombat = turn?.combatRules === 2 && !!myCharacter && isInCombat(localScene, myCharacter.state);
+  const dutchCombat = s.config.language === 'Nederlands';
+  const selectedAbility = myCharacter && abilityName
+    ? availableAbilities(myCharacter.character, myCharacter.state).find((ability) => ability.name === abilityName)
+    : undefined;
+  const scopedAllyPicker = selectedAbility && selectedAbility.effect !== 'strike' &&
+    selectedAbility.effect !== 'rally' && selectedAbility.effect !== 'assist' && selectedAbility.targeting !== 'party';
+  const enemySelection: CombatSelection | undefined = selectedTargets.length
+    ? { kind: 'attack', targetIds: [selectedTargets[0]] }
+    : undefined;
+  const combatSelection: CombatSelection | undefined = !quickCombat ? undefined : !selectedAbility
+    ? enemySelection
+    : selectedAbility.effect === 'assist'
+      ? undefined
+      : selectedAbility.effect === 'strike'
+        ? selectedAbility.targeting === 'area' || selectedTargets.length
+          ? { kind: 'ability', targetIds: selectedAbility.targeting === 'area' ? [] : selectedTargets }
+          : undefined
+        : { kind: 'ability', targetIds: scopedAllyPicker && selectedAlly ? [selectedAlly] : [] };
+  async function updateTargets(targets: string[]) {
+    if (!turn || !canTarget) return;
+    setSelectedTargets(targets);
+    const updated = await command('action/preview', { turnId: turn.id, targets });
+    if (!updated) setSelectedTargets(selectedTargets);
+  }
+  function selectCombatTarget(_name: string, enemyId: string) {
+    const targets = selectedAbility?.targeting === 'multiple'
+      ? (selectedTargets.includes(enemyId) ? selectedTargets.filter((target) => target !== enemyId) : [...selectedTargets, enemyId].slice(-3))
+      : selectedTargets[0] === enemyId ? [] : [enemyId];
+    void updateTargets(targets);
+  }
+  function submitCombat(selection: CombatSelection) {
+    if (!turn || !canTarget) return;
+    void command('action', {
+      turnId: turn.id, passed: false, text: action, combatSelection: selection,
+      abilityName: selection.kind === 'ability' ? abilityName : null,
+    });
+  }
   function insertTarget(name: string) {
     if (!canTarget) return;
     const cursor = actionInput.current?.selectionStart ?? action.length;
@@ -2261,7 +2464,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   ? 'Sitting out'
                   : m.state.equipmentChosen
                     ? 'Ready to begin'
-                    : 'Needs to choose two starting equipment pieces on their player device'}
+                    : 'Needs to choose one weapon and two non-weapon equipment pieces on their player device'}
               </li>
             ))}
           </ul>
@@ -2325,7 +2528,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           {host && (
             <p>
               {s.members.some((m) => m.active && !m.state.equipmentChosen)
-                ? 'Waiting for the players listed above to choose two equipment pieces. Then Begin the story will unlock.'
+                ? 'Waiting for the players listed above to choose one weapon and two non-weapon equipment pieces. Then Begin the story will unlock.'
                 : 'When your party is ready, select Begin the story below.'}
             </p>
           )}
@@ -2351,11 +2554,11 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
             <Shield size={15} />
             Leader's table
           </span>
+          <span className="session-code">
+            Session code <b>{s.inviteCode}</b>
+          </span>
           {s.status === 'lobby' ? (
             <>
-              <span className="session-code">
-                Session code <b>{s.inviteCode}</b>
-              </span>
               {!s.myMemberId && (
                 <a className="text-link" href={`/join/${s.inviteCode}`}>
                   Take a seat
@@ -2455,6 +2658,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
           <ErrorBox error={narration.error} />
         </section>
       )}
+      {!screen && s.status === 'active' && <NPCChat key={s.npcConversation?.id ?? s.id} s={s} update={next => setS(prev => prev && prev.version > next.version ? prev : next)} />}
       <div className="session-grid">
         <section className="story-column">
           <div className="session-tabs">
@@ -2496,8 +2700,13 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   )
                   .map((j, i) => (
                     <article key={i}>
-                      <span className="eyebrow">{j.kind}</span>
-                      <h3>{j.name}</h3>
+                      <div className="journal-heading">
+                        {j.kind === 'npc' && j.portraitId && <CharacterPortrait character={j} size="large" />}
+                        <div>
+                          <span className="eyebrow">{j.kind}</span>
+                          <h3>{j.name}</h3>
+                        </div>
+                      </div>
                       <p>{j.detail}</p>
                       {j.itemStatus && <p className="small">{j.itemStatus}</p>}
                       {j.npcStatus && <p className="small">{j.npcStatus}</p>}
@@ -2518,12 +2727,48 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                 <WorldStatus
                   snapshot={s}
                   memberId={!screen ? (s.myMemberId ?? undefined) : undefined}
-                  onTarget={canTarget ? insertTarget : undefined}
+                  onTarget={canTarget
+                    ? quickCombat
+                      ? (!selectedAbility || (selectedAbility.effect === 'strike' && selectedAbility.targeting !== 'area')
+                        ? selectCombatTarget : undefined)
+                      : insertTarget
+                    : undefined}
+                  selectedTargets={quickCombat ? selectedTargets : undefined}
                 />
               ) : (
                 <p className="small">
                   Viewing an earlier turn. Equipment and player controls below apply to the current situation.
                 </p>
+              )}
+              {viewingCurrent && !screen && quickCombat && canAct && !mine && (
+                <div className="combat-actions">
+                  {scopedAllyPicker && (
+                    <label>
+                      {dutchCombat ? 'Doelwit' : 'Target'}{' '}
+                      <select value={selectedAlly} onChange={(event) => setSelectedAlly(event.target.value)} disabled={busy}>
+                        <option value="">{dutchCombat ? 'Jezelf' : 'Yourself'}</option>
+                        {s.members.filter((member) => member.id !== s.myMemberId &&
+                          memberScene(s.scene, member.id).location.id === localScene.location.id &&
+                          !member.state.conditions.includes('Escaped') &&
+                          (turn?.roster.includes(member.id) || isDowned(member.state)) &&
+                          (member.state.hp > 0 || (isHealingAbility(selectedAbility) && isDowned(member.state)))
+                        ).map((member) => <option key={member.id} value={member.id}>{member.character.name}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <Button type="button" disabled={!combatSelection || busy}
+                    onClick={() => combatSelection && submitCombat(combatSelection)}>
+                    <Swords size={16} />
+                    {selectedAbility ? selectedAbility.name : dutchCombat ? 'Aanvallen' : 'Attack'}
+                  </Button>
+                  {selectedAbility && (
+                    <Button type="button" secondary disabled={busy} onClick={() => {
+                      setAbilityName(null);
+                      setSelectedAlly('');
+                      if (selectedTargets.length > 1) void updateTargets(selectedTargets.slice(0, 1));
+                    }}>{dutchCombat ? 'Vaardigheid wissen' : 'Clear ability'}</Button>
+                  )}
+                </div>
               )}
               {s.status === 'lobby' && (
                 <div className="lobby-scene">
@@ -2535,7 +2780,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     <h2>The table is set.</h2>
                     <p>
                       {s.members.length
-                        ? 'Your companions are gathering. The leader can begin when everyone has chosen two starting equipment pieces.'
+                        ? 'Your companions are gathering. The leader can begin when everyone has chosen one weapon and two non-weapon equipment pieces.'
                         : 'Invite your companions and choose your characters. Every adventure starts with the people around the table.'}
                     </p>
                     {s.config.premise && <blockquote>{s.config.premise}</blockquote>}
@@ -2594,7 +2839,27 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   </Button>
                 </nav>
               )}
-              {visibleHistory.map((t) => (
+              {visibleHistory.map((t) => {
+                const combatRecap = t.combatRules === 2 && t.resolution?.events.some((event) => event.kind === 'combat');
+                const nextTargets = combatRecap && viewingCurrent
+                  ? (screen ? [s.scene, ...Object.values(s.scene.places ?? {})] : [localScene])
+                    .filter((place, index, places) =>
+                      combatActive(place) && places.findIndex((other) => other.location.id === place.location.id) === index)
+                    .flatMap((place) => place.encounter!.enemies.flatMap((enemy) => {
+                      const target = s.members.find((member) => member.id === enemy.intent?.targetId);
+                      return target && enemy.hp > 0 && !enemy.withdrawn && enemy.intent?.round === place.encounter!.round
+                        ? [{ id: enemy.id, enemy: enemy.name, target: target.character.name }] : [];
+                    }))
+                  : [];
+                const dice = t.rolls.length > 0 && (
+                  <div className="rolls">
+                    {t.rolls.map((r) => (
+                      <RollReceipt key={r.id} roll={r} members={s.members}
+                        action={t.actions.find((a) => a.memberId === r.memberId)} />
+                    ))}
+                  </div>
+                );
+                return (
                 <article className="story-turn" key={t.id}>
                   <div className="turn-divider">
                     <span>
@@ -2611,25 +2876,15 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                             {a.characterName ?? s.members.find((m) => m.id === a.memberId)?.character.name}
                           </b>
                           <span>
-                            {a.passed ? 'Passed this turn.' : a.text}
+                            {a.passed ? 'Passed this turn.' : a.text || (a.combatSelection?.kind === 'attack'
+                              ? (dutchCombat ? 'Aanval' : 'Attack') : '')}
                             {a.abilityName && <small> · {a.abilityName}</small>}
                           </span>
                         </div>
                       ))}
                     </div>
                   )}
-                  {t.rolls.length > 0 && (
-                    <div className="rolls">
-                      {t.rolls.map((r) => (
-                        <RollReceipt
-                          key={r.id}
-                          roll={r}
-                          members={s.members}
-                          action={t.actions.find((a) => a.memberId === r.memberId)}
-                        />
-                      ))}
-                    </div>
-                  )}
+                  {!combatRecap && dice}
                   {!!t.diagnostics?.length && (
                     <details className="gm-diagnostics">
                       <summary>GM recovery details ({t.diagnostics.length})</summary>
@@ -2666,10 +2921,23 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                         <p key={i}>{p}</p>
                       ))}
                   </div>
+                  {!!nextTargets.length && (
+                    <p className="small">
+                      <b>{dutchCombat ? 'Volgende doelwitten' : 'Next targets'}</b>{' '}
+                      {nextTargets.map(({ enemy, target }) => `${enemy} → ${target}`).join(' · ')}
+                    </p>
+                  )}
+                  {combatRecap && dice && (
+                    <details className="turn-mechanics">
+                      <summary>{dutchCombat ? 'Dobbelstenen' : 'Dice rolls'}</summary>
+                      {dice}
+                    </details>
+                  )}
                   <TurnImagePrompt config={s.config} turn={t} />
                   <TurnSummary turn={t} />
                 </article>
-              ))}
+                );
+              })}
               {viewingCurrent && turn && (
                 <div className="current-turn">
                   <div className="current-heading">
@@ -2696,7 +2964,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                         <div>
                           <b>{name}</b>
                           <p>
-                            <span>{a.passed ? 'Passes this turn.' : a.text}</span>
+                            <span>{a.passed ? 'Passes this turn.' : a.text || (a.combatSelection?.kind === 'attack'
+                              ? (dutchCombat ? 'Aanval' : 'Attack') : '')}</span>
                             {a.abilityName && <small> · {a.abilityName}</small>}
                           </p>
                         </div>
@@ -2748,18 +3017,26 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                   {turn.phase === 'failed' && (
                     <div className="failed-turn">
                       <ErrorBox error={turn.error ?? 'The turn could not finish.'} />
-                      <p>Your actions, dice and completed steps are saved.</p>
+                      {turn.number > 0 && <p>Your actions, dice and completed steps are saved.</p>}
                       {host && (
                         <div className="button-row">
                           <Button disabled={busy} onClick={() => command('retry', {})}>
                             <RefreshCw size={16} />
-                            Retry saved turn
+                            {turn.number === 0 ? 'Retry opening' : 'Retry saved turn'}
                           </Button>
                           <a className="text-link" href="/settings">
                             Connection settings
                             <ArrowRight size={14} />
                           </a>
                         </div>
+                      )}
+                      {host && turn.number === 0 && !!turn.diagnostics?.length && (
+                        <details className="gm-diagnostics">
+                          <summary>Opening validation details</summary>
+                          {turn.diagnostics.map((message) => (
+                            <ErrorBox key={message} error={message} />
+                          ))}
+                        </details>
                       )}
                       {!host && (
                         <p>
@@ -2795,8 +3072,20 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                     canAct
                       ? (name) => {
                           setAbilityName(name);
-                          if (name && !action.trim()) setAction(`Use ${name}.`);
-                          if (name && window.matchMedia('(max-width: 650px)').matches) openActionComposer();
+                          if (quickCombat) {
+                            setSelectedAlly('');
+                            const ability = myCharacter && availableAbilities(myCharacter.character, myCharacter.state).find((entry) => entry.name === name);
+                            if (ability?.effect !== 'strike' || ability.targeting === 'area') {
+                              if (selectedTargets.length) void updateTargets([]);
+                            } else if (ability.targeting !== 'multiple' && selectedTargets.length > 1) {
+                              void updateTargets(selectedTargets.slice(0, 1));
+                            }
+                            if (ability?.effect === 'assist') openActionComposer();
+                            else closeMobilePanel();
+                          } else {
+                            if (name && !action.trim()) setAction(`Use ${name}.`);
+                            if (name && window.matchMedia('(max-width: 650px)').matches) openActionComposer();
+                          }
                         }
                       : undefined
                   }
@@ -2819,6 +3108,10 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                       }}
                       onSubmit={(e) => {
                         e.preventDefault();
+                        if (quickCombat && !!selectedAbility && combatSelection) {
+                          submitCombat(combatSelection);
+                          return;
+                        }
                         command('action', {
                           turnId: turn.id,
                           text: action,
@@ -2888,6 +3181,8 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                               onClick={async () => {
                                 const updated = await command('action/cancel', { turnId: turn.id });
                                 if (updated) {
+                                  setSelectedTargets([]);
+                                  setSelectedAlly('');
                                   if (!mine.gathering && (!action.trim() || mine.supportAction))
                                     setAction(mine.text);
                                   setAbilityName(mine.abilityName ?? null);
@@ -2897,14 +3192,6 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
                               Cancel action
                             </Button>
                           )}
-                          <Button
-                            type="button"
-                            secondary
-                            disabled={!canAct || busy}
-                            onClick={() => command('action', { turnId: turn.id, text: '', passed: true })}
-                          >
-                            Pass
-                          </Button>
                           <Button disabled={!canAct || busy || !action.trim()}>
                             <Send size={15} />
                             {mine ? 'Update action' : 'Submit action'}
@@ -2954,6 +3241,7 @@ function Campaign({ id, screen }: { id: string; screen: boolean }) {
             <MemberCard
               key={m.id}
               member={m}
+              talkingTo={s.npcConversation?.memberId === m.id ? s.npcConversation.npcName : undefined}
               factions={s.factions}
               currencyName={s.scene.currencyName}
               dutch={s.config.language === 'Nederlands'}

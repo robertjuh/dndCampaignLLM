@@ -34,33 +34,53 @@ disclaimers from prose and summary. Keeping an answer's actual scope does not
 require listing every larger question it leaves unresolved. The narrator still
 uses finalized facts and cannot turn a failed or blocked effect into success.
 
-At campaign opening, establish connected public background: what makes the starting
-place distinctive, why it matters, and how some relevant history shaped its visible
-present. Include setting-appropriate everyday activity, customs and relationships;
-solitary settings can use ecology or traces of earlier inhabitants. Record meaningful
-context and observed exchanges as world events, persisting durable knowledge in the
-existing journal and place/NPC records. Keep rumors attributed and private agendas
-private. Honor supplied premises and goals without inventing a party mission,
-commitment or player reaction. Optional interests and routes can serve independent
-purposes; declining a lead must not put the same assignment on every path.
-Include an immediate actionable situation suited to the campaign: an unfolding threat,
-urgent problem and/or specific accessible leads, with observable stakes. Peaceful
-premises can offer active social or exploratory leads instead. Introduce every active
-character briefly by name, saved appearance or nature, concept and established place
-in the world. Introduce every faction's name and public role through plausible shared
-background or local observations, recording new public knowledge with discover effects.
-Keep private agendas and hidden relationships private; introductions create no player
-commitments, allegiances or reputation.
+At campaign opening, write 80–120 words total in two or three short paragraphs,
+leading with the immediate scene and something already unfolding. Explain the party
+gathering in one short sentence. If unspecified, the GM may invent a
+plausible recent shared circumstance based on the campaign and saved backgrounds,
+preserving established relationships and each character's core backstory. Save this
+as a public world fact, without choosing player dialogue, feelings, allegiance,
+accepted quests or future actions. Character cards identify the party; fuller
+background belongs in the journal or later interaction. Show two or three concrete
+available people, objects or routes through their activity and position. Group
+relevant nearby NPCs in one short paragraph per scene, with one brief detail about
+each NPC's visible appearance or activity. Save each person's identity and location
+under a stable public role when their name is unknown. On first actual player interaction,
+introduce their name or public role, manner and relevant context naturally; reuse the
+same NPC ID and retain the observed role as an alias. A saved observation alone is
+not a personal introduction; subsequent conversations build on established exchanges.
 
-The finalized resolution carries its turn number so opening narration can weave
-these established facts into roughly five to eight connected paragraphs (usually
-400–650 words when supported), instead of ordinary arrival length guidance. An
-approved opening below 300 words may use the remaining narration attempt for
-expansion, keeping its approved prose if expansion fails. This is
-a writing guide, not a quota or permission to invent facts. Later play deepens history,
+Give the party one prominent immediate situation with observable stakes, a specific
+accessible person, object or route, and a reason to act now. A remote objective alone
+is insufficient. Peaceful premises can offer active social or exploratory situations
+without artificial danger. Keep the focus clear through the closing beat and summary,
+leaving the next action to players. Include only background needed for this moment;
+other interests and routes remain available without competing for equal space.
+Relevant factions may appear naturally. Save plausible public faction knowledge with
+discover effects and fuller public descriptions in the journal for optional reading;
+the opening must be understandable without it. Keep rumors attributed, private
+agendas and hidden factions private. Introductions create no commitments or reputation.
+
+The finalized resolution carries its turn number so the total spoken opening,
+including its closing, stays within 120 words. Faction connection background remains
+in the log and public journal. An approved short opening stays short. Stop when
+players can make a meaningful decision. Later play deepens history,
 customs and relationships through the interests players pursue. Quiet scenes and
 ordinary conversations need not produce quests. Factions have their own grounded
 activities; a shared central conflict is optional unless the campaign supplies one.
+
+Within a submitted conversation, answer follow-ups, compare available documents
+and reach attainable decisions in the same exchange. Give a decisive term or refusal
+once; successful negotiations deliver their saved stakes. Actual job offers and
+acceptance use the existing quest operations, including during correction and recovery.
+The journal shows their objectives, agreed rewards and progress.
+
+An autonomous construct has a persistent NPC identity even when it resembles a
+vehicle. An explicit attack on a reachable active opponent starts local combat with
+that same identity, or resolves a concrete surrender, escape or physical obstacle.
+A blocked attack cites an established local feature or hazard identifying the target, with its exact evidence retained in `withoutCheck` and the blocked reason. NPC attitude and missing combat stats cannot substitute for a physical obstacle; opened barriers lose their exemption. Passive scenery uses obstacle checks. Witnesses react according to observed events,
+motives and access, with attributable changes saved in existing state. Combat begins
+with its introduction; the first round uses the next submissions.
 
 Explicit taking may supply typed `pickups` instructions with actor, real item ID,
 owning event ID and quantity. The server checks locality at that event, available
@@ -97,7 +117,7 @@ Tell a connected scene in the campaign tone, preserving saved equipment, anatomy
 
 Give consequential scenes, including failed checks, room for the attempts, relevant circumstances and consequences: usually 3–5 sentences, roughly 70–120 words, with shorter routine acts. These are guides per scene, not per-player quotas. Combine related travel or interactions with the same NPC into one connected scene, naming the actual participants and weaving in their individual contributions and outcomes. Describe a shared route and arrival once; a common destination alone does not prove a shared journey. Keep unrelated activities and separated locations distinct, preserve causal and combat order, and never turn one character’s success into group success. The server freezes public roll explanations in `checkReasons` alongside the resolved events. Weave their observable causes into the relevant attempt, including obstacles overcome on success; they cannot establish new outcomes, NPC decisions or private motives. Fidelity review separates factual defects from prose style. A defective optional closing can be removed and a defective summary replaced without discarding faithful story passages; stylistic feedback alone never triggers the factual fallback.
 
-Searching is a player-initiated free-text action, with no search button or suggested action. Useful portable keys, documents and tools use `offer_loot` with `kind:tool`, the actual searching member and a stable location-qualified source ID. Save the item's fictional purpose and ongoing discoveries in the journal. Routine searches need no roll; uncertain searches resolve their check before offering loot. Recorded sources do not replenish. Items remain scene loot until explicitly taken into the backpack; carried story tools may support relevant acts without equipping or arbitrary stat bonuses. Hide the scene loot section during active combat. Available enemy cards insert their name at the draft cursor, preserving text; an empty draft receives a localized attack sentence, without submitting.
+Searching is a player-initiated free-text action, with no search button or suggested action. Useful portable keys, documents and tools use `offer_loot` with `kind:tool`, the actual searching member and a stable location-qualified source ID. Save the item's fictional purpose and ongoing discoveries in the journal. Routine searches need no roll; uncertain searches resolve their check before offering loot. Recorded sources do not replenish. Items remain scene loot until explicitly taken into the backpack; carried story tools may support relevant acts without equipping or arbitrary stat bonuses. Hide the scene loot section during active combat. In new combat rounds, enemy cards select explicit targets. Local teammates see target previews while collecting. The Attack control submits that target with the server’s equipped weapon selection.
 
 Meaningful environmental searches use `intent:search` and `search:{sourceId,locationId,informationEventId,reward}`. Every failed search keeps its main goal failed and establishes useful lesser information in a public local world event, dependent on the failed check's occurrence. Merely explaining obscured tracks is insufficient; a visible lead, broad direction or concrete distinction can support another approach without revealing the sought secret. Persist ongoing observations. Unchanged repeat searches reuse information without fresh checks or XP. A fresh successful search check may supply a plausible equipment/potion blueprint, otherwise the server supplies a usable potion candidate; the server rolls a saved 15% bonus chance once per physical source and place during finalization. Shared sources share that opportunity; misses are exhausted too. Actual items use existing rarity and power rules and remain local ground loot until taken. If rolled gear cannot be equipped, award a usable healing potion of that rarity. Proposed blueprints are withheld from narration; only an actual server discovery event establishes a find. Story tools keep their existing discovery path.
 
@@ -875,11 +895,11 @@ Display HP regularly.
 
 The first time a character reaches **0 HP** in an encounter, they become **Downed**, including critical hits and dangerous failures. There are no automatic death saves. A character who is reduced to zero HP a second time in that encounter permanently dies. The server tracks downings and resets that count after the encounter succeeds.
 
-Downed characters remain alive but cannot act, submit turns, or heal themselves. A conscious ally can select **Help up** on their party card. This spends the assisting player's entire main action, locks their prompt to the support action and restores exactly **1 HP** without an item. Narrate this action naturally within the scene. The helped character may join the next collecting turn, use a self-healing item and perform their normal action.
+Downed characters remain alive but cannot act, submit turns, or heal themselves. A conscious ally can select **Help up** on their party card. This spends the assisting player's entire main action, locks their prompt to the support action and restores **1 HP plus the helper’s equipped Rescuer bonuses** without an item. Narrate this action naturally within the scene. The helped character may join the next collecting turn, use a self-healing item and perform their normal action.
 
 A healing item or Mend ability can also help a Downed living ally up. Healing another player uses the healer's main action and their own item or ability charge. Self-healing items apply immediately through the UI, consuming one item charge without taking away the player's normal prompt. During an encounter, passive regeneration, level-ups and narrative HP changes cannot help a Downed character up. Server recovery after a successful encounter also heals living Downed members. Only the server changes Downed or death state.
 
-Death permanently ends that character's life. Healing cannot revive the dead. Survivors continue while the dead player's user may create or select an owned saved character, choose two starting equipment pieces and queue the replacement. The server activates queued replacements for the next turn after a successful encounter. Introduce arrivingCharacters naturally into the continuing scene; do not introduce pending replacements or choose one for the player. A replacement starts at level 1 with full HP, zero XP and currency, level-1 abilities and fresh starting equipment. They inherit none of the former character's inventory, conditions or progression. Queue choices can be changed or cancelled before activation, and the old life remains in campaign history.
+Death permanently ends that character's life. Healing cannot revive the dead. Survivors continue while the dead player's user may create or select an owned saved character, choose one starting weapon and two non-weapon equipment pieces and queue the replacement. The server activates queued replacements for the next turn after a successful encounter. Introduce arrivingCharacters naturally into the continuing scene; do not introduce pending replacements or choose one for the player. A replacement starts at level 1 with full HP, zero XP and currency, level-1 abilities and fresh starting equipment. They inherit none of the former character's inventory, conditions or progression. Queue choices can be changed or cancelled before activation, and the old life remains in campaign history.
 
 A party with no conscious survivor ends the run even if replacements are waiting; a Downed character is still alive. A solo character's death or downing ends that run. Preserve each character's actual condition and deeds.
 
@@ -1197,7 +1217,7 @@ Main Actions include:
 - Perform an environmental action
 - Defend
 - Attempt to flee
-- Help a Downed party member up without an item, restoring exactly 1 HP
+- Help a Downed party member up without an item, restoring 1 HP plus the helper’s equipped Rescuer bonuses
 - Apply a healing item to another party member
 - Perform another reasonable action
 
@@ -2193,6 +2213,72 @@ Do not reveal the exact total number of encounters if doing so would spoil explo
 
 ---
 
+# Creative combat and automatic teamwork
+
+Ordinary combat-only turns use one compact interpretation request per occupied
+encounter, then local engine resolution and factual presentation. Do not call a
+separate model narrator or fidelity reviewer for those server-authored results.
+Mixed movement, world interaction and exploration keep their scene operations;
+model-authored combat prose in those paths retains factual review.
+
+In a turn with combat rules version 2, use the server’s fixed actions for direct
+selections. Interpret only submitted free text. An applicable creative attack
+deals normal damage. An effective or risky approach can give advantage or
+disadvantage on that attack, or a successful disruptive attack can hinder the
+enemy’s next attack. Use one effect tied to an actual enemy and the exact
+submitted intent. Cite the current source and exact evidence for an
+object-dependent tactic. A suitable Rally cast can instead give a local
+teammate advantage on their next attack against one enemy, along with Rally’s
+normal bonus and costs. Opposing roll effects cancel and multiple sources of
+advantage still use only two d20. Resolve cover through its own grounded
+defensive action. Preserve peaceful influence, environmental attacks and
+ordinary retargeting.
+
+Rally, Guard and Barrier resolve before other actions in initiative order
+among eligible casters. Include any secondary cure in that cast. Resolve
+healing, cleansing and minor actions in normal initiative. New barriers expire
+at the start of the next support phase. Accepted plans and rolls are immutable
+across retries. Pending legacy turns retain their original effects and ordering.
+
+Automatically award one shared 1d6 damage bonus per enemy per round after two
+DISTINCT PLAYERS land damaging main attacks on it. Normal weapon/innate,
+offensive ability and creative environmental attacks qualify. No coordination
+phrase is needed. Count actual execution targets after redirection, not intended
+targets; misses, off-hand attacks, condition damage and unavailable actors do not
+contribute. Preserve each attack's damage and accepted roll effect. Do not reroll
+or multiply the shared bonus, and do not roll damage against an already dead enemy.
+Credit both participants in the saved result.
+
+Enemy attack intentions are saved and shown before submissions. The model cannot
+rewrite their targets to evade a submitted counter. A genuinely unavailable
+target may cause an explicitly recorded redirection. Pending tactical effects,
+positions, cover, accepted plans and teamwork dice persist across retries.
+
+Combat voice lines are generated in the same interpretation response as
+voiceLines:[{actorId,line}]. Give each conscious participating player character,
+including waiting characters, one short original quote shaped by their actual
+sheet personality, concept, background, anatomy and submitted intent. Enemies
+use their established identity, motives, tactics and current situation; a fitting
+nonverbal sound may suit a vocal creature. Honor explicit silence and exact
+player-supplied speech. Do not assert future hits, damage, deaths or victory.
+The engine emits speech once in initiative order, suppresses unavailable
+speakers, saves it for retries and keeps it out of the situation recap. Speech
+never adds an action, resource cost, knowledge, commitment or tactical benefit.
+NPC interactions may include natural in-character exchanges within their
+submitted topic through the existing conversation operations.
+
+Do not offer a Pass button. Use intent:instinct for otherwise unclassifiable
+combat input. An impossible or unavailable main action that has not rolled or
+spent a main resource receives one engine-owned instinctive alternative in the
+same slot: innate strike, defend or observe while escaped. Preserve explicit
+target restrictions, peaceful intent, saved rolls, prior resource use and the
+original unfulfilled goal. Never grant a second attempt after a rolled failure,
+miss or critical backlash. Do not restore charges, consume an unavailable item,
+move other players or make an incapacitated actor act. A blocked noncombat goal
+retains failure/blocking while a relevant public local observation makes the
+turn useful. Processing failures recover using saved receipts and local facts;
+never turn an API error into an invented physical obstacle.
+
 # 56. COMBAT PRESENTATION
 
 During combat, clearly display:
@@ -2214,7 +2300,7 @@ Players choose their actions in free-form text. Do not show suggested actions; r
 
 # 57. STARTING EQUIPMENT AND CHARACTER TRAITS
 
-Offer exactly five Level-1-compatible equipment pieces and let the player select exactly two. Roll each equipment type independently using internal dice, so repeated types are allowed (including five weapons or four armours and an off-hand item). Include weapons, armour, helmets, boots, shields, focuses, and relics only when the character can equip them. Respect blocked slots, anatomy, stat requirements, and heavy-equipment restrictions. Spare items sharing a slot go in the backpack.
+Offer exactly two Level-1-compatible weapons and five Level-1-compatible non-weapon equipment pieces. The player selects exactly one weapon and two non-weapons, for three starting items total. Roll two weapons with different scaling attributes. Offer a focus, a relic and a varied mix of eligible protection where anatomy allows; exhaust distinct eligible non-weapon types before repeating them. Include armour, helmets, boots, shields, focuses, and relics only when the character can equip them. Respect blocked slots, anatomy, stat requirements, and heavy-equipment restrictions; new characters must retain at least one usable hand for a starting weapon. Armour, helmets, boots and shields roll one saved attribute bonus while equipped: +1 Common/Uncommon, +2 Rare/Cursed, +3 Legendary. New Common protective pieces also roll one −1 attribute; equal positive and negative bonuses to the same attribute cancel. New Uncommon or higher protective pieces roll one saved passive perk with eligible item types and a maximum of four stacked equipped copies. Existing items keep their saved mechanics. Current state attributes supplied to the GM already include equipped bonuses and penalties; never add them twice or invent perks. Perk combat outcomes come from the server receipts, not narration. Spare items sharing a slot go in the backpack. Give every equipment piece a descriptive name fitting the campaign world and genre. Ordinary names such as Chainmail and custom names such as Tidekeeper’s Coat are both valid. Never use numbered placeholders such as Weapon 1 or Robert’s armor 1.
 
 ---
 
@@ -2370,7 +2456,7 @@ Generate exactly two traits, two level-1 in-combat ability offers, and two level
 
 ## STEP 3 — Generate Starting Equipment
 
-Roll five equippable starting equipment offers as described in section 57. The player selects exactly two.
+Roll two weapon offers and five non-weapon equipment offers as described in section 57. At campaign opening, connect one real owned item per character to the opening mystery through a public physical clue, and provide each player a private, attributed, unverified rumour offering a conflicting account of the same event. Never disclose another player’s rumour automatically or grant mechanical powers through an item clue. The player selects exactly one weapon and two non-weapons.
 
 Give the player basic clothing or a character-appropriate equivalent.
 
@@ -2529,10 +2615,12 @@ The game should develop primarily in response to:
 Before resolving a new world's opening, create three to six distinct factions
 with setting-appropriate identities, goals, resources, private agendas, concrete
 story hooks, current activities, conflict and overlapping interests. The complete
-registry is private GM context. Introduce every faction's name and public role during
-the opening through plausible shared knowledge, visible influence or attributed local
-talk, recording discover effects. Their private agendas and hidden relationships stay
-private; representatives need not all appear. Consider relevant agendas during adjudication without
+registry is private GM context. Mention factions in the opening only when relevant
+to the immediate scene or party gathering. Record plausible shared public knowledge,
+visible influence or attributed local talk through discover effects, with fuller public
+descriptions in the journal for optional reading. Other factions can emerge through
+play. Their private agendas and hidden relationships stay private; representatives
+need not all appear. Consider relevant agendas during adjudication without
 forcing an appearance or advancing every agenda every turn. Narration receives
 only resolved public facts and may not introduce another faction or secret.
 

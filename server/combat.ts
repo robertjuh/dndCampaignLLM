@@ -1,9 +1,9 @@
 import type { z } from 'zod';
-import { combatSchema, lootSchema, type CombatInput, type Member } from '../shared/schema';
-import { isDowned, isHealingAbility, naturalWeapon } from '../shared/rules';
+import { combatSchema, combatManeuverSchema, combatRollEffectSchema, lootSchema, type CombatInput, type Member } from '../shared/schema';
+import { availableAbilities, isDowned, isHealingAbility, naturalWeapon } from '../shared/rules';
 import type { GMContext } from './game';
 import { requestedAbility, requestedConsumable } from './action-resources';
-import { validateEnvironmentalAction } from './environment';
+import { environmentalFacts, validateEnvironmentalAction } from './environment';
 import { validateNPCReactions } from './npc-reactions';
 import { findNPC, npcNames } from '../shared/npcs';
 
@@ -47,7 +47,8 @@ function submittedIntent(text: string, proposed: unknown): CombatAction['main'] 
   )
     choices.push('attack');
   if (
-    /(?:^|[;:,.!?]|\b(?:and|then|en|dan)\b)\s*(?:(?:i|ik)\s+(?:(?:will|want to|try to|attempt to|wil|probeer te)\s+)?)?(?:defend|guard|protect|take cover|verdedig\w*|bescherm\w*|bewaak)\b/.test(intent)
+    /(?:^|[;:,.!?]|\b(?:and|then|en|dan)\b)\s*(?:(?:i|ik)\s+(?:(?:will|want to|try to|attempt to|wil|probeer te)\s+)?)?(?:defend|guard|protect|take cover|verdedig\w*|bescherm\w*|bewaak)\b/.test(intent,
+    )
   )
     choices.push('defend');
   if (diplomatic(intent)) choices.push('creative');
@@ -91,6 +92,75 @@ function chooseWeapon(member: Member, text: string, action: CombatAction) {
   return naturalWeapon(member.character);
 }
 
+/** The model selects a bounded effect; exact submission and public evidence ground it. */
+export function validateCombatManeuver(context: GMContext, action: CombatAction) {
+  if (!action.maneuver) return;
+  const maneuver = combatManeuverSchema.parse(action.maneuver);
+  const submitted = context.turn.actions.find((entry) => entry.memberId === action.memberId);
+  const member = context.members.find((entry) => entry.id === action.memberId);
+  if (!submitted || !member || !submitted.text.toLowerCase().includes(maneuver.intent.toLowerCase()))
+    throw new Error('A combat maneuver must quote the player\'s actual tactical intent.');
+  const strike = availableAbilities(member.character, member.state).some(
+    (ability) => ability.name === action.abilityName && ability.effect === 'strike',
+  );
+  const offensive = action.main === 'attack' || (action.main === 'ability' && strike) ||
+    (action.main === 'creative' && action.effect === 'damage');
+  if (!offensive && !(maneuver.effect === 'cover' && ['interact', 'defend'].includes(action.main)))
+    throw new Error('This maneuver needs a damaging attack, or a separate cover action.');
+  if (maneuver.beneficiaryId && (
+    !['opening', 'cover'].includes(maneuver.effect) ||
+    !context.members.some((ally) => ally.id === maneuver.beneficiaryId && ally.state.hp > 0 &&
+      !ally.state.conditions.includes('Escaped')) ||
+    (maneuver.effect === 'opening' && maneuver.beneficiaryId === member.id)
+  )) throw new Error('Choose an available ally for the maneuver benefit.');
+  const facts = environmentalFacts({ ...context, member });
+  if ((maneuver.sourceId || maneuver.evidence) &&
+    (!maneuver.sourceId || !maneuver.evidence || !facts[maneuver.sourceId]?.includes(maneuver.evidence)))
+    throw new Error('A maneuver source must quote an established local fact or owned item.');
+  if (['cover', 'push'].includes(maneuver.effect) && (!maneuver.sourceId || !maneuver.evidence))
+    throw new Error('Cover and displacement require an established local source.');
+  if (['cover', 'push'].includes(maneuver.effect) && !maneuver.sourceId?.startsWith('scene:') &&
+    !maneuver.sourceId?.startsWith('feature:') && !maneuver.sourceId?.startsWith('journal:'))
+    throw new Error('Cover and displacement require established local surroundings.');
+  if (maneuver.sourceId?.startsWith('item:') && member.state.inventory.some(
+    (item) => `item:${item.id}` === maneuver.sourceId && item.kind === 'consumable',
+  )) throw new Error('A maneuver cannot consume an item without a supported resource-use action.');
+  if (maneuver.effect === 'push' && (!maneuver.destination || !maneuver.evidence?.includes(maneuver.destination)))
+    throw new Error('A push destination must be quoted from the established surroundings.');
+  if (maneuver.effect !== 'push' && maneuver.destination)
+    throw new Error('Only a push can change an enemy\'s position.');
+}
+
+/** Invalid optional bonuses leave the underlying action usable. */
+export function combatRollEffect(context: GMContext, action: CombatAction, input: unknown) {
+  if (context.turn.combatRules !== 2 || action.intent === 'instinct' || action.blockedReason) return;
+  const parsed = combatRollEffectSchema.safeParse(input);
+  if (!parsed.success) return;
+  const effect = parsed.data;
+  const member = context.members.find((member) => member.id === action.memberId);
+  const submitted = context.turn.actions.find((action) => action.memberId === member?.id);
+  if (!member || !submitted?.text.toLowerCase().includes(effect.intent.toLowerCase())) return;
+  if (!context.scene.encounter?.enemies.some((enemy) => enemy.id === effect.targetId && enemy.hp > 0 && !enemy.withdrawn)) return;
+  if (effect.sourceId || effect.evidence) {
+    if (!effect.sourceId || !effect.evidence ||
+      !environmentalFacts({ ...context, member })[effect.sourceId]?.includes(effect.evidence)) return;
+  }
+  const ability = availableAbilities(member.character, member.state).find((ability) => ability.name === action.abilityName);
+  if (effect.effect === 'ally-advantage') {
+    if (action.main !== 'ability' || ability?.effect !== 'rally' ||
+      !effect.beneficiaryId || !context.turn.roster.includes(effect.beneficiaryId) ||
+      !context.members.some((ally) => ally.id === effect.beneficiaryId && ally.id !== member.id &&
+        ally.state.hp > 0 && !ally.state.conditions.includes('Escaped'))) return;
+  } else {
+    if (effect.beneficiaryId || !(action.main === 'attack' ||
+      (action.main === 'ability' && ability?.effect === 'strike') ||
+      (action.main === 'creative' && action.effect === 'damage'))) return;
+    if (ability?.targeting !== 'area' &&
+      effect.targetId !== action.targetId && !action.targetIds?.includes(effect.targetId)) return;
+  }
+  return effect;
+}
+
 /** Turn model suggestions into one executable action per actual submission. */
 export function normalizeCombatInput(context: GMContext, input?: unknown): CombatInput {
   const proposal = object(input);
@@ -125,17 +195,30 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       !member.state.conditions.includes('Escaped'),
   );
   const healingTargets = context.members.filter((member) => member.state.hp > 0 || isDowned(member.state));
+  const npcTargets = Object.values(context.scene.npcs ?? {});
   const actions = context.turn.actions
     .filter((action) => !action.passed)
     .map((submitted): CombatAction => {
       const member = context.members.find((member) => member.id === submitted.memberId)!;
       const suggestion = suggested.find((action) => action.memberId === submitted.memberId) ?? {};
+      const selection = context.turn.combatRules === 2 ? submitted.combatSelection : undefined;
+      const quick = selection && !submitted.text.trim();
+      const selectedAbility = selection?.kind === 'ability'
+        ? availableAbilities(member.character, member.state).find((ability) => ability.name === submitted.abilityName)
+        : undefined;
       const chosen: Record<string, unknown> = {
-        ...suggestion,
-        targetId: targetId(suggestion.targetId),
-        targetIds: Array.isArray(suggestion.targetIds) ? suggestion.targetIds.map(targetId) : undefined,
-        backupTargetId: targetId(suggestion.backupTargetId),
+        ...(quick ? {} : suggestion),
+        targetId: selection ? selection.targetIds[0] : targetId(suggestion.targetId),
+        targetIds: selection ? selection.targetIds : Array.isArray(suggestion.targetIds) ? suggestion.targetIds.map(targetId) : undefined,
+        backupTargetId: quick ? undefined : targetId(suggestion.backupTargetId),
       };
+      if (selection) {
+        chosen.main = selection.kind;
+        chosen.abilityName = selectedAbility?.name;
+        chosen.intent = 'action';
+        chosen.environment = null;
+        chosen.blockedReason = null;
+      }
       const text = submitted.text.toLowerCase();
       if (submitted.supportAction) {
         const support = submitted.supportAction;
@@ -173,15 +256,15 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
           minorTargetId: null,
           minorSlot: null,
         };
-      const intent = submittedIntent(text, chosen.main) ?? (returningToCombat(text) ? 'move' : undefined);
-      const combatAbility = requestedAbility(
+      const intent = selection?.kind ?? submittedIntent(text, chosen.main) ?? (returningToCombat(text) ? 'move' : undefined);
+      const combatAbility = selection ? selectedAbility : requestedAbility(
         member.character,
         submitted,
         'combat',
         typeof chosen.abilityName === 'string' ? chosen.abilityName : null,
         member.state,
       );
-      const utilityAbility = requestedAbility(
+      const utilityAbility = selection ? undefined : requestedAbility(
         member.character,
         submitted,
         'utility',
@@ -190,7 +273,22 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       );
       const utility = utilityAbility?.effect === 'assist' ? utilityAbility : undefined;
       const ability = combatAbility ?? utilityAbility;
+      const instinct = !ability && !submitted.supportAction && enemies.length > 0 &&
+        (chosen.intent === 'instinct' || (!intent && !fields.main.safeParse(chosen.main).success));
+      const healingItem = requestedConsumable(
+        member,
+        submitted,
+        typeof chosen.mainItemId === 'string'
+          ? chosen.mainItemId
+          : typeof chosen.minorItemId === 'string'
+            ? chosen.minorItemId
+            : null,
+      );
       const utilityCheck = !!utility && ability === utility;
+      const treatmentText = text.split(/\b(?:and|then|while|en|dan|terwijl)\b/).filter((clause) =>
+        /\b(?:heal\w*|treat\w*|mend|revive\w*|genees\w*|(?:use|apply|gebruik\w*)\b.*\bon)\b/.test(clause) &&
+        !/\b(?:myself|self|me|mijzelf|mezelf|drink\w*)\b/.test(clause),
+      ).join(' ');
       let environment: CombatAction['environment'];
       let blockedReason = parse(fields.blockedReason, chosen.blockedReason, null);
       const environmental =
@@ -232,6 +330,8 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
               : 'creative'
             : (intent ?? parse(fields.main, chosen.main, 'interact'));
       if (!ability && main === 'ability') main = intent ?? 'interact';
+      if (main === 'defend' && chosen.main === 'interact' && object(chosen.maneuver).effect === 'cover')
+        main = 'interact';
       if (main === 'heal' || main === 'help-up') main = 'interact';
       let effect =
         environmental && main === 'creative'
@@ -244,14 +344,17 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       const compatible = chosen.main === main || environmental || utilityCheck;
       if (neutral) effect = undefined;
       const support = ability && !utilityCheck && ability.effect !== 'strike';
-      const allyTargets = (
+      const allyTargets = [
+        ...(
         ability && isHealingAbility(ability)
           ? healingTargets
           : context.members.filter((ally) => ally.state.hp > 0 && context.turn.roster.includes(ally.id))
       ).map((ally) => ({
         id: ally.id,
         name: ally.character.name,
-      }));
+      })),
+        ...(healingItem || (ability && isHealingAbility(ability)) ? npcTargets : []),
+      ];
       // ponytail: common English/Dutch restrictions; the model handles more complex targeting prose.
       const allowRetarget =
         !/\b(?:only|solely|exclusively|alleen|uitsluitend)\b/.test(text) &&
@@ -289,7 +392,9 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       const availableNamed = namedTargets.filter(
         (target) => target.name === namedTargets[0]?.name && enemies.some((enemy) => enemy.id === target.id),
       );
-      const target =
+      const target = selection
+        ? targets.find((target) => target.id === (selection.targetIds[0] ?? (support ? member.id : undefined)))
+        :
         availableNamed.find((target) => target.id === chosen.targetId) ??
         availableNamed[0] ??
         namedTargets[0] ??
@@ -320,15 +425,6 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         (enemy) => !backups.some((backup) => backup.id === enemy.id),
       );
       let minor = parse(fields.minor, chosen.minor, 'none');
-      const healingItem = requestedConsumable(
-        member,
-        submitted,
-        typeof chosen.minorItemId === 'string'
-          ? chosen.minorItemId
-          : typeof chosen.mainItemId === 'string'
-            ? chosen.mainItemId
-            : null,
-      );
       if (healingItem?.healing) minor = 'heal';
       if (
         minor === 'offhand' &&
@@ -358,7 +454,7 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
           ? {
               targetIds: [
                 ...new Set(
-                  namedPrimaryTargets.length
+                  selection ? selection.targetIds : namedPrimaryTargets.length
                     ? namedPrimaryTargets.map((enemy) => enemy.id)
                     : (parse(fields.targetIds, chosen.targetIds, []) ?? []),
                 ),
@@ -414,8 +510,11 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
       }
       if (minor === 'heal') action.minorItemId = healingItem?.id ?? null;
       const namedAlly = context.members.find(
-        (ally) => ally.id !== member.id && mentions(text, ally.character.name),
-      );
+        (ally) => ally.id !== member.id && mentions(text, ally.character.name)) ??
+        ((healingItem && treatmentText) || (ability && isHealingAbility(ability))
+          ? (npcTargets.find((npc) => npcNames(npc).some((name) => mentions(treatmentText, name))) ??
+            npcTargets.find((npc) => npc.id === chosen.targetId))
+          : undefined);
       const helpsUp = /\b(?:help\s+.+\s+(?:up|overeind)|help\s+.+\s+op)\b/.test(text);
       if (!action.cureCondition && (!ability || healingItem) && (helpsUp || (healingItem && namedAlly))) {
         action.main = healingItem ? 'heal' : 'help-up';
@@ -451,6 +550,33 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         action.effect = undefined;
       }
       if (action.main === 'attack') action.stat = chooseWeapon(member, text, action).scaling[0] ?? 'STR';
+      if (quick) {
+        action.description = selectedAbility?.name ?? (context.config.language === 'Nederlands' ? 'Aanval' : 'Attack');
+      }
+      if (instinct && !healingItem && !['help-up', 'heal'].includes(action.main)) {
+        action.intent = 'instinct';
+        action.main = member.state.conditions.includes('Escaped') ? 'interact' : intent && intent !== 'attack' ? 'defend' : 'attack';
+        action.targetId = null;
+        action.allowRetarget = true;
+        action.abilityName = null;
+        action.weaponSlot = action.main === 'attack' ? 'natural' : null;
+        action.stat = naturalWeapon(member.character).scaling[0] ?? 'STR';
+        action.dc = undefined;
+        action.effect = undefined;
+        action.cureCondition = null;
+        action.mainItemId = null;
+        action.description = action.main === 'interact'
+          ? (context.scene.location.atmosphere || context.scene.location.hazard || context.scene.location.name).slice(0, 500)
+          : (context.config.language === 'Nederlands' ? 'Een instinctieve reactie.' : 'An instinctive response.');
+        delete action.environment;
+        delete action.blockedReason;
+      }
+      if (!instinct && chosen.maneuver != null && !action.cureCondition && !support && !utilityCheck &&
+        (context.turn.combatRules !== 2 ||
+          (object(chosen.maneuver).effect === 'cover' && ['interact', 'defend'].includes(action.main)))) {
+        action.maneuver = combatManeuverSchema.parse(chosen.maneuver);
+        validateCombatManeuver(context, action);
+      }
       // Target availability and strike eligibility come from the engine, including retargeting.
       if (action.main === 'attack' || ability?.effect === 'strike') delete action.blockedReason;
       if (
@@ -468,6 +594,8 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
             ? 'Het gevraagde doelwit is hier niet bereikbaar; de aanval wordt niet op een ander gericht.'
             : 'The requested target cannot be reached here; the attack is not redirected to someone else.');
       }
+      const rollEffect = combatRollEffect(context, action, chosen.rollEffect);
+      if (rollEffect) action.rollEffect = rollEffect;
       return action;
     });
   const targets = Array.isArray(proposal.enemyTargets) ? proposal.enemyTargets.map(object) : [];
@@ -481,7 +609,23 @@ export function normalizeCombatInput(context: GMContext, input?: unknown): Comba
         targets.findIndex((other) => other.enemyId === target.enemyId) === index,
     )
     .map(({ enemyId, memberId }) => ({ enemyId, memberId }));
+  const voiceLines = (parse(combatSchema.shape.voiceLines, proposal.voiceLines, []) ?? []).filter(
+    (voice, index, all) =>
+      (context.members.some((member) => member.id === voice.actorId && context.turn.roster.includes(member.id) &&
+        context.turn.actions.some((action) => action.memberId === member.id)) ||
+        encounterEnemies.some((enemy) => enemy.id === voice.actorId)) &&
+      all.findIndex((other) => other.actorId === voice.actorId) === index,
+  ).flatMap((voice) => {
+    const submitted = context.turn.actions.find((action) => action.memberId === voice.actorId);
+    if (!submitted) return [voice];
+    // ponytail: protect explicit English/Dutch silence and quoted speech; the model handles other idioms.
+    if (/\b(?:stay|remain|keep|in)\s+(?:completely\s+)?silen(?:t|ce)\b|\b(?:without speaking|do not speak|don't speak|say nothing|zwijg\w*|zonder te spreken|zeg niets|blijf stil)\b/i.test(submitted.text))
+      return [];
+    const spoken = submitted.text.match(/\b(?:say|shout|yell|whisper|scream|call|zeg|roep|schreeuw|fluister)\b[^"“\r\n]{0,60}["“]([^"”\r\n]{1,240})["”]/i)?.[1];
+    return [{ ...voice, line: spoken ?? voice.line }];
+  });
   return combatSchema.parse({
+    ...(voiceLines.length ? { voiceLines } : {}),
     ...(npcReactions.length ? { npcReactions } : {}),
     actions,
     enemyTargets,

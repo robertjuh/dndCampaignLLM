@@ -185,7 +185,7 @@ async function table({
     const member = game.members(campaign.id).find((member) => member.playerId === player.id)!;
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     const ready = game.members(campaign.id).find((member) => member.playerId === player.id)!;
     ready.state.equipment = { left: null, right: null, body: null, head: null, boots: null, relic: null };
@@ -238,7 +238,7 @@ it.each([1, 15, 16, 100])(
   },
 );
 
-it('keeps a failed search failed while recording useful information and no bonus roll', async () => {
+it('keeps a failed search failed while recording useful information and one incidental chance', async () => {
   const f = await table({ checkDie: 2 });
   await f.submit();
   const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
@@ -250,10 +250,78 @@ it('keeps a failed search failed while recording useful information and no bonus
   expect(done.result!.narration).toContain('mud channel');
   expect(snapshot.scene.searches!['field-pack']).toMatchObject({
     rewardRolled: false,
+    setbackRewardRolled: true,
     information: expect.stringContaining('alcove'),
   });
   expect(snapshot.scene.loot).toHaveLength(0);
-  expect(f.draw).toHaveBeenCalledTimes(1);
+  expect(f.draw).toHaveBeenCalledTimes(2);
+});
+
+it.each([1, 5, 6, 100])('rolls a one-time 5%% incidental common item after a failed search (d100=%i)', async (chance) => {
+  const f = await table({ chance, checkDie: 2 });
+  await f.submit();
+  const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+  const done = snapshot.history.at(-1)!;
+  const resolution = done.resolution!;
+  if (resolution.version !== 2) throw new Error('Expected component outcomes.');
+  expect(resolution.actions[0].components.main?.status).toBe('failure');
+  expect(done.result!.narration).toContain('mud channel');
+  expect(snapshot.scene.loot).toHaveLength(chance <= 5 ? 1 : 0);
+  if (chance <= 5) {
+    expect(snapshot.scene.loot[0]).toMatchObject({ rarity: 'Common', kind: 'consumable' });
+    expect(snapshot.scene.searchedLoot?.['field-pack']).toBeUndefined();
+    expect(snapshot.scene.searchedLoot?.['incidental:field-pack']).toBe(snapshot.scene.loot[0].name);
+    expect(snapshot.scene.loot[0].name).not.toBe(potion.name);
+    const discovery = done.resolution!.events.find((event) => event.fact.includes(snapshot.scene.loot[0].name));
+    expect(discovery?.dependsOn).toEqual([{ eventId: `check:${done.rolls.find((roll) => !roll.notation)!.id}`, requires: 'occurrence' }]);
+  }
+  const draws = f.draw.mock.calls.length;
+  await f.submit();
+  expect(f.draw).toHaveBeenCalledTimes(draws);
+  expect(f.game.snapshot(f.campaign.id, f.host.id).scene.loot).toEqual(snapshot.scene.loot);
+});
+
+it('keeps the original source available after an incidental find when a new approach later succeeds', async () => {
+  const f = await table({ chance: 1, checkDie: 2 });
+  await f.submit();
+  const first = f.game.snapshot(f.campaign.id, f.host.id);
+  expect(first.scene.loot).toHaveLength(1);
+  const scene = structuredClone(first.scene);
+  // A changed approach can have a fresh check; the incidental cache must not exhaust its main target.
+  scene.searches = {};
+  f.db.prepare('UPDATE campaigns SET scene=? WHERE id=?').run(JSON.stringify(scene), f.campaign.id);
+  f.draw.mockImplementation((sides: number) => sides === 20 ? 12 : 1);
+  await f.submit();
+  const next = f.game.snapshot(f.campaign.id, f.host.id);
+  expect(next.scene.loot).toHaveLength(2);
+  expect(next.scene.searchedLoot?.['field-pack']).toBe(potion.name);
+  expect(next.scene.loot.some((item) => item.id === first.scene.loot[0].id)).toBe(true);
+});
+
+it('preserves the incidental item and its failed check through interruption and restart without rerolling', async () => {
+  const f = await table({ chance: 1, checkDie: 2 });
+  const narration = f.provider.narrate!;
+  f.provider.narrate = async () => interruptNarration(f.db, 'Interrupted after the incidental find.');
+  const id = await f.submit();
+  const pending = f.game.snapshot(f.campaign.id, f.host.id);
+  expect(pending.turn?.phase).toBe('failed');
+  const saved = JSON.parse((f.db.prepare('SELECT draft FROM turns WHERE id=?').get(id) as { draft: string }).draft);
+  expect(saved.scene.loot).toHaveLength(1);
+  const draws = f.draw.mock.calls.length;
+  f.db.close();
+  const db = openDatabase(f.filename);
+  cleanup.push(() => db.close());
+  f.provider.narrate = narration;
+  const restarted = new Game(db, () => f.provider, f.draw);
+  restarted.retry(f.campaign.id, f.host.id);
+  await restarted.idle();
+  const done = restarted.snapshot(f.campaign.id, f.host.id);
+  expect(done.turn?.phase, done.turn?.error ?? '').toBe('collecting');
+  expect(done.scene.loot).toEqual(saved.scene.loot);
+  const resolution = done.history.at(-1)!.resolution!;
+  if (resolution.version !== 2) throw new Error('Expected component outcomes.');
+  expect(resolution.actions[0].components.main?.status).toBe('failure');
+  expect(f.draw).toHaveBeenCalledTimes(draws);
 });
 
 it.each([

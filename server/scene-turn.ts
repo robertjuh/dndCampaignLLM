@@ -4,7 +4,7 @@ import { structureSceneAtEvent, witnessedLocations } from './structures';
 import type { GMContext } from './game';
 import { gmNotePatchSchema, prepareGMNotes } from '../shared/gm-memory';
 import { memberScene, placeScene, knownLocations } from '../shared/locations';
-import { featureUpdateSchema, findSceneFeature } from '../shared/scene-state';
+import { featureUpdateSchema, findSceneFeature, featureNameKey } from '../shared/scene-state';
 import { factionEffectSchema } from '../shared/factions';
 import { currencyNameSchema, maxNarrationLength } from '../shared/schema';
 import { createHash } from 'node:crypto';
@@ -15,6 +15,7 @@ import { applySceneJourneys } from './journeys';
 import { requestsPickup } from './turn-pickups';
 import { bindNPCSource, knownNPCs, npcIdentity } from './npcs';
 import { findNPC } from '../shared/npcs';
+import { rememberJournalFact } from '../shared/journal';
 import { questOperationSchema } from '../shared/quests';
 import {
   gatheringOptions,
@@ -70,7 +71,7 @@ const npc = turnAdjudicationSchema.shape.npcUpdates
   .extend({ locationId: ref.nullable().optional() });
 const feature = featureUpdateSchema.omit({ eventId: true, locationId: true });
 const resolves = z.array(z.object({
-  id: ref, outcome: z.enum(['resolved', 'blocked', 'deferred']), fact,
+  id: ref, outcome: z.enum(['resolved', 'blocked', 'deferred']), fact: z.string().trim().max(1500).default(''),
 }).strict()).max(12).optional();
 const journeyFields = {
   journeyId: ref.optional(),
@@ -91,6 +92,7 @@ const common = {
     .optional(),
   npcs: z.array(npc).max(12).optional(),
   features: z.array(feature).max(12).optional(),
+  exits: z.array(exit).max(8).optional(),
   structures: z.array(structureSchema.extend({
     outside: place.optional(), outsideExits: z.array(exit).max(8).optional(),
   })).max(12).optional(),
@@ -115,7 +117,8 @@ export const sceneTurnSchema = z
     beats: z
       .array(
         z.discriminatedUnion('kind', [
-          z.object({ kind: z.literal('investigate'), actor: ref, resolves }).strict(),
+          z.object({ kind: z.literal('investigate'), actor: ref, resolves, features: common.features,
+            quests: common.quests }).strict(),
           z
             .object({
               kind: z.literal('gather'),
@@ -183,13 +186,16 @@ export const sceneTurnSchema = z
               actor: ref,
               slot: z.enum(['main', 'minor']).default('main'),
               intent: z.enum(['action', 'orientation', 'search']).default('action'),
-              blocked: z.string().trim().min(1).max(500).optional(),
+              blocked: z.preprocess((value) => value === false || value === null ? undefined : value,
+                z.string().trim().min(1).max(500).optional()),
               withoutCheck: z.object({
                 sourceId: z.string().trim().min(1).max(700),
                 evidence: z.string().trim().min(8).max(1500),
               }).strict().optional(),
               finding: z
-                .object({ fact, source: z.string().min(1).max(200) })
+                .object({ fact, source: z.union([z.string().min(1).max(200),
+                  z.object({ kind: z.enum(['place', 'feature', 'item', 'npc']), id: ref }).strict().transform((source) => source.id),
+                ]) })
                 .strict()
                 .optional(),
               pickup: z
@@ -225,7 +231,84 @@ export const sceneTurnSchema = z
   .strict();
 export type SceneTurn = z.infer<typeof sceneTurnSchema>;
 
-export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudication {
+const beatEdit = z.object({
+  index: z.number().int().nonnegative(),
+  beat: z.record(z.unknown()).optional(),
+  unset: z.array(ref).min(1).max(40).optional(),
+  remove: z.literal(true).optional(),
+}).strict();
+
+const scenePatchSchema = z.object({
+  version: z.literal(3),
+  patches: z.array(beatEdit.refine((patch) => !!(patch.beat || patch.unset) !== !!patch.remove,
+    'Supply beat or unset to edit, or remove to delete the beat.')).max(40),
+  append: z.array(z.record(z.unknown())).max(40).optional(),
+  summary: sceneTurnSchema.shape.summary.optional(),
+  notes: sceneTurnSchema.shape.notes.optional(),
+  rewards: sceneTurnSchema.shape.rewards,
+  opening: sceneTurnSchema.shape.opening,
+  currencyName: sceneTurnSchema.shape.currencyName,
+}).strict();
+
+const worldBeat = sceneTurnSchema.shape.beats.element.optionsMap.get('world')!;
+export const openingSceneSchema = sceneTurnSchema.omit({ rewards: true }).required({ opening: true }).extend({
+  beats: z.array(worldBeat).min(1).max(40),
+});
+const optionalWorldFields = Object.keys(worldBeat.shape).filter((key) => worldBeat.shape[key].isOptional());
+const unsetWorldFields = z.array(z.enum(optionalWorldFields as [string, ...string[]])).min(1).max(optionalWorldFields.length);
+export const openingPatchSchema = scenePatchSchema.omit({ rewards: true }).extend({
+  patches: z.array(z.union([
+    z.object({ beat: worldBeat.partial(), index: beatEdit.shape.index, unset: unsetWorldFields.optional() }).strict(),
+    z.object({ unset: unsetWorldFields, index: beatEdit.shape.index }).strict(),
+    z.object({ remove: z.literal(true), index: beatEdit.shape.index }).strict(),
+  ])).max(40),
+  append: z.array(worldBeat).max(40).optional(),
+});
+
+/** Apply a bounded repair to the retained response; the complete result is validated normally. */
+export function mergeScenePatch(base: unknown, input: unknown, openingContext?: GMContext): unknown {
+  const prior = z.object({ beats: z.array(z.record(z.unknown())) }).passthrough().parse(base);
+  const { patches, append = [], ...fields } = scenePatchSchema.parse(input);
+  const indexed = new Map(patches.map((patch) => [patch.index, patch]));
+  if (indexed.size !== patches.length || patches.some((patch) => patch.index >= prior.beats.length))
+    throw new Error('Scene patches need distinct existing beat indexes.');
+  const beats = prior.beats.flatMap((beat, index) => {
+    const patch = indexed.get(index);
+    if (!patch) return [beat];
+    if (patch.remove) return [];
+    const edits = patch.beat ?? {};
+    const merged = edits.kind && edits.kind !== beat.kind ? { ...edits } : { ...beat, ...edits };
+    const variant = typeof merged.kind === 'string' && sceneTurnSchema.shape.beats.element.optionsMap.get(merged.kind);
+    const fields = variant && variant.shape;
+    for (const field of patch.unset ?? []) {
+      if (!fields || !Object.hasOwn(fields, field) || !fields[field].isOptional())
+        throw new Error(`Cannot unset ${field} on beat ${index}. Only optional fields of its kind can be removed.`);
+      if (Object.hasOwn(edits, field)) throw new Error(`Beat ${index} cannot both set and unset ${field}.`);
+      delete merged[field];
+    }
+    return [merged];
+  });
+  const merged = { ...prior, ...fields, beats: [...beats, ...append] };
+  if (openingContext) {
+    // Validate just the submitted edits before replacing the repair checkpoint.
+    // Resolve actor/place aliases against the entire proposed scene, including appended exits.
+    const normalized = normalizeAdjudicationReferences(openingContext, merged) as typeof merged;
+    let next = 0;
+    for (const [index] of prior.beats.entries()) {
+      const patch = indexed.get(index);
+      if (patch?.remove) continue;
+      const beat = normalized.beats[next++];
+      if (patch?.beat) {
+        const changed = Object.fromEntries(Object.keys(patch.beat).map((key) => [key, beat[key]]));
+        worldBeat.partial().parse(changed, { path: ['beats', index] });
+      }
+    }
+    normalized.beats.slice(next).forEach((beat, index) => worldBeat.parse(beat, { path: ['append', index] }));
+  }
+  return merged;
+}
+
+export function compileSceneTurn(context: GMContext, input: unknown, onDraft?: (draft: TurnAdjudication) => void): TurnAdjudication {
   const scene = sceneTurnSchema.parse(normalizeAdjudicationReferences(context, input));
   const mechanics = engineEvents(context);
   const combats =
@@ -267,6 +350,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
     sceneDraft: { passages: [], summary: scene.summary },
     gmNotes: notes,
   };
+  onDraft?.(value);
   const positions = new Map(
     context.members.map((member) => [member.id, memberScene(context.scene, member.id).location.id!]),
   );
@@ -280,7 +364,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
   const journeys = new Map<string, NonNullable<TurnAdjudication['actions'][number]['travel']>>();
   const narratedCombats = new Set<string>();
   const people = knownNPCs(context.scene);
-  const performed = new Map<string, { kind: string; intent?: string; at: string; hasPerson: boolean; blocked: boolean; eventId: string; resolves?: z.infer<NonNullable<typeof resolves>>; withoutCheck?: { sourceId: string; evidence: string } }[]>();
+  const performed = new Map<string, { kind: string; intent?: string; at: string; hasPerson: boolean; blocked: boolean; investigation?: boolean; eventId: string; resolves?: z.infer<NonNullable<typeof resolves>>; withoutCheck?: { sourceId: string; evidence: string } }[]>();
   const resolve = (id: string) => (id === 'current' ? context.scene.location.id! : id);
   const add = (event: Omit<ResolvedEvent, 'id' | 'sequence'>) => {
     const saved: ResolvedEvent = {
@@ -305,12 +389,12 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
     });
   const remember = (entry: z.infer<typeof journal>, text: string) => {
     const existing = value.journal.find((item) => item.kind === entry.kind && item.name === entry.name);
-    if (existing) existing.detail = `${existing.detail}\n${text}`;
+    if (existing) existing.detail = rememberJournalFact(existing.detail, text);
     else {
       const previous = context.journal.find((item) => item.kind === entry.kind && item.name === entry.name);
       value.journal.push({
         ...entry,
-        detail: previous && !previous.detail.includes(text) ? `${previous.detail}\n${text}` : text,
+        detail: rememberJournalFact(previous?.detail ?? '', text),
       });
     }
   };
@@ -425,6 +509,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
   const investigations = investigationResults(context);
   const discovered = new Set<string>();
   const operations = [...scene.beats];
+  const corrections: string[] = [];
   for (const result of investigations) {
     if (
       operations.some(
@@ -442,6 +527,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
     });
   }
   for (const operation of operations) {
+    try {
     const submitted =
       'actor' in operation
         ? context.turn.actions.find((action) => action.memberId === operation.actor)
@@ -556,6 +642,10 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       (operation.kind === 'act' && operation.slot === 'main' && result)
     ) {
       if (!result) throw new Error('Call investigate before describing its saved finding.');
+      if (result.intentId && operation.resolves?.length && !operation.resolves.some(
+        (outcome) => outcome.id === result.intentId && outcome.outcome === 'resolved',
+      ))
+        throw new Error(`The saved investigation belongs to ${result.intentId}; preserve that resolved intent instead of assigning its finding to another request.`);
       if (positions.get(result.memberId) !== resolve(result.source.locationId))
         throw new Error('The character must reach the bound investigation source before examining it.');
       const source = result.source;
@@ -578,9 +668,21 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       const person = source.kind === 'npc'
         ? bindNPCSource({ ...context.scene, npcs: people }, source, source.locationId).npc
         : undefined;
+      const object = source.kind === 'feature' && context.scene.features?.[source.id];
+      const holder = object && (object.properties.holder ?? object.properties.custodian);
+      const custodian = typeof holder === 'string' ? findNPC({ npcs: people }, holder) : undefined;
+      const firstName = custodian?.name.split(/\s+/u)[0];
+      const custodianNames = custodian ? [custodian.name, ...custodian.aliases,
+        ...(firstName && firstName.length >= 3 && Object.values(people).filter((person) =>
+          person.locationId === source.locationId && person.name.split(/\s+/u)[0] === firstName).length === 1 ? [firstName] : []),
+      ] : [];
+      const askedCustodian = custodian && custodian.locationId === source.locationId &&
+        submittedActionObligations(context, result.memberId).some((obligation) => obligation.kind === 'talk' &&
+          custodianNames.some((name) => ` ${investigationKey(obligation.evidence)} `.includes(` ${investigationKey(name)} `)));
       const participants = [
         ...(operation.kind === 'act' ? operation.npcs ?? [] : []),
         ...(person ? [{ npcId: person.id, name: person.name, aliases: person.aliases }] : []),
+        ...(askedCustodian ? [{ npcId: custodian.id, name: custodian.name, aliases: custodian.aliases }] : []),
       ];
       const outcome = [
         ...participants.filter((npc) => !result.actionFact.includes(npc.name)).map((npc) => npc.name),
@@ -588,7 +690,9 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       ].join('. ');
       beat = {
         kind: 'act',
-        resolves: 'resolves' in operation ? operation.resolves : undefined,
+        // The saved investigation owns its answer. Never ask for a second verbatim copy per sub-intent.
+        resolves: operation.resolves?.length ? operation.resolves.map((outcome) => ({ ...outcome, fact: result.actionFact })) :
+          (result.intentId ? [{ id: result.intentId, outcome: 'resolved', fact: result.actionFact }] : undefined),
         actor: result.memberId,
         slot: 'main',
         intent: 'search',
@@ -596,6 +700,8 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         text: text.trim(),
         ...(participants.length ? { npcs: participants } : {}),
         finding: { fact: finding, source: source.id },
+        features: operation.features,
+        quests: operation.quests,
         journal: { kind: 'fact', name: `${source.name.slice(0, 50)} · ${result.question.slice(0, 45)}` },
         ...(!result.reused &&
         !context.journal.some((entry) =>
@@ -737,6 +843,25 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       const components = parts.get(beat.actor) ?? { main: null, minor: null };
       parts.set(beat.actor, components);
       at = positions.get(beat.actor)!;
+      if (beat.kind === 'act') {
+        // Bind an already named, local addressee; no invented speaker, reply or agreement.
+        const local = Object.values(people).filter((person) => person.locationId === at && person.status !== 'dead');
+        const hasName = (text: string, name: string) => ` ${investigationKey(text)} `.includes(` ${investigationKey(name)} `);
+        for (const obligation of submittedActionObligations(context, beat.actor).filter((intent) => intent.kind === 'talk')) {
+          const named = local.flatMap((person) => {
+            const first = person.name.split(/\s+/u)[0];
+            const names = [person.name, ...person.aliases, ...(first.length >= 3 &&
+              local.filter((other) => other.name.split(/\s+/u)[0] === first).length === 1 ? [first] : [])];
+            const index = Math.min(...names.map((name) => hasName(obligation.evidence, name) ? investigationKey(obligation.evidence).indexOf(investigationKey(name)) : Infinity));
+            const observed = names.some((name) => hasName(beat.fact, name)) ||
+              (first.length >= 3 && local.filter((other) => other.name.split(/\s+/u)[0] === first).length === 1 && hasName(beat.fact, first));
+            return Number.isFinite(index) && observed ? [{ person, index }] : [];
+          }).sort((a, b) => a.index - b.index);
+          const person = named[0]?.person;
+          if (person && !beat.npcs?.some((npc) => npc.npcId === person.id))
+            (beat.npcs ??= []).push({ npcId: person.id, name: person.name });
+        }
+      }
       const expected = engineComponents(context, beat.actor);
       if (beat.kind === 'transport') {
         if (components.main || combatReceiptForMember(context, beat.actor))
@@ -866,7 +991,21 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         } else if (beat.place || beat.exits?.length)
           throw new Error('Failed traversal cannot reveal the destination as an arrival.');
       } else {
-        if (components[beat.slot]) throw new Error('One main and one minor action per actor.');
+        const actorId = beat.actor;
+        const check = beat.slot === 'main' && context.turn.rolls.find((roll) => roll.memberId === actorId && !roll.notation);
+        if (check && check.success && check.goal) {
+          const success = check.goal.success;
+          beat.fact = beat.fact.replaceAll('{{success}}', success);
+          beat.text = beat.text.replaceAll('{{success}}', success);
+          if (![beat.fact, beat.text].every((text) => investigationKey(text).includes(investigationKey(success))))
+            throw new Error(`Honor the saved successful goal: ${success} Include {{success}} in this main act's fact and text, or state that exact consequence. Do not replace it with refusal, partial progress or another prerequisite.`);
+        }
+        if (check && !check.success && check.goal && [beat.fact, beat.text].some((text) =>
+          text.includes('{{success}}') || investigationKey(text).includes(investigationKey(check.goal!.success))))
+          throw new Error('The saved goal check failed; preserve its failure instead of delivering the success consequence.');
+        if (components[beat.slot]) throw new Error(result && beat.slot === 'main'
+          ? 'The saved investigation already uses this main action. Use one investigate beat; keep related dialogue and pricing in its prepared prose, and put all related resolves on that beat. Do not add another act or meet for the same conversation.'
+          : 'One main and one minor action per actor.');
         const outcomes = beat.resolves ?? [];
         const unperformed = outcomes.filter((result) => result.outcome !== 'resolved');
         if (outcomes.length && unperformed.length === outcomes.length && expected[beat.slot]?.basis === 'check')
@@ -901,6 +1040,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
           ...disposition,
           fact: beat.fact,
           reason: beat.blocked ?? 'The submitted interaction and saved mechanical outcome.',
+          ...(beat.withoutCheck ? { withoutCheck: beat.withoutCheck } : {}),
           receiptRefs: event.receiptRefs,
           eventIds: [...own.map((item) => item.id), event.id],
         };
@@ -951,6 +1091,8 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         if (storyItem) value.storyItems!.push({ ...storyItem, eventId: event.id });
       }
     }
+    if ('exits' in beat && beat.exits?.length && ['failure', 'blocked'].includes(event.result ?? ''))
+      throw new Error('A failed action cannot change routes; record an independently witnessed exit in a world beat.');
     if ('exits' in beat && beat.kind !== 'transport')
       for (const edge of beat.exits ?? []) {
         if (
@@ -995,6 +1137,9 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
       }
     }
     for (const update of beat.npcs ?? []) {
+      if (!npcIdentity({ ...context.scene, npcs: people }, update.npcId, update.name, update.aliases) &&
+        ![update.name, ...(update.aliases ?? [])].some((name) => investigationKey(evidence.fact).includes(investigationKey(name))))
+        evidence.fact = `${update.name}. ${evidence.fact}`;
       remember({ kind: 'npc', name: update.name }, evidence.fact);
       const previous = [...value.npcUpdates!].reverse().find((item) => item.npcId === update.npcId);
       if (previous) {
@@ -1006,7 +1151,7 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
           (update.factionId === undefined || update.factionId === previous.factionId) &&
           (update.followingMemberId === undefined || update.followingMemberId === previous.followingMemberId);
         if (unchanged) {
-          evidence.npcIds = [...(evidence.npcIds ?? []), update.npcId];
+          evidence.npcIds = [...new Set([...(evidence.npcIds ?? []), update.npcId])];
           continue;
         }
       }
@@ -1034,13 +1179,21 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         ...(update.followingMemberId !== undefined ? { followingMemberId: update.followingMemberId } : {}),
         fact: evidence.fact,
       };
-      evidence.npcIds = [...(evidence.npcIds ?? []), update.npcId];
+      evidence.npcIds = [...new Set([...(evidence.npcIds ?? []), update.npcId])];
     }
-    if (beat.features?.length && ['failure', 'blocked'].includes(event.result ?? ''))
-      throw new Error(
-        'A failed action cannot apply its feature changes; preserve failure and describe any distinct world consequence separately.',
-      );
     for (const update of beat.features ?? []) {
+      if (['failure', 'blocked'].includes(event.result ?? '')) {
+        const previous = findSceneFeature(context.scene, update.featureId) ?? findSceneFeature(context.scene, update.name, at);
+        if (!previous || previous.locationId !== at || update.passable !== undefined || update.route !== undefined)
+          throw new Error('A failed action cannot create a feature or change a route; preserve failure and record observations of an existing local feature only.');
+        // Failed attempts record what happened, never overwrite state or satisfy state objectives.
+        value.featureUpdates!.push({ featureId: previous.id, name: previous.name, locationId: at,
+          eventId: evidence.id, observation: event.fact });
+        continue;
+      }
+      if (!findSceneFeature(context.scene, update.featureId) &&
+        ![update.name, ...(update.aliases ?? [])].some((name) => featureNameKey(evidence.fact).includes(featureNameKey(name))))
+        evidence.fact = `${update.name}. ${evidence.fact}`;
       value.featureUpdates!.push({ ...update, locationId: at, eventId: evidence.id });
       // A successful local opening can support a later move in this same scene.
       const bound =
@@ -1063,22 +1216,26 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         at,
         hasPerson: !!beat.npcs?.length || result?.source.kind === 'npc',
         blocked: !!beat.blocked,
+        investigation: !!result,
         eventId: event.id,
         resolves: beat.resolves,
         withoutCheck: beat.withoutCheck,
       });
       performed.set(beat.actor, acts);
     }
-    if (beat.journal && !(beat.kind === 'act' && beat.finding)) remember(beat.journal, beat.fact);
+    if (beat.journal && !(beat.kind === 'act' && beat.finding)) remember(beat.journal, evidence.fact);
     if (beat.progress && !(beat.kind === 'act' && beat.finding)) {
       const entry = beat.journal ?? { kind: 'fact' as const, name: beat.fact.slice(0, 80) };
-      if (!beat.journal) remember(entry, beat.fact);
+      if (!beat.journal) remember(entry, evidence.fact);
       value.worldProgress!.push({ ...beat.progress, locationId: at, eventId: evidence.id, journal: entry });
     }
     value.sceneDraft!.passages.push({ eventIds: covered, text: beat.text });
+    } catch (error) {
+      const index = scene.beats.indexOf(operation);
+      corrections.push(`${index >= 0 ? `beats[${index}]` : 'Saved investigation'}: ${error instanceof Error ? error.message : 'Invalid operation.'}`);
+    }
   }
   // Report independent structural omissions together, before building action aggregates.
-  const corrections: string[] = [];
   if (context.turn.number === 0) {
     if (!scene.opening) corrections.push('Opening needs opening:{npcs:[],features:[],quests:[],mysteries:[]}: list the IDs of every interactable person/object, offered request and mystery introduced in the prose. Save their corresponding updates/preparation in this response. Empty lists are valid when none are introduced.');
     else {
@@ -1117,14 +1274,15 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         continue;
       }
       claimed.add(result.id);
-      if (outcomeFacts.has(investigationKey(result.fact)))
+      if (!act.investigation && result.fact && outcomeFacts.has(investigationKey(result.fact)))
         corrections.push('Each requested target needs its own specific outcome; do not repeat one result for different intent IDs.');
       outcomeFacts.add(investigationKey(result.fact));
-      if (!investigationKey(event.fact).includes(investigationKey(result.fact)))
-        corrections.push(`Outcome ${result.id}: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: ${JSON.stringify(result.fact)}. A paraphrase does not satisfy this check.`);
+      const outcomeFact = result.fact && investigationKey(event.fact).includes(investigationKey(result.fact)) ? result.fact : event.fact;
+      if (result.outcome !== 'resolved' && (!result.fact || !investigationKey(event.fact).includes(investigationKey(result.fact))))
+        corrections.push(`Explain the concrete refusal or deferral for ${result.id} in its containing action fact.`);
       if (result.outcome !== 'resolved' && act.kind !== 'act')
         corrections.push(`Use an act with a concrete reason for ${result.outcome} ${result.id}; do not execute a take/meet/investigate for that unperformed part.`);
-      (value.actionOutcomes ??= []).push({ memberId: submitted.memberId, obligationId: result.id, request: obligation.evidence, outcome: result.outcome, fact: result.fact, eventId: act.eventId });
+      (value.actionOutcomes ??= []).push({ memberId: submitted.memberId, obligationId: result.id, request: obligation.evidence, outcome: result.outcome, fact: outcomeFact, eventId: act.eventId });
     }
     for (const obligation of obligations) {
       const requiredAt = obligation.afterTravel ? positions.get(submitted.memberId) : obligation.beforeTravel ? memberScene(context.scene, submitted.memberId).location.id : undefined;
@@ -1161,7 +1319,9 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
         act.resolves?.some((result) => result.id === obligation.id && result.outcome !== 'resolved') ||
         act.blocked ||
         (obligation.kind === 'search'
-          ? act.intent === 'search'
+          ? act.intent === 'search' || value.questUpdates!.some((update) =>
+            update.operation.type === 'offer' && (update.eventId === act.eventId ||
+              value.events.find((event) => event.id === update.eventId)?.dependsOn.some((dependency) => dependency.eventId === act.eventId)))
           : obligation.kind === 'collect'
             ? act.kind === 'take' || !!value.pickups?.some((pickup) => pickup.eventId === act.eventId)
             : act.intent !== 'orientation' || obligation.kind === 'inspect'),
@@ -1217,14 +1377,14 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
           const origin = context.turn.number === 0 ? null : memberScene(context.scene, member.id).location.id;
           return connections.some(
             (edge) =>
-              !edge.blocked &&
+              (!edge.blocked || descriptions.some((beat) => 'place' in beat && !!beat.place?.hazard.trim())) &&
               ((edge.from === arrival.locationId && edge.to !== origin) ||
                 (edge.bidirectional && edge.to === arrival.locationId && edge.from !== origin)),
           );
         })
       )
         corrections.push(
-          `First arrival at ${name} needs an open onward exit beyond the way back, or place.deadEnd explaining the concrete geography or obstacle. An enclosed room with only its entrance as an exit can be a dead end; describe that enclosure rather than inventing another passage.`,
+          `First arrival at ${name} needs an onward exit beyond the way back (open, or blocked by an explicitly described local obstacle), or place.deadEnd explaining the concrete geography or obstacle. An enclosed room with only its entrance as an exit can be a dead end; describe that enclosure rather than inventing another passage.`,
         );
     }
     return corrections;
@@ -1397,7 +1557,12 @@ export function compileSceneTurn(context: GMContext, input: unknown): TurnAdjudi
   const covered = new Set(value.sceneDraft!.passages.flatMap((passage) => passage.eventIds));
   for (const event of value.events.filter((event) => event.presentation !== 'log' && !covered.has(event.id)))
     value.sceneDraft!.passages.push({ eventIds: [event.id], text: event.fact });
-  const accepted = validateAdjudication(context, value);
+  let accepted: TurnAdjudication;
+  try {
+    accepted = validateAdjudication(context, value);
+  } catch (error) {
+    throw new Error([...new Set([error instanceof Error ? error.message : 'Invalid scene.', ...arrivalCorrections(value)])].join('\n'));
+  }
   const arrivalErrors = arrivalCorrections(accepted);
   if (arrivalErrors.length) throw new Error(arrivalErrors.join('\n'));
   applySceneJourneys(context, scene, accepted);

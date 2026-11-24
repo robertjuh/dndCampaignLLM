@@ -125,7 +125,7 @@ if (!values.live) {
         const member = game.members(campaign.id)[0];
         game.manageCharacter(campaign.id, player.id, {
           type: 'starter',
-          itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+          itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
         });
         const prepared = game.members(campaign.id)[0];
         for (const slot of Object.keys(prepared.state.equipment) as (keyof typeof prepared.state.equipment)[])

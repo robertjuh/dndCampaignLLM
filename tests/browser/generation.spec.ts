@@ -83,8 +83,9 @@ test('a generated portrait survives saving, reloading, and joining the party', a
   const portrait = page.getByRole('img', { name: `${sheet.name} portrait`, exact: true });
   await expect(portrait).toBeVisible();
   await expect.poll(() => portrait.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   await page.getByRole('button', { name: 'Save character', exact: true }).click();
   await page.reload();
   await expect(
@@ -130,8 +131,9 @@ test('a portrait failure is visible while the generated character can still be s
   await page.getByLabel('Character concept').fill('A wandering healer');
   await page.getByRole('button', { name: 'Generate from my concept' }).click();
   await expect(page.locator('.character-sheet').getByRole('status')).toHaveText(sheet.portraitError);
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   await page.getByRole('button', { name: 'Save character', exact: true }).click();
   await expect(page.locator('.library-card')).toContainText(sheet.name);
 });
@@ -146,8 +148,9 @@ for (const failure of ['save', 'refresh'] as const) {
     await page.getByRole('button', { name: 'Create a character', exact: true }).click();
     await page.getByLabel('Character concept').fill('An explorer returning to the party');
     await page.getByRole('button', { name: 'Generate from my concept' }).click();
-    await page.locator('.equipment-choices button').nth(0).click();
-    await page.locator('.equipment-choices button').nth(1).click();
+    await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+    await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+    await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
     let saveRequests = 0;
     let failed = false;
     await page.route('**/api/characters', async (route) => {
@@ -173,7 +176,7 @@ for (const failure of ['save', 'refresh'] as const) {
       await expect(page.getByRole('alert')).toContainText('Your character was saved');
     await expect(page.getByRole('button', { name: 'Create a character', exact: true })).toBeDisabled();
     await expect(page.locator('.character-sheet')).toContainText(sheet.name);
-    await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(2);
+    await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(3);
     await save.click();
     await expect(page.locator('.character-editor')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Create a character', exact: true })).toBeEnabled();
@@ -207,8 +210,9 @@ test('an entered character name survives generation, regeneration, renaming, and
   }
   await name.fill('Captain Ária');
   await expect(page.getByRole('heading', { name: 'Captain Ária', exact: true })).toBeVisible();
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   await page.getByRole('button', { name: 'Save character', exact: true }).click();
   await page.reload();
   await expect(
@@ -276,8 +280,9 @@ test('library creation can attach, switch, and remove an existing campaign conte
   await page.getByRole('button', { name: 'Generate from my concept' }).click();
   await expect(page.getByRole('heading', { name: 'Themed explorer 3', exact: true })).toBeVisible();
   expect(requests[2]).not.toHaveProperty('campaignId');
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   await page.getByRole('button', { name: 'Save character', exact: true }).click();
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Themed explorer 3', exact: true })).toBeVisible();
@@ -309,6 +314,7 @@ test('character generation shows progress, populates the draft, and keeps failur
   );
   base.traits[0].blocked = ['body'];
   const sheet = rollCharacterCreation(base, 'strike', 1, (sides) => (sides === 3 ? 2 : 1));
+  sheet.equipmentOptions[2] = sheet.equipmentOptions[0];
   sheet.equipmentOptions[0] = {
     ...baseItem('fork', 'Sighting fork', 'focus'),
     scaling: ['INT'],
@@ -335,24 +341,26 @@ test('character generation shows progress, populates the draft, and keeps failur
   ).toHaveCount(0);
   await expect(page.locator('.character-editor textarea')).toHaveCount(1);
   await expect(page.locator('.character-sheet input, .character-sheet select')).toHaveCount(0);
-  await expect(page.locator('.equipment-choices button')).toHaveCount(5);
+  await expect(page.locator('.equipment-choices .equipment-choice-select')).toHaveCount(7);
   await expect(page.locator('.ability-choices button')).toHaveCount(4);
   await expect(page.locator('.ability-effect small').first()).toContainText('2d6 + 2 · STR');
   await expect(page.locator('.ability-effect strong').first()).toHaveText('4–14 damage');
   await expect(page.locator('.creation-compensation')).toContainText('Cannot wear body armour (major)');
   await expect(page.locator('.creation-compensation')).toContainText('+4 STR (+2 STR modifier)');
   await expect(page.locator('.ability-effect').nth(2)).toContainText('Advantage +4');
-  await expect(page.locator('.equipment-choices button').nth(0)).toContainText(
+  await expect(page.locator('.equipment-choices .equipment-choice').nth(2)).toContainText(
     '+1 INT attack rolls while equipped',
   );
-  await expect(page.locator('.equipment-choices button').nth(1)).toContainText(
+  await expect(page.locator('.equipment-choices .equipment-choice').nth(3)).toContainText(
     '+1 INT out-of-combat checks while equipped',
   );
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
-  await page.locator('.equipment-choices button').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
-  await page.locator('.equipment-choices button').nth(1).click();
-  await expect(page.locator('.equipment-choices button').nth(2)).toBeDisabled();
+  await expect(page.locator('.equipment-choices .equipment-choice-select').nth(1)).toBeEnabled();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
+  await expect(page.locator('.equipment-choices .equipment-choice-select').nth(4)).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
   await page.locator('.ability-choices button').nth(0).click();
   await expect(page.getByRole('button', { name: 'Save character', exact: true })).toBeDisabled();
@@ -463,8 +471,9 @@ test('a usage rejection preserves a generated result and its selected equipment'
   await page.getByRole('button', { name: 'Create a character', exact: true }).click();
   await page.getByLabel('Character concept').fill('sea warrior');
   await page.getByRole('button', { name: 'Generate from my concept' }).click();
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   await page.getByRole('button', { name: 'Generate from my concept' }).click();
   await expect(page.getByRole('link', { name: 'Manage ChatGPT usage' })).toHaveAttribute(
     'href',
@@ -474,14 +483,66 @@ test('a usage rejection preserves a generated result and its selected equipment'
   await expect(
     page.locator('.character-sheet input, .character-sheet textarea, .character-sheet select'),
   ).toHaveCount(0);
-  await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(2);
+  await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(3);
   await page.getByRole('button', { name: 'Save character', exact: true }).click();
   await page.reload();
   await expect(page.getByRole('heading', { name: sheet.name, exact: true })).toBeVisible();
   expect(requests).toBe(2);
   await page.getByRole('button', { name: 'Review saved character', exact: true }).click();
-  await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(2);
+  await expect(page.locator('.equipment-choices [aria-pressed="true"]')).toHaveCount(3);
   await expect(page.locator('.library-card')).toHaveCount(1);
+});
+
+test.describe('starting equipment touch controls', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('weapon cards switch on one tap and preserve non-weapon choices', async ({ page }) => {
+    const sheet = templateCharacter('Weapon switcher');
+    await page.route('**/api/characters/generate', (route) => route.fulfill({ json: sheet }));
+    await page.goto('/characters');
+    await page.getByRole('button', { name: 'Create a character', exact: true }).click();
+    await page.getByRole('button', { name: 'Surprise me with ChatGPT', exact: true }).click();
+    const weapons = page.getByRole('group', { name: 'Weapons', exact: true });
+    const weaponCards = weapons.locator('.equipment-choice');
+    const weaponChoices = weapons.locator('.equipment-choice-select');
+    const gear = page.getByRole('group', { name: 'Non-weapon equipment', exact: true });
+    const gearChoices = gear.locator('.equipment-choice-select');
+    const save = page.getByRole('button', { name: 'Save character', exact: true });
+
+    await weaponCards.nth(1).tap();
+    await expect(weaponChoices.nth(1)).toHaveAttribute('aria-pressed', 'true');
+    await weaponCards.nth(0).tap();
+    await expect(weaponChoices.nth(0)).toHaveAttribute('aria-pressed', 'true');
+    await expect(weaponChoices.nth(1)).toHaveAttribute('aria-pressed', 'false');
+    await gearChoices.nth(0).tap();
+    await gearChoices.nth(1).tap();
+    await expect(save).toBeEnabled();
+
+    await weaponCards.nth(1).tap();
+    await expect(weaponChoices.nth(0)).toHaveAttribute('aria-pressed', 'false');
+    await expect(weaponChoices.nth(1)).toHaveAttribute('aria-pressed', 'true');
+    await expect(gear.locator('.equipment-choice-select[aria-pressed="true"]')).toHaveCount(2);
+    await expect(page.getByLabel('Starting loadout preview')).toContainText('Hunting knife');
+    await expect(page.getByLabel('Starting loadout preview')).not.toContainText('Short sword');
+    await expect(save).toBeEnabled();
+
+    await gear.getByRole('button', { name: '+1 defense', exact: true }).first().tap();
+    await expect(page.getByRole('tooltip')).toBeVisible();
+    await expect(gear.locator('.equipment-choice-select[aria-pressed="true"]')).toHaveCount(2);
+    await page.keyboard.press('Escape');
+    await weaponChoices.nth(1).tap();
+    await expect(weapons.locator('.equipment-choice-select[aria-pressed="true"]')).toHaveCount(0);
+    await expect(save).toBeDisabled();
+    await weaponChoices.nth(0).tap();
+    await save.click();
+    await expect(page.locator('.library-card')).toContainText(sheet.name);
+    const me = await (await page.request.get('/api/me')).json();
+    expect(me.characters[0].selectedEquipmentIds).toEqual([
+      sheet.equipmentOptions[1].id,
+      sheet.equipmentOptions[2].id,
+      sheet.equipmentOptions[0].id,
+    ]);
+  });
 });
 
 test('phone settings distinguish host sign-in from usable generation', async ({ page }) => {

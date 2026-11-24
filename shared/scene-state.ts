@@ -16,6 +16,7 @@ export const sceneFeatureSchema = z
     aliases: z.array(name),
     locationId: name,
     properties,
+    observation: z.string().trim().min(1).max(2500).optional(),
     route: route.nullable().optional(),
     fact: z.string().trim().min(1).max(2500),
   })
@@ -61,7 +62,7 @@ export function featurePublicFact(feature: SceneFeature, scene: Pick<Scene, 'wor
   const connection = featureConnection(scene, feature.route);
   const properties = { ...feature.properties };
   if (connection) delete properties.passable;
-  return `${feature.name}. Current properties: ${JSON.stringify(properties)}.${
+  return `${feature.name}. Current properties: ${JSON.stringify(properties)}.${feature.observation ? ` Latest observation (not a state change): ${feature.observation}` : ''}${
     connection ? ` Passage: ${connection.blocked ? 'blocked' : 'open'}.` : ''
   } ${feature.fact}`;
 }

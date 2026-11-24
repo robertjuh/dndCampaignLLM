@@ -2,6 +2,14 @@ import type { Member, Outcome, Scene, CampaignConfig } from './schema';
 import { findNPC } from './npcs';
 import { featureConnection, findSceneFeature } from './scene-state';
 
+/** Keep recent complete facts; older facts remain in the resolved turn history. */
+export function rememberJournalFact(previous: string, fact: string): string {
+  if (previous.length <= 1500 && previous.includes(fact)) return previous;
+  const facts = [...new Set([...previous.split('\n'), fact.slice(0, 1500)].filter(Boolean))];
+  while (facts.join('\n').length > 1500 && facts.length > 1) facts.shift();
+  return facts.join('\n');
+}
+
 /** Discovery prose stays historical; present ownership is projected from authoritative state. */
 export function projectJournal(
   entries: Outcome['journal'],
@@ -72,6 +80,9 @@ export function projectJournal(
             location,
             npc.allegiance,
             npc.enemy ? `${npc.enemy.hp}/${npc.enemy.maxHp} HP` : null,
+            npc.treatment
+              ? `${npc.treatment.sourceName}: ${npc.treatment.healing} ${dutch ? 'genezing' : 'healing'}${npc.treatment.cured.length ? `; ${npc.treatment.cured.join(', ')}` : ''}`
+              : null,
           ]
             .filter(Boolean)
             .join(' · '),

@@ -1,0 +1,310 @@
+{
+  "model": "gpt-6.1-sol",
+  "completedGroupRounds": 5,
+  "submittedActions": 15,
+  "playedDurationMs": 662001,
+  "playedRequests": 19,
+  "playedCorrectionEvents": 11,
+  "savedChecks": 5,
+  "turns": [
+    {
+      "number": 0,
+      "durationMs": 241275,
+      "requests": 4,
+      "corrections": [
+        {
+          "request": 1,
+          "feedback": "New scene feature \"new:ivo-gate-receipts\" (\"Ivo's Paired Gate Receipts\") must be named in its public fact for event \"scene:1\". Include its exact name or an accurate declared alias in that fact. Check every new feature; changing text or location alone cannot fix a missing name in fact."
+        }
+      ],
+      "failures": [],
+      "fallbacks": [],
+      "inputTokens": 49667,
+      "outputTokens": 8363,
+      "rolls": [],
+      "outcomes": []
+    },
+    {
+      "number": 1,
+      "durationMs": 164554,
+      "requests": 5,
+      "corrections": [
+        {
+          "request": 1,
+          "feedback": "investigate: [\n  {\n    \"code\": \"too_big\",\n    \"maximum\": 5,\n    \"type\": \"number\",\n    \"inclusive\": true,\n    \"exact\": false,\n    \"message\": \"Number must be less than or equal to 5\",\n    \"path\": [\n      \"answer\"\n    ]\n  }\n]"
+        },
+        {
+          "request": 3,
+          "feedback": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"features\"\n    ],\n    \"path\": [\n      \"beats\",\n      2\n    ],\n    \"message\": \"Unrecognized key(s) in object: 'features'\"\n  }\n]"
+        },
+        {
+          "request": 4,
+          "feedback": "One main and one minor action per actor."
+        },
+        {
+          "request": 5,
+          "feedback": "The scene needs corrections; repair the indicated fields and operations:\nEach requested target needs its own specific outcome; do not repeat one result for different intent IDs.\nEach requested target needs its own specific outcome; do not repeat one result for different intent IDs.\nPersist the person in \"Ask Nessa's permission to examine her damaged shard while she holds it\" with meet.person, act.npcs, or an investigate source of kind:npc. An unnamed person can keep a stable public role label. Reuse their saved ID and actual location; a place source cannot stand in for the person answering.\nEach requested target needs its own specific outcome; do not repeat one result for different intent IDs."
+        }
+      ],
+      "failures": [],
+      "fallbacks": [
+        "Scene recovery after 3 invalid responses; saved outcomes and local observations published without further correction requests.",
+        "Published retained outcomes and observable local openings without another model request."
+      ],
+      "inputTokens": 139391,
+      "outputTokens": 6386,
+      "rolls": [
+        {
+          "character": "Patch",
+          "stat": "INT",
+          "mode": "normal",
+          "dice": [
+            2
+          ],
+          "modifier": 7,
+          "total": 9,
+          "dc": 10,
+          "success": false
+        }
+      ],
+      "outcomes": [
+        {
+          "character": "Patch",
+          "status": "failure"
+        },
+        {
+          "character": "Rook",
+          "status": "success"
+        },
+        {
+          "character": "Switch",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "durationMs": 116317,
+      "requests": 2,
+      "corrections": [
+        {
+          "request": 1,
+          "feedback": "NPC interactions need distinct public participants and an observed local event."
+        },
+        {
+          "request": 2,
+          "feedback": "NPC interactions need distinct public participants and an observed local event."
+        }
+      ],
+      "failures": [],
+      "fallbacks": [
+        "Scene recovery after 2 invalid responses; saved outcomes and local observations published without further correction requests.",
+        "Published retained outcomes and observable local openings without another model request."
+      ],
+      "inputTokens": 56067,
+      "outputTokens": 4739,
+      "rolls": [],
+      "outcomes": [
+        {
+          "character": "Patch",
+          "status": "blocked"
+        },
+        {
+          "character": "Rook",
+          "status": "partial"
+        },
+        {
+          "character": "Switch",
+          "status": "blocked"
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "durationMs": 115271,
+      "requests": 4,
+      "corrections": [
+        {
+          "request": 1,
+          "feedback": "investigate: [\n  {\n    \"code\": \"too_big\",\n    \"maximum\": 500,\n    \"type\": \"string\",\n    \"inclusive\": true,\n    \"exact\": false,\n    \"message\": \"String must contain at most 500 character(s)\",\n    \"path\": [\n      \"preparation\",\n      \"discoveries\",\n      0\n    ]\n  }\n]"
+        },
+        {
+          "request": 2,
+          "feedback": "investigate: An investigation lead source must reference a saved person, object, or place."
+        }
+      ],
+      "failures": [
+        "An open route reaches b044cc76-134c-4c0e-834e-b5db352e74fe toward the requested goal this turn; do not block it merely because the final goal is not adjacent."
+      ],
+      "fallbacks": [
+        "Instinctive recovery preserved saved results after scene processing failed: An open route reaches b044cc76-134c-4c0e-834e-b5db352e74fe toward the requested goal this turn; do not block it merely because the final goal is not adjacent."
+      ],
+      "inputTokens": 115484,
+      "outputTokens": 4115,
+      "rolls": [],
+      "outcomes": [
+        {
+          "character": "Patch",
+          "status": "success"
+        },
+        {
+          "character": "Rook",
+          "status": "success"
+        },
+        {
+          "character": "Switch",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "durationMs": 155329,
+      "requests": 4,
+      "corrections": [
+        {
+          "request": 2,
+          "feedback": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"exits\"\n    ],\n    \"path\": [\n      \"beats\",\n      2\n    ],\n    \"message\": \"Unrecognized key(s) in object: 'exits'\"\n  }\n]"
+        },
+        {
+          "request": 3,
+          "feedback": "A failed action cannot apply its feature changes; preserve failure and describe any distinct world consequence separately."
+        }
+      ],
+      "failures": [],
+      "fallbacks": [],
+      "inputTokens": 137246,
+      "outputTokens": 6434,
+      "rolls": [
+        {
+          "character": "Patch",
+          "stat": "INT",
+          "mode": "advantage",
+          "dice": [
+            5,
+            4
+          ],
+          "modifier": 3,
+          "total": 8,
+          "dc": 10,
+          "success": false
+        },
+        {
+          "character": "Rook",
+          "stat": "CHA",
+          "mode": "advantage",
+          "dice": [
+            13,
+            9
+          ],
+          "modifier": -1,
+          "total": 12,
+          "dc": 10,
+          "success": true
+        }
+      ],
+      "outcomes": [
+        {
+          "character": "Patch",
+          "status": "failure"
+        },
+        {
+          "character": "Rook",
+          "status": "success"
+        },
+        {
+          "character": "Switch",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "number": 5,
+      "durationMs": 110530,
+      "requests": 4,
+      "corrections": [
+        {
+          "request": 3,
+          "feedback": "A failed action cannot apply its feature changes; preserve failure and describe any distinct world consequence separately."
+        }
+      ],
+      "failures": [],
+      "fallbacks": [],
+      "inputTokens": 146812,
+      "outputTokens": 4404,
+      "rolls": [
+        {
+          "character": "Switch",
+          "stat": "DEX",
+          "mode": "advantage",
+          "dice": [
+            19,
+            14
+          ],
+          "modifier": 0,
+          "total": 19,
+          "dc": 5,
+          "success": true
+        },
+        {
+          "character": "Patch",
+          "stat": "INT",
+          "mode": "advantage",
+          "dice": [
+            1,
+            4
+          ],
+          "modifier": 3,
+          "total": 7,
+          "dc": 10,
+          "success": false
+        }
+      ],
+      "outcomes": [
+        {
+          "character": "Patch",
+          "status": "failure"
+        },
+        {
+          "character": "Rook",
+          "status": "success"
+        },
+        {
+          "character": "Switch",
+          "status": "success"
+        }
+      ]
+    }
+  ],
+  "finalParty": [
+    {
+      "name": "Patch",
+      "hp": 20,
+      "maxHp": 20,
+      "xp": 20,
+      "conditions": [],
+      "location": "Second Pulse Clinic",
+      "abilityUses": {
+        "Circuit Trace": 1
+      }
+    },
+    {
+      "name": "Rook",
+      "hp": 22,
+      "maxHp": 22,
+      "xp": 20,
+      "conditions": [],
+      "location": "Relay Audit Vestibule",
+      "abilityUses": {}
+    },
+    {
+      "name": "Switch",
+      "hp": 22,
+      "maxHp": 22,
+      "xp": 20,
+      "conditions": [],
+      "location": "Second Pulse Clinic",
+      "abilityUses": {}
+    }
+  ]
+}

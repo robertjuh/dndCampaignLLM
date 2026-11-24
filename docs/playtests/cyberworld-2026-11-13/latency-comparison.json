@@ -1,0 +1,350 @@
+{
+  "baseline": {
+    "totalMs": 662001,
+    "requests": 19,
+    "corrections": 11,
+    "inputTokens": 595000,
+    "outputTokens": 26078
+  },
+  "runs": [
+    {
+      "label": "fixed",
+      "directory": "data/playtests/cyberworld-latency-fixed-2026-11-13/",
+      "rows": [
+        {
+          "turn": 1,
+          "completed": true,
+          "error": null,
+          "wallMs": 128458,
+          "durationMs": 128413,
+          "requests": 5,
+          "inputBytes": 525227,
+          "inputTokens": 109701,
+          "outputTokens": 4401,
+          "corrections": [
+            {
+              "request": 1,
+              "feedback": "investigate: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"nextChange\"\n    ],\n    \"message\": \"Required\"\n  }\n]"
+            },
+            {
+              "request": 3,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Ivo shows Rook the paired receipts: the same credential at North Service Gate was accepted at 02:11 and rejected at 02:17, with matching gate identifiers and inspection stamps.\". A paraphrase does not satisfy this check.\nOutcome intent:105: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Ivo describes the medicine cart being held for a second scan without any credential swap; the later rejection cites pending reconciliation, and a technician stopped work over mismatched totals.\". A paraphrase does not satisfy this check.\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that a"
+            },
+            {
+              "request": 4,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Ivo shows Rook the paired receipts: the same credential at North Service Gate was accepted at 02:11 and rejected at 02:17, with matching gate identifiers and inspection stamps.\". A paraphrase does not satisfy this check.\nOutcome intent:105: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Ivo describes the medicine cart being held for a second scan without any credential swap; the later rejection cites pending reconciliation, and a technician stopped work over mismatched totals.\". A paraphrase does not satisfy this check.\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that a"
+            },
+            {
+              "request": 5,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Ivo shows Rook the paired receipts: the same credential at North Service Gate was accepted at 02:11 and rejected at 02:17, with matching gate identifiers and inspection stamps.\". A paraphrase does not satisfy this check.\nOutcome intent:105: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Ivo describes the medicine cart being held for a second scan without any credential swap; the later rejection cites pending reconciliation, and a technician stopped work over mismatched totals.\". A paraphrase does not satisfy this check.\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that a"
+            }
+          ],
+          "fallbacks": [
+            "Scene recovery after 3 invalid responses; saved outcomes and local observations published without further correction requests.",
+            "Published retained outcomes and observable local openings without another model request."
+          ]
+        },
+        {
+          "turn": 2,
+          "completed": true,
+          "error": null,
+          "wallMs": 55071,
+          "durationMs": 55024,
+          "requests": 3,
+          "inputBytes": 314805,
+          "inputTokens": 64681,
+          "outputTokens": 1889,
+          "corrections": [
+            {
+              "request": 1,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:74: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Rook meets Elian Voss of the maintenance crew at North Service Gate without forcing the checkpoint.\". A paraphrase does not satisfy this check."
+            },
+            {
+              "request": 2,
+              "feedback": "New scene feature \"new:north-relay-gate\" (\"Relay Checkpoint Gate\") must be named in its public fact for event \"scene:4\". Include its exact name or an accurate declared alias in that fact. Check every new feature; changing text or location alone cannot fix a missing name in fact."
+            }
+          ],
+          "fallbacks": []
+        },
+        {
+          "turn": 3,
+          "completed": true,
+          "error": null,
+          "wallMs": 52524,
+          "durationMs": 52461,
+          "requests": 3,
+          "inputBytes": 336282,
+          "inputTokens": 68814,
+          "outputTokens": 1786,
+          "corrections": [
+            {
+              "request": 2,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Dena explains that both credential reads succeeded, the relay changed its eligibility response, and replacing the reader will not reverse the pending reconciliation decision.\". A paraphrase does not satisfy this check."
+            },
+            {
+              "request": 3,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Dena explains that both credential reads succeeded, the relay changed its eligibility response, and replacing the reader will not reverse the pending reconciliation decision.\". A paraphrase does not satisfy this check."
+            }
+          ],
+          "fallbacks": [
+            "Scene recovery after 2 invalid responses; saved outcomes and local observations published without further correction requests.",
+            "Published retained outcomes and observable local openings without another model request."
+          ]
+        },
+        {
+          "turn": 4,
+          "completed": true,
+          "error": null,
+          "wallMs": 81211,
+          "durationMs": 81144,
+          "requests": 5,
+          "inputBytes": 657513,
+          "inputTokens": 134014,
+          "outputTokens": 2937,
+          "corrections": [
+            {
+              "request": 1,
+              "feedback": "investigate: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"nextChange\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"number\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"dueTurn\"\n    ],\n    \"message\": \"Required\"\n  }\n]"
+            },
+            {
+              "request": 3,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Rook requests supervised audit inspection; Bram refuses admission and identifies a staff-terminal request for a redacted audit extract as a different available approach.\". A paraphrase does not satisfy this check.\nPersist the person in \"Ask Bram Voss to authorize a supervised inspection of the relay audit record with Dena Orr, explaining that her discrepancy sheet shows a clean read changing to a duplicate rejection\" with meet.person, act.npcs, or an investigate source of kind:npc. An unnamed person can keep a stable public role label. Reuse their saved ID and actual location; a place source cannot stand in for the person answering.\nOutcome intent:89: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excer"
+            },
+            {
+              "request": 4,
+              "feedback": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"object\",\n    \"path\": [\n      \"beats\",\n      2,\n      \"finding\",\n      \"source\"\n    ],\n    \"message\": \"Expected string, received object\"\n  }\n]"
+            },
+            {
+              "request": 5,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:0: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"The clinic diagnostic technician explains the bench's physical isolation, read-only adapter and the sufficiency of Nessa's consent for offline repair and examination.\". A paraphrase does not satisfy this check."
+            }
+          ],
+          "fallbacks": [
+            "Scene recovery after 3 invalid responses; saved outcomes and local observations published without further correction requests.",
+            "Published retained outcomes and observable local openings without another model request."
+          ]
+        },
+        {
+          "turn": 5,
+          "completed": true,
+          "error": null,
+          "wallMs": 56917,
+          "durationMs": 56838,
+          "requests": 4,
+          "inputBytes": 579769,
+          "inputTokens": 116711,
+          "outputTokens": 1656,
+          "corrections": [
+            {
+              "request": 3,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nOutcome intent:72: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Rook uses the specific authorization Bram granted to enter with Dena under supervision; Bram opens the audit cabinet for the authorized inspection.\". A paraphrase does not satisfy this check.\nOutcome intent:190: copy resolves[].fact verbatim into the containing act.fact, or make resolves[].fact an exact excerpt of that act.fact. Include this outcome sentence: \"Patch completes the requested unpowered connector repair without using a network; Nessa retains custody, and no reading or upload occurs.\". A paraphrase does not satisfy this check."
+            }
+          ],
+          "fallbacks": []
+        }
+      ],
+      "totalMs": 373880,
+      "requests": 20,
+      "corrections": 13,
+      "fallbackTurns": 3,
+      "inputTokens": 493921,
+      "outputTokens": 12669
+    },
+    {
+      "label": "final",
+      "directory": "data/playtests/cyberworld-latency-final-2026-11-13/",
+      "rows": [
+        {
+          "turn": 1,
+          "completed": true,
+          "error": null,
+          "wallMs": 90712,
+          "durationMs": 90667,
+          "requests": 4,
+          "inputBytes": 424555,
+          "inputTokens": 88386,
+          "outputTokens": 2948,
+          "corrections": [
+            {
+              "request": 2,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nbeats[2]: One main and one minor action per actor.\nResolve intent:72 (Use Circuit Trace to inspect the broken connector) at its actual place using resolves:[{id,outcome:\"resolved\"|\"blocked\"|\"deferred\",fact}] on its act/meet/take/investigate. A combined main action may cover multiple IDs with separate outcomes; explain any turn-limit deferral. One unrelated result cannot cover every target.\nResolve intent:93 (inspect the broken connector) at its actual place using resolves:[{id,outcome:\"resolved\"|\"blocked\"|\"deferred\",fact}] on its act/meet/take/investigate. A combined main action may cover multiple IDs with separate outcomes; explain any turn-limit deferral. One unrelated result cannot cover every target."
+            },
+            {
+              "request": 3,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nPersist the person in \"Ask Nessa's permission to examine her damaged shard while she holds it\" with meet.person, act.npcs, or an investigate source of kind:npc. An unnamed person can keep a stable public role label. Reuse their saved ID and actual location; a place source cannot stand in for the person answering."
+            },
+            {
+              "request": 4,
+              "feedback": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"object\",\n    \"path\": [\n      \"beats\",\n      1,\n      \"finding\",\n      \"source\"\n    ],\n    \"message\": \"Expected string, received object\"\n  }\n]"
+            }
+          ],
+          "fallbacks": [
+            "Scene recovery after 3 invalid responses; saved outcomes and local observations published without further correction requests.",
+            "Published retained outcomes and observable local openings without another model request."
+          ]
+        },
+        {
+          "turn": 2,
+          "completed": true,
+          "error": null,
+          "wallMs": 76385,
+          "durationMs": 76342,
+          "requests": 3,
+          "inputBytes": 317320,
+          "inputTokens": 65181,
+          "outputTokens": 2121,
+          "corrections": [
+            {
+              "request": 1,
+              "feedback": "NPC state needs an observed, successful or informational event at its stated place."
+            },
+            {
+              "request": 2,
+              "feedback": "The scene needs corrections; repair the indicated fields and operations:\nbeats[5]: One main and one minor action per actor."
+            },
+            {
+              "request": 3,
+              "feedback": "NPC state needs an observed, successful or informational event at its stated place."
+            }
+          ],
+          "fallbacks": [
+            "Scene recovery after 3 invalid responses; saved outcomes and local observations published without further correction requests.",
+            "Published retained outcomes and observable local openings without another model request."
+          ]
+        },
+        {
+          "turn": 3,
+          "completed": true,
+          "error": null,
+          "wallMs": 55173,
+          "durationMs": 55124,
+          "requests": 2,
+          "inputBytes": 225415,
+          "inputTokens": 46086,
+          "outputTokens": 1615,
+          "corrections": [],
+          "fallbacks": []
+        },
+        {
+          "turn": 4,
+          "completed": true,
+          "error": null,
+          "wallMs": 76129,
+          "durationMs": 76037,
+          "requests": 3,
+          "inputBytes": 397511,
+          "inputTokens": 80584,
+          "outputTokens": 2967,
+          "corrections": [
+            {
+              "request": 2,
+              "feedback": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"exits\"\n    ],\n    \"path\": [\n      \"beats\",\n      0\n    ],\n    \"message\": \"Unrecognized key(s) in object: 'exits'\"\n  }\n]"
+            }
+          ],
+          "fallbacks": []
+        },
+        {
+          "turn": 5,
+          "completed": true,
+          "error": null,
+          "wallMs": 42733,
+          "durationMs": 42660,
+          "requests": 3,
+          "inputBytes": 434265,
+          "inputTokens": 87444,
+          "outputTokens": 1634,
+          "corrections": [],
+          "fallbacks": []
+        }
+      ],
+      "totalMs": 340830,
+      "requests": 15,
+      "corrections": 7,
+      "fallbackTurns": 2,
+      "inputTokens": 367681,
+      "outputTokens": 11285
+    },
+    {
+      "label": "verified",
+      "directory": "data/playtests/cyberworld-latency-verified-2026-11-13/",
+      "rows": [
+        {
+          "turn": 1,
+          "completed": true,
+          "error": null,
+          "wallMs": 48722,
+          "durationMs": 48680,
+          "requests": 2,
+          "inputBytes": 209534,
+          "inputTokens": 43298,
+          "outputTokens": 1993,
+          "corrections": [],
+          "fallbacks": []
+        },
+        {
+          "turn": 2,
+          "completed": true,
+          "error": null,
+          "wallMs": 37837,
+          "durationMs": 37796,
+          "requests": 1,
+          "inputBytes": 102693,
+          "inputTokens": 21100,
+          "outputTokens": 1148,
+          "corrections": [],
+          "fallbacks": []
+        },
+        {
+          "turn": 3,
+          "completed": true,
+          "error": null,
+          "wallMs": 43894,
+          "durationMs": 43845,
+          "requests": 2,
+          "inputBytes": 224793,
+          "inputTokens": 46024,
+          "outputTokens": 1330,
+          "corrections": [],
+          "fallbacks": []
+        },
+        {
+          "turn": 4,
+          "completed": true,
+          "error": null,
+          "wallMs": 42737,
+          "durationMs": 42670,
+          "requests": 2,
+          "inputBytes": 262469,
+          "inputTokens": 53451,
+          "outputTokens": 1668,
+          "corrections": [],
+          "fallbacks": []
+        },
+        {
+          "turn": 5,
+          "completed": true,
+          "error": null,
+          "wallMs": 51224,
+          "durationMs": 51135,
+          "requests": 3,
+          "inputBytes": 434979,
+          "inputTokens": 87569,
+          "outputTokens": 1691,
+          "corrections": [],
+          "fallbacks": []
+        }
+      ],
+      "totalMs": 224126,
+      "requests": 10,
+      "corrections": 0,
+      "fallbackTurns": 0,
+      "inputTokens": 251442,
+      "outputTokens": 7830
+    }
+  ],
+  "improvements": {
+    "processingPercent": 66.14415990308171,
+    "requestsPercent": 47.36842105263158,
+    "inputTokensPercent": 57.74084033613445
+  }
+}

@@ -11,6 +11,7 @@ import {
   normalizeCharacter,
   rollCharacterCreation,
   startingStats,
+  rollStartingEquipment,
   validateAbilityTheme,
   strikeAilments,
 } from '../shared/rules';
@@ -256,6 +257,7 @@ it('gives major restrictions twice the compensation of minor restrictions, still
     const character = rollCharacterCreation(sheet, 'strike', 1, (sides) => sides);
     expect(characterDrawbacks(character)[0].severity).toBe(expected);
     expect(character.creationBonuses!.abilityPower).toBe(expected);
+    character.equipmentOptions = rollStartingEquipment(character, () => 1);
     expect(normalizeCharacter(character).creationBonuses).toEqual(character.creationBonuses);
   }
   const sheet = offers();
@@ -276,6 +278,7 @@ it('crosses a modifier threshold with one or two attribute points without erasin
     const character = rollCharacterCreation(sheet, 'strike', 1, () => 1);
     expect(character.creationBonuses!.attributes).toEqual(Array(points).fill('STR'));
     expect(modifier(character.stats.STR) - modifier(initial)).toBe(1);
+    character.equipmentOptions = rollStartingEquipment(character, () => 1);
     expect(normalizeCharacter(character).stats).toEqual(character.stats);
     if (initial === 5)
       expect(() =>
@@ -317,6 +320,7 @@ it('keeps earlier saved compensation and power intact', () => {
   const character = rollCharacterCreation(sheet, 'strike', 1, () => 1);
   character.creationBonuses = { attributes: ['STR'], abilityPower: 0 };
   character.abilityOptions![0].dice = '2d8';
+  character.equipmentOptions = rollStartingEquipment(character, () => 1);
   const saved = normalizeCharacter(characterSchema.parse(character));
   expect(saved.stats.STR).toBe(6);
   expect(saved.abilityOptions![0].dice).toBe('2d8');

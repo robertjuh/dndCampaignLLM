@@ -118,7 +118,7 @@ it('uses an accessible campaign theme and host model for character and starting 
     ] as const) {
       const response = await generate(token, context);
       expect(response.statusCode).toBe(200);
-      expect(response.json().equipmentOptions).toHaveLength(5);
+      expect(response.json().equipmentOptions).toHaveLength(7);
     }
     expect(providers).toHaveBeenCalledTimes(3);
     for (const call of providers.mock.calls) expect(call).toEqual([host.id, config]);
@@ -199,7 +199,7 @@ it('preserves an explicit character name through generation and saving in every 
       character.abilities = ['combat', 'utility'].map((kind) =>
         character.abilityOptions.find((a: Ability) => a.kind === kind),
       );
-      character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item: Item) => item.id);
+      character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item: Item) => item.id);
       const saved = await app.inject({
         method: 'POST',
         url: '/api/characters',
@@ -258,7 +258,7 @@ it('lets a fallen player generate in their campaign context, save their picks, a
     character.abilities = ['combat', 'utility'].map((kind) =>
       character.abilityOptions.find((a: Ability) => a.kind === kind),
     );
-    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item: Item) => item.id);
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item: Item) => item.id);
     const saved = await app.inject({
       method: 'POST',
       url: '/api/characters',

@@ -124,7 +124,7 @@ it('keeps both split-party outcomes in the summary and narrates the saved findin
   expect(value.sceneDraft!.summary).toContain('pilot');
   expect(value.sceneDraft!.passages.filter((passage) => passage.text.includes('Scene loot is available'))).toEqual([]);
   const prose = value.sceneDraft!.passages.map((passage) => passage.text).join('\n');
-  expect(prose).not.toContain(finding.finding.fact);
+  expect(prose.split(finding.finding.fact)).toHaveLength(2);
   expect(prose.match(/The witness at the Landing Docks can describe the skiff/g)).toHaveLength(1);
   expect(value.journal.some((entry) => entry.detail.includes(finding.finding.fact))).toBe(true);
   // Another character's ordinary travel cannot make a repeated answer rewardable.

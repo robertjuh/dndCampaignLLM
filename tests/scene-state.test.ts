@@ -428,7 +428,7 @@ it('resumes finalized scene state after restart without another adjudication or 
     campaign = game.create(host.id, context().config);
   for (const [i, player] of players.entries()) {
     const character = templateCharacter(i ? 'Rustbeard' : 'Ragman');
-    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
     game.join(campaign.inviteCode!, player.id, game.saveCharacter(player.id, character).id);
   }
   game.start(campaign.id, host.id);

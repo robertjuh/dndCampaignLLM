@@ -116,7 +116,7 @@ export function retainAdjudicationProgress(
     });
     const synthetic = fallback.events.filter(
       (event) =>
-        !engineIds.has(event.id) &&
+        !ids.has(event.id) &&
         !(event.memberId && event.phase && selected.has(key(event.memberId, event.phase))),
     );
     const events = [...engine, ...owned, ...world, ...synthetic];
@@ -167,6 +167,7 @@ export function retainAdjudicationProgress(
       ...fallback,
       actions,
       pickups: candidate.pickups?.filter((pickup) => owned.some((event) => event.id === pickup.eventId)),
+      questUpdates: candidate.questUpdates?.filter((update) => ids.has(update.eventId)),
       npcUpdates: candidate.npcUpdates?.filter((update) => ids.has(update.eventId)),
       featureUpdates: candidate.featureUpdates?.filter((update) => ids.has(update.eventId)),
       structureUpdates: candidate.structureUpdates?.filter((update) => ids.has(update.eventId)),
@@ -217,6 +218,7 @@ export function retainAdjudicationProgress(
     }
   // Standalone public exchanges/state changes may survive independently of invalid player components.
   const stateEvents = new Set([
+    ...(candidate.questUpdates ?? []).map((update) => update.eventId),
     ...(candidate.npcUpdates ?? []).map((update) => update.eventId),
     ...(candidate.featureUpdates ?? []).map((update) => update.eventId),
     ...(candidate.structureUpdates ?? []).map((update) => update.eventId),
@@ -245,7 +247,10 @@ export function applyAdjudicationRepair(
     const raw = input as { actions: unknown; events: unknown };
     if (Array.isArray(raw.actions) && Array.isArray(raw.events)) {
       const eventIds = new Set(raw.events.map((event) => event?.id));
-      const background = retained.value.events.filter((event) => !eventIds.has(event.id));
+      const engine = engineEvents(context);
+      const engineIds = new Set(engine.map((event) => event.id));
+      const background = [...engine.filter((event) => !eventIds.has(event.id)),
+        ...retained.value.events.filter((event) => !eventIds.has(event.id) && !engineIds.has(event.id))];
       const backgroundIds = new Set(background.map((event) => event.id));
       const actors = new Set(raw.actions.map((action) => action?.memberId));
       const identities = new Set(raw.actions.map((action) => action?.actionId));
@@ -274,21 +279,22 @@ export function applyAdjudicationRepair(
   const base = retained.value;
   if ((patch.turnId && patch.turnId !== base.turnId) || (patch.version && patch.version !== base.version))
     throw new Error('Recovery belongs to another turn.');
-  const engineIds = new Set(engineEvents(context).map((event) => event.id));
+  const engine = engineEvents(context);
+  const engineIds = new Set(engine.map((event) => event.id));
   const replacements = new Map((patch.actions ?? []).map((action) => [action.memberId, action]));
   if (
     replacements.size !== (patch.actions ?? []).length ||
     [...replacements.keys()].some((id) => !base.actions.some((action) => action.memberId === id))
   )
     throw new Error('Recovery actions must use distinct submitted actors.');
-  const events = base.events.filter(
+  const events = [...engine, ...base.events.filter(
     (event) =>
-      engineIds.has(event.id) ||
+      !engineIds.has(event.id) && (
       !event.memberId ||
       !event.phase ||
       retained.locked.has(key(event.memberId, event.phase)) ||
-      !replacements.has(event.memberId),
-  );
+      !replacements.has(event.memberId)),
+  )];
   for (const event of patch.events ?? []) {
     if (events.some((saved) => saved.id === event.id))
       throw new Error('Recovery cannot replace a retained event.');
@@ -323,6 +329,8 @@ export function applyAdjudicationRepair(
     ...base,
     ...patch,
     actions,
+    questUpdates: merge(base.questUpdates ?? [], patch.questUpdates ?? [], ({ operation }) =>
+      `${operation.type}:${operation.type === 'offer' ? operation.quest.id : operation.questId}`),
     pickups: merge(base.pickups ?? [], patch.pickups ?? [], (item) => item.eventId),
     structureUpdates: base.structureUpdates === undefined && patch.structureUpdates === undefined ? undefined :
       merge(base.structureUpdates ?? [], patch.structureUpdates ?? [], (item) => item.id),

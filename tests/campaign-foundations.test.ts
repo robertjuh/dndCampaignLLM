@@ -5,10 +5,11 @@ import { openDatabase } from '../server/db';
 import { PracticeGM } from '../server/providers';
 import { compileSceneTurn, type SceneTurn } from '../server/scene-turn';
 import { submittedActionObligations } from '../server/action-intent';
+import { validateAdjudication } from '../server/turn-resolution';
 import { advanceWorldProgression, worldProgressionContext } from '../server/world-progression';
 import { baseItem, initialScene, initialState } from '../shared/rules';
 import { ensureLocations, memberScene, knownLocations } from '../shared/locations';
-import { templateCharacter } from '../shared/schema';
+import { templateCharacter, enemySchema } from '../shared/schema';
 import { prepareGMNotes, updateGMMemory } from '../shared/gm-memory';
 
 function context(): GMContext {
@@ -535,6 +536,166 @@ function opening(ctx: GMContext, premise: (typeof premises)[number]): SceneTurn 
   };
 }
 
+it('bounds the assembled opening while preserving long faction background outside spoken prose', () => {
+  const ctx = context();
+  ctx.turn.number = 0;
+  ctx.turn.actions = [];
+  const background = 'Long established public faction history. '.repeat(50).trim();
+  ctx.receipts!.factionIntroductions = [background];
+  const proposal = opening(ctx, premises[0]);
+  const value = compileSceneTurn(ctx, proposal);
+  expect(value.events.find((event) => event.id === 'faction:connection:0')).toMatchObject({
+    presentation: 'log', fact: background,
+  });
+  expect(value.sceneDraft!.passages.flatMap((passage) => passage.eventIds)).not.toContain('faction:connection:0');
+  expect(value.events.find((event) => event.kind === 'world')?.fact).toContain(premises[0].object);
+  const beat = proposal.beats[0];
+  if (beat.kind !== 'world') throw new Error('Expected opening scenery.');
+  beat.text = 'An unfolding event. '.repeat(41);
+  expect(() => compileSceneTurn(ctx, proposal)).toThrow(/Opening has 123 spoken words/);
+});
+
+it('routes a named active incassocrawler into local combat while keeping passive scenery distinct', () => {
+  const ctx = context();
+  const actor = ctx.members[0].id, at = ctx.scene.location.id!;
+  ctx.turn.actions = [{ memberId: actor, text: 'Ik val de incassocrawler aan', passed: false }];
+  const robot = enemySchema.parse({ id: 'crawler', name: 'Incassocrawler', tier: 'normal',
+    hp: 20, defense: 10, attack: 2, damage: '1d4',
+    description: 'An autonomous collection robot turns its sensors and grasping arms toward the party.',
+    tactic: 'Defend its chassis.',
+  });
+  ctx.scene.npcs = { crawler: { id: robot.id, name: robot.name, aliases: [], locationId: at,
+    status: 'alive', allegiance: null, fact: robot.description,
+  }, cora: { id: 'cora', name: 'Cora Pike', aliases: [], locationId: at,
+    status: 'alive', allegiance: null, fact: 'Cora Pike guards the clinic shipment.',
+  } };
+  const scene: SceneTurn = { version: 3, notes: [], summary: 'The traveller confronts the incassocrawler.',
+    beats: [{ kind: 'act', actor, slot: 'main', intent: 'action', fact: 'The traveller confronts the Incassocrawler at its chassis.',
+      text: 'The traveller closes on the incassocrawler.', npcs: [{ npcId: robot.id, name: robot.name }],
+    }],
+  };
+  expect(() => compileSceneTurn(ctx, scene)).toThrow(/needs start_combat/);
+  ctx.receipts!.startCombatByLocation = { [at]: { enemies: [robot], round: 1,
+    initiative: [{ id: actor, total: 15 }, { id: robot.id, total: 10 }], victory: false, escaped: false,
+  } };
+  ctx.receipts!.combatIntroductionsByLocation = { [at]: 'The Incassocrawler raises its arms as the traveller attacks. Combat begins.' };
+  ctx.turn.actions[0].text = 'I attack the Incassocrawler to protect Cora Pike.';
+  const started = compileSceneTurn(ctx, scene);
+  expect(started.events.some((event) => event.receiptRefs.includes('tool:startCombatByLocation'))).toBe(true);
+  expect(started.changes).toEqual([]);
+  expect(robot.hp).toBe(20);
+  delete ctx.receipts!.startCombatByLocation;
+  delete ctx.receipts!.combatIntroductionsByLocation;
+  const beat = scene.beats[0];
+  if (beat.kind !== 'act') throw new Error('Expected the submitted attack.');
+  beat.npcs![0].status = 'surrendered';
+  beat.fact = 'The Incassocrawler folds its arms and surrenders to the traveller.';
+  beat.text = 'The incassocrawler folds its arms and surrenders.';
+  expect(compileSceneTurn(ctx, scene).npcUpdates).toContainEqual(expect.objectContaining({ npcId: robot.id, status: 'surrendered' }));
+  ctx.scene.npcs = {};
+  delete beat.npcs;
+  beat.fact = 'The traveller strikes the parked Incassocrawler chassis.';
+  beat.text = 'A blow rings against the parked chassis.';
+  ctx.scene.features = { crawler: { id: 'crawler', name: 'Incassocrawler', aliases: [], locationId: at,
+    properties: {}, fact: 'A parked collection vehicle stands here.',
+  } };
+  expect(() => compileSceneTurn(ctx, scene)).not.toThrow();
+  ctx.scene.npcs = { hollis: { id: 'hollis', name: 'Hollis Vale', aliases: [], locationId: at,
+    status: 'alive', allegiance: null, fact: 'Hollis Vale watches the parked vehicle.',
+  } };
+  ctx.turn.actions[0].text = "I attack Hollis Vale's crawler.";
+  expect(() => compileSceneTurn(ctx, scene)).not.toThrow();
+  for (const text of ['Ik val de incassocrawler niet aan', "I do not attack the Incassocrawler", 'I say "attack the Incassocrawler"']) {
+    ctx.turn.actions[0].text = text;
+    expect(submittedActionObligations(ctx, actor).filter((intent) => intent.kind === 'attack')).toEqual([]);
+  }
+});
+
+it('requires current saved physical evidence for a blocked attack, across scene and shared validation', () => {
+  const ctx = context();
+  const actor = ctx.members[0].id, at = ctx.scene.location.id!;
+  ctx.turn.actions = [{ memberId: actor, text: 'I attack Hollis Vale.', passed: false }];
+  ctx.scene.npcs = { hollis: { id: 'hollis', name: 'Hollis Vale', aliases: [],
+    locationId: at, status: 'alive', allegiance: null, fact: 'Hollis Vale is peaceful.',
+  } };
+  const barrier = 'A sealed glass partition separates Hollis Vale from the traveller.';
+  const scene: SceneTurn = { version: 3, notes: [], summary: 'The attack is blocked.',
+    beats: [{ kind: 'act', actor, slot: 'main', intent: 'action',
+      blocked: 'Hollis Vale is peaceful.', fact: 'The traveller leaves Hollis Vale unharmed.',
+      text: 'The traveller cannot attack Hollis Vale because he is peaceful.',
+    }],
+  };
+  const beat = scene.beats[0];
+  if (beat.kind !== 'act') throw new Error('Expected attack.');
+  for (const reason of ['Hollis Vale is peaceful.', 'Hollis Vale has no combat stats.', barrier]) {
+    beat.blocked = reason;
+    expect(() => compileSceneTurn(ctx, scene)).toThrow(/blocked attack needs withoutCheck/);
+  }
+  beat.withoutCheck = { sourceId: 'npc:hollis', evidence: 'Hollis Vale is peaceful.' };
+  beat.blocked = beat.withoutCheck.evidence;
+  expect(() => compileSceneTurn(ctx, scene)).toThrow(/blocked attack needs withoutCheck/);
+  beat.withoutCheck = { sourceId: 'feature:glass', evidence: barrier };
+  beat.blocked = barrier;
+  beat.fact = `The traveller's attack on Hollis Vale is blocked. ${barrier}`;
+  beat.text = 'The traveller strikes the glass partition in front of Hollis Vale.';
+  expect(() => compileSceneTurn(ctx, scene)).toThrow(/blocked attack needs withoutCheck/);
+  ctx.scene.features = { glass: { id: 'glass', name: 'Glass partition', aliases: [], locationId: at,
+    properties: { closed: true }, fact: barrier,
+  } };
+  const before = structuredClone(ctx.members);
+  const accepted = compileSceneTurn(ctx, scene);
+  expect(accepted.actions[0].components.main).toMatchObject({ status: 'blocked', withoutCheck: beat.withoutCheck });
+  expect(ctx.members).toEqual(before);
+  const missingProof = structuredClone(accepted);
+  delete missingProof.actions[0].components.main!.withoutCheck;
+  expect(() => validateAdjudication(ctx, missingProof)).toThrow(/blocked attack needs withoutCheck/);
+  const forgedProof = structuredClone(accepted);
+  forgedProof.actions[0].components.main!.withoutCheck!.evidence = 'A new force field protects Hollis Vale.';
+  expect(() => validateAdjudication(ctx, forgedProof)).toThrow(/blocked attack needs withoutCheck/);
+  const unrelated = 'A sealed glass partition separates Hollis Valentine from the traveller.';
+  ctx.scene.features.glass.fact = unrelated;
+  beat.blocked = unrelated;
+  beat.withoutCheck.evidence = unrelated;
+  expect(() => compileSceneTurn(ctx, scene)).toThrow(/blocked attack needs withoutCheck/);
+  ctx.scene.features.glass.fact = barrier;
+  beat.blocked = barrier;
+  beat.withoutCheck.evidence = barrier;
+
+  const beyond = randomUUID();
+  ctx.scene.places![beyond] = { location: { id: beyond, name: 'Beyond the glass', atmosphere: '', hazard: '' },
+    encounter: null, loot: [],
+  };
+  ctx.scene.worldMap!.nodes[beyond] = { id: beyond, name: 'Beyond the glass', visited: true };
+  ctx.scene.worldMap!.connections.push({ from: at, to: beyond, label: 'Glass partition', blocked: true, bidirectional: true });
+  ctx.scene.features.glass.route = { from: at, to: beyond };
+  expect(() => compileSceneTurn(ctx, scene)).not.toThrow();
+  const openedRoute: SceneTurn = { ...scene, beats: [{ kind: 'world', at,
+    fact: 'Hollis Vale opens the passage through the glass partition.', text: 'Hollis opens the passage.',
+    exits: [{ to: beyond, label: 'Glass partition', blocked: false, bidirectional: true }],
+  }, beat] };
+  expect(() => compileSceneTurn(ctx, openedRoute)).toThrow(/blocked attack needs withoutCheck/);
+  delete ctx.scene.features.glass.route;
+
+  const opened: SceneTurn = { ...scene, beats: [{ kind: 'world', at,
+    fact: 'Hollis Vale opens the Glass partition, leaving the traveller a clear approach.',
+    text: 'Hollis opens the partition.',
+    features: [{ featureId: 'glass', name: 'Glass partition', properties: { closed: false } }],
+  }, beat] };
+  expect(() => compileSceneTurn(ctx, opened)).toThrow(/blocked attack needs withoutCheck/);
+
+  delete ctx.scene.features.glass;
+  ctx.scene.location.hazard = barrier;
+  beat.withoutCheck.sourceId = `scene:${ctx.scene.location.name}:hazard`;
+  expect(() => compileSceneTurn(ctx, scene)).not.toThrow();
+  ctx.scene.location.hazard = '';
+  delete beat.withoutCheck;
+  ctx.members[0].state.conditions = ['Stunned'];
+  beat.blocked = 'The traveller is Stunned.';
+  beat.fact = 'The Stunned traveller cannot act against Hollis Vale.';
+  beat.text = 'The traveller is Stunned and cannot attack.';
+  expect(compileSceneTurn(ctx, scene).actions[0].components.main?.status).toBe('blocked');
+});
+
 it('rejects an opening with missing declared people, objects, offers or mystery preparation together', () => {
   const ctx = context();
   ctx.turn.number = 0;
@@ -620,7 +781,7 @@ it.each(premises)(
       const member = game.members(campaign.id)[0];
       game.manageCharacter(campaign.id, player.id, {
         type: 'starter',
-        itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+        itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
       });
       game.start(campaign.id, host.id);
       await game.idle();
@@ -701,7 +862,7 @@ it('publishes finite journey progress once across restart and an interrupted fin
     const member = game.members(campaign.id)[0];
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     game.start(campaign.id, host.id);
     await game.idle();

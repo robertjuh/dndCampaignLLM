@@ -19,6 +19,7 @@ import { applyNPCUpdates, knownNPCs } from './npcs';
 import { applyFeatureUpdates } from './scene-state';
 import { memberLocationAtEvent } from './world-map';
 import { applyFactionEffects } from './factions';
+import { unquotedActionText } from './turn-pickups';
 
 type Delivery = { memberId: string; itemId: string; quantity: number };
 type Claim = { questId: string; locationId: string; eventId: string; deliveries: Delivery[] };
@@ -68,6 +69,30 @@ function reachable(scene: Scene, origin: string, target: string) {
 
 /** The same pure plan is used for validation and atomic finalization. No model-authored progress. */
 export function planQuests(context: GMContext, value: TurnAdjudication): QuestPlan {
+  for (const submitted of context.turn.actions) {
+    if (submitted.passed || submitted.gathering || submitted.supportAction) continue;
+    const text = unquotedActionText(submitted.text);
+    // ponytail: guard explicit job-seeking/acceptance; ordinary conversation stays with the GM.
+    if (/\b(?:not|never|don't|won't|niet|nooit|geen)\b/iu.test(text)) continue;
+    const result = value.actions.find((action) => action.memberId === submitted.memberId);
+    if (!result?.components.main || result.components.main.processingFailure ||
+      result.components.main.status === 'blocked' || result.components.main.status === 'failure') continue;
+    const at = value.memberLocations?.find((position) => position.memberId === submitted.memberId)?.locationId ??
+      memberScene(context.scene, submitted.memberId).location.id;
+    const local = Object.values(context.scene.quests ?? {}).filter((quest) =>
+      context.scene.npcs?.[quest.giverId]?.locationId === at && quest.status === 'offered');
+    const operations = (value.questUpdates ?? []).filter((update) => {
+      const event = value.events.find((event) => event.id === update.eventId);
+      return event && (event.memberId === submitted.memberId ||
+        (event.kind === 'world' && (event.locationRef === at || event.locationRef === 'current')));
+    }).map((update) => update.operation);
+    if (/\b(?:find|seek|look\s+for|search\s+for|zoek(?:en)?)\b[^.!?;\n]{0,60}\b(?:quests?|jobs?|work|opdracht(?:en)?|werk)\b/iu.test(text) &&
+      !local.length && !operations.some((operation) => operation.type === 'offer') && !result.search)
+      throw new Error('The submitted quest/job search needs a saved quest offer with objective and reward, or a concrete search finding/local lead or refusal. An offer in prose alone is incomplete; attach quests:[{type:"offer",quest:{...}}] to its evidence beat.');
+    if (/\b(?:accept|aanvaard|accepteer)\b[^.!?;\n]{0,45}\b(?:quest|job|offer|request|opdracht|aanbod)\b/iu.test(text) &&
+      local.length === 1 && !operations.some((operation) => operation.type === 'accept' && operation.questId === local[0].id))
+      throw new Error(`The submitted acceptance needs quests:[{type:"accept",questId:"${local[0].id}"}] on its action beat. Preserve the existing offer and its agreed reward.`);
+  }
   if (!Object.keys(context.scene.quests ?? {}).length && !value.questUpdates?.length)
     return { quests: {}, claims: [] };
   const scene = structuredClone(context.scene);

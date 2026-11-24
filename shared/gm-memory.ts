@@ -35,7 +35,9 @@ export const gmMemorySchema = z
     'Private notes must have distinct IDs.',
   );
 export type GMMemory = z.infer<typeof gmMemorySchema>;
-export const gmNotePatchSchema = gmNoteSchema.omit({ revealed: true }).partial().required({ id: true });
+export const gmNotePatchSchema = gmNoteSchema.omit({ revealed: true }).partial().required({ id: true }).extend({
+  appendDiscoveries: gmNoteSchema.shape.discoveries.optional(),
+});
 
 /** Existing preparation is updated by ID; the model need not repeat immutable prose. */
 export function prepareGMNotes(previous: GMMemory, patches: z.infer<typeof gmNotePatchSchema>[]): GMMemory {
@@ -53,12 +55,16 @@ export function prepareGMNotes(previous: GMMemory, patches: z.infer<typeof gmNot
         'Journey counters, delay receipts and completion are engine-owned; omit them from note patches.',
       );
   }
-  const notes = patches.map((patch) =>
-    gmNoteSchema.parse({
-      ...previous.find((note) => note.id === patch.id),
+  const notes = patches.map(({ appendDiscoveries, ...patch }) => {
+    const saved = previous.find((note) => note.id === patch.id);
+    if (appendDiscoveries && (!saved || patch.discoveries))
+      throw new Error('appendDiscoveries extends an existing hook; omit discoveries and preserve its saved indexes.');
+    return gmNoteSchema.parse({
+      ...saved,
       ...patch,
-    }),
-  );
+      ...(appendDiscoveries ? { discoveries: [...saved!.discoveries, ...appendDiscoveries] } : {}),
+    });
+  });
   updateGMMemory(previous, notes);
   return gmMemorySchema.parse(notes);
 }

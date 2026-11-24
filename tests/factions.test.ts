@@ -88,7 +88,7 @@ function fixture(
     const member = game.members(campaign.id).find((member) => member.playerId === player.id)!;
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
   });
   return {
@@ -254,7 +254,12 @@ it('keeps optional connection rolls, opt-out and affiliations independent from r
   expect(members[0].state.factionAffiliation?.kind).toBe('contact');
   expect(members[1].state.factionAffiliation).toBeUndefined();
   expect(f.snapshot().factions).toHaveLength(1);
-  expect(f.snapshot().history[0].result?.narration).toContain('Mira knows Gate Wardens');
+  expect(f.snapshot().history[0].result?.narration).not.toContain('Mira knows Gate Wardens');
+  const opening = JSON.parse((f.db.prepare('SELECT draft FROM turns WHERE campaign_id = ? AND number = 0')
+    .get(f.campaign.id) as { draft: string }).draft);
+  expect(opening.resolution.events).toContainEqual(expect.objectContaining({
+    fact: expect.stringContaining('Mira knows Gate Wardens'), presentation: 'log',
+  }));
   const context = { factions: f.world(), members } as GMContext;
   const value = {
     factionEffects: [
@@ -563,7 +568,7 @@ it('initializes late arrivals once and resets relationships when a replacement r
   await f.start();
   const late = f.game.identify();
   const sheet = templateCharacter('Late traveler');
-  sheet.selectedEquipmentIds = sheet.equipmentOptions.slice(0, 2).map((item) => item.id);
+  sheet.selectedEquipmentIds = sheet.equipmentOptions.slice(0, 3).map((item) => item.id);
   const saved = f.game.saveCharacter(late.id, sheet);
   f.game.join(f.campaign.inviteCode!, late.id, saved.id);
   await f.next(); // Arrival is excluded from the already collecting roster.
@@ -588,7 +593,7 @@ it('initializes late arrivals once and resets relationships when a replacement r
   f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(dead.state), dead.id);
   const replacementSheet = templateCharacter('New traveler');
   replacementSheet.selectedEquipmentIds = replacementSheet.equipmentOptions
-    .slice(0, 2)
+    .slice(0, 3)
     .map((item) => item.id);
   const replacement = f.game.saveCharacter(f.players[0].id, replacementSheet);
   f.game.queueReplacement(f.campaign.id, f.players[0].id, replacement.id);
@@ -732,7 +737,7 @@ it('honors an explicit hostile backstory even when generated connections are dis
   const edited = f.game.members(f.campaign.id)[0];
   f.game.manageCharacter(f.campaign.id, f.players[0].id, {
     type: 'starter',
-    itemIds: edited.state.starterEquipment.slice(0, 2).map((item) => item.id),
+    itemIds: edited.state.starterEquipment.slice(0, 3).map((item) => item.id),
   });
   f.game.setFactionPreference(f.campaign.id, f.players[0].id, 'unaffiliated');
   f.provider.connectFactions = async (context, candidates) => {

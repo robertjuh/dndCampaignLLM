@@ -6,23 +6,27 @@ import vaalTravel from './fixtures/vaal-travel.json';
 import vaalReferences from './fixtures/vaal-location-references.json';
 import vaalGathering from './fixtures/vaal-gathering.json';
 import wreckSearch from './fixtures/akoedabar-search.json';
-import { compileSceneTurn, type SceneTurn } from '../server/scene-turn';
-import { ChatGPTGM, PracticeGM } from '../server/providers';
-import { Game, type GMContext, type GameTools, type GameMaster, type CombatReceipt } from '../server/game';
-import { engineEvents } from '../server/turn-resolution';
+import crookedMileOpenings from './fixtures/crooked-mile-opening.json';
+import { compileSceneTurn, mergeScenePatch, type SceneTurn } from '../server/scene-turn';
+import { applyFeatureUpdates } from '../server/scene-state';
+import { decodeStructuredOutput, modelSchema } from '../server/model-schema';
+import { ChatGPTGM, PracticeGM, adjudicationInput } from '../server/providers';
+import { Game, ToolBudgetError, type GMContext, type GameTools, type GameMaster, type CombatReceipt } from '../server/game';
+import { engineEvents, validateAdjudication } from '../server/turn-resolution';
 import { normalizeCombatInput } from '../server/combat';
 import { openDatabase } from '../server/db';
 import { initialState, initialScene, baseItem } from '../shared/rules';
 import { ensureLocations, memberScene } from '../shared/locations';
-import { gmMemorySchema, updateGMMemory } from '../shared/gm-memory';
+import { gmMemorySchema, updateGMMemory, prepareGMNotes } from '../shared/gm-memory';
 import { enemySchema, templateCharacter, type Encounter, type Scene } from '../shared/schema';
 import type { ChatGPTAuth } from '../server/auth';
-import type { Investigation, InvestigationResult } from '../shared/investigation';
+import { investigationSchema, type Investigation, type InvestigationResult } from '../shared/investigation';
 import { bindInvestigationSource } from '../server/investigations';
 import { factionExample } from '../server/factions';
 import { applyNPCUpdates } from '../server/npcs';
 import { requestsPickup } from '../server/turn-pickups';
-import { submittedTravel, locationReferences, actorReferences, normalizeAdjudicationReferences } from '../server/world-map';
+import { submittedTravel, locationReferences, actorReferences, resolveActorReference, normalizeAdjudicationReferences } from '../server/world-map';
+import { submittedActionObligations } from '../server/action-intent';
 
 function fixture(): GMContext {
   const members = tower.members.map((saved) => {
@@ -176,6 +180,113 @@ function tools(context: GMContext): GameTools {
     completeChallenge: vi.fn(),
   });
 }
+
+it('resumes the recorded Crooked Mile opening repairs after restart and publishes only a validated scene', async () => {
+  const db = openDatabase(':memory:');
+  const practice = new PracticeGM();
+  const generateFactions = vi.fn(practice.generateFactions.bind(practice));
+  const generateStartingStories = vi.fn(practice.generateStartingStories.bind(practice));
+  const [firstDraft, retryDraft] = structuredClone(crookedMileOpenings);
+  const shapeRepair = (draft: typeof retryDraft) => ({
+    version: 3,
+    opening: {
+      npcs: draft.opening.npcs.map((npc) => 'npcId' in npc ? npc.npcId : npc.id),
+      features: draft.opening.features.map((feature) => 'featureId' in feature ? feature.featureId : feature.id),
+      quests: [],
+      mysteries: draft.opening.mysteries.map((mystery) => mystery.id),
+    },
+    patches: [{
+      index: 0,
+      beat: {
+        journal: { kind: 'fact', name: 'The delayed coach' },
+        ...('progress' in draft.beats[0] ? { progress: { thread: 'premise', kind: 'threat' } } : {}),
+      },
+    }],
+  });
+  const repairedDraft = { ...retryDraft, opening: shapeRepair(retryDraft).opening,
+    beats: [{ ...retryDraft.beats[0], ...shapeRepair(retryDraft).patches[0].beat }] };
+  const replies = [
+    firstDraft,
+    shapeRepair(firstDraft),
+    { version: 3, patches: [{ index: 0, remove: true }], append: repairedDraft.beats,
+      opening: repairedDraft.opening, notes: repairedDraft.notes, summary: repairedDraft.summary,
+      currencyName: repairedDraft.currencyName },
+    retryDraft, // A full rewrite in patch mode must leave the retained draft intact.
+    { version: 3, patches: [{ index: 0, unset: ['progress'], beat: { factions: [] } }] },
+  ];
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(init!.body as string);
+    const index = fetcher.mock.calls.length - 1;
+    if (index === 2) {
+      retryDraft.beats[0].factions[0].factionId = JSON.parse(request.input[0].content).factions.factions[0].id;
+    }
+    return response(replies[index]);
+  });
+  const gm = new ChatGPTGM(auth, 'owner', 'test', fetcher);
+  const provider: GameMaster = {
+    sceneTurns: true,
+    adjudicate: gm.adjudicate.bind(gm),
+    narrate: practice.narrate.bind(practice),
+    generateFactions,
+    generateStartingStories,
+  };
+  let game = new Game(db, () => provider, () => 50);
+  try {
+    const host = game.identify();
+    const player = game.identify();
+    const campaign = game.create(host.id, { ...fixture().config, name: 'Crooked Mile', setting: 'Brindlefen' });
+    const character = templateCharacter('Traveller');
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
+    game.join(campaign.inviteCode!, player.id, game.saveCharacter(player.id, character).id);
+    game.start(campaign.id, host.id);
+    await game.idle();
+    const failed = game.snapshot(campaign.id, host.id);
+    expect(failed.history).toEqual([]);
+    expect(failed.turn).toMatchObject({
+      number: 0, phase: 'failed', rolls: [], actions: [],
+      error: 'The GM couldn’t finish preparing the opening. Your campaign is saved.',
+    });
+    expect(failed.scene.encounterRisk).toBeUndefined();
+    const diagnostics = failed.turn?.diagnostics?.join('\n');
+    expect(diagnostics).toContain('beats.0.journal: Expected object, received array');
+    expect(diagnostics).toContain('lacks its saved state update');
+    expect(diagnostics).not.toContain('Supply encounterRisks');
+    expect(game.snapshot(campaign.id, player.id).turn?.diagnostics).toBeUndefined();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    const formats = fetcher.mock.calls.map(([, init]) => JSON.parse(init!.body as string).text.format);
+    expect(formats.map((format) => format.name)).toEqual(['opening_scene', 'opening_patch', 'opening_patch']);
+    expect(formats.every((format) => format.strict === true)).toBe(true);
+    const openingSchema = formats[0].schema;
+    expect(openingSchema.properties.opening.properties.npcs.items).toMatchObject({ type: 'string', maxLength: 100 });
+    const beatSchema = openingSchema.properties.beats.items;
+    expect(beatSchema.required).toEqual(Object.keys(beatSchema.properties));
+    expect(beatSchema.properties.$optional.items.anyOf).toContainEqual(expect.objectContaining({ required: ['journal'] }));
+    expect(formats[1].schema.properties.patches.items.anyOf[0].properties.beat.properties.$optional).toBeDefined();
+
+    game = new Game(db, () => provider, () => 50);
+    game.retry(campaign.id, host.id);
+    await game.idle();
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    const requests = fetcher.mock.calls.slice(3).map(([, init]) => JSON.parse(init!.body as string).input);
+    expect(JSON.parse(requests[0][1].content)).toEqual(repairedDraft);
+    expect(requests[0][2].content).toContain('Discovery requires a story event identifying the faction by name.');
+    expect(JSON.parse(requests[1][1].content)).toEqual(repairedDraft);
+    expect(requests[1][2].content).toContain('Return a patch for the retained opening');
+    const completed = game.snapshot(campaign.id, host.id);
+    expect(completed.turn).toMatchObject({ number: 1, phase: 'collecting' });
+    expect(completed.history[0]).toMatchObject({ id: failed.turn!.id, phase: 'complete', rolls: [] });
+    expect(completed.history[0].result?.narration).toContain('The inn floor unrolls toward the marsh');
+    expect(completed.scene.encounterRisk?.danger).toBe('dangerous');
+    expect(Object.values(completed.scene.features ?? {}).map((feature) => feature.name)).toContain('Stamped hearthstone');
+    expect(game.export(campaign.id, host.id).gmMemory[0].discoveries).toContain('There are two seals on the deed.');
+    expect(JSON.stringify(completed)).not.toContain('There are two seals on the deed.');
+    expect(generateFactions).toHaveBeenCalledOnce();
+    expect(generateStartingStories).toHaveBeenCalledOnce();
+  } finally {
+    await game.idle();
+    db.close();
+  }
+});
 
 const cameraHack = 'Probe the camera security system and try to get access to the camera controls';
 function deniedCameraHack(actor: string): SceneTurn {
@@ -1306,7 +1417,7 @@ it('requires first-arrival routes while permitting an explicitly described dead 
   delete move.exits;
   expect(() => compileSceneTurn(context, proposal)).toThrow('needs explicit exits');
   move.exits = [];
-  expect(() => compileSceneTurn(context, proposal)).toThrow('open onward exit');
+  expect(() => compileSceneTurn(context, proposal)).toThrow('onward exit');
   move.place!.deadEnd = 'The forecourt ends at the barred gate; the avenue is the only way back.';
   move.text = 'Gemling reaches the forecourt, where a barred gate closes the road ahead.';
   const value = compileSceneTurn(context, proposal);
@@ -1390,18 +1501,19 @@ it.each([
 });
 
 it.each([true, false])(
-  'supplies active openings, character and faction introductions in both protocols (scene=%s)',
+  'supplies focused openings, party gathering, observed NPCs and relevant factions in both protocols (scene=%s)',
   async (sceneProtocol) => {
     const context = fixture();
     context.sceneProtocol = sceneProtocol;
     context.turn.number = 0;
     context.turn.actions = [];
     context.factions = factionExample(['wardens', 'traders', 'scholars'], context.config.setting, [], 0);
+    const relevantFaction = context.factions.factions[0];
     const at = context.scene.location.id!;
     context.scene.memberLocations = Object.fromEntries(context.members.map((member) => [member.id, at]));
     const opening: SceneTurn = {
       version: 3,
-      opening: { npcs: [], features: ['sluice'], quests: [], mysteries: [] },
+      opening: { npcs: ['new:watchman', 'new:bellkeeper'], features: ['sluice'], quests: [], mysteries: [] },
       notes: [],
       summary: 'A flood threatens the lane; the sluice workshop is accessible.',
       beats: [
@@ -1428,33 +1540,49 @@ it.each([true, false])(
             },
           ],
         },
-        ...context.members.map((member) => ({
-          kind: 'world' as const,
+        {
+          kind: 'world',
           at,
-          fact: `${member.character.name}: ${member.character.concept}. ${member.character.background}`,
-          text: `${member.character.name}: ${member.character.concept}. ${member.character.background}`,
-        })),
-        ...context.factions.factions.map((faction) => ({
-          kind: 'world' as const,
+          fact: `The party met at the bell tower after their ferry stopped here. ${context.members.map((member) => `${member.character.name}: ${member.character.concept}.`).join(' ')}`,
+          text: `The same interrupted ferry journey brought you to the bell tower. ${context.members.map((member) => `${member.character.name}: ${member.character.concept}.`).join(' ')}`,
+          journal: { kind: 'fact', name: 'How the party met' },
+        },
+        {
+          kind: 'world',
           at,
-          fact: `${faction.name}: ${faction.identity}.`,
-          text: `${faction.name}: ${faction.identity}.`,
-          factions: [
-            { type: 'discover' as const, factionId: faction.id, knownDescription: faction.identity },
+          fact: 'A mud-streaked watchman holds a broken rope while an elderly bellkeeper rings the warning bell.',
+          text: 'A mud-streaked watchman holds a broken rope; beside him an elderly bellkeeper rings the warning bell.',
+          npcs: [
+            { npcId: 'new:watchman', name: 'Mud-streaked watchman' },
+            { npcId: 'new:bellkeeper', name: 'Elderly bellkeeper' },
           ],
-        })),
+        },
+        {
+          kind: 'world',
+          at,
+          fact: `${relevantFaction.name}: ${relevantFaction.identity}. Their warning bell alerts the residents.`,
+          text: `The warning bell of ${relevantFaction.name} carries across the rising water.`,
+          factions: [
+            { type: 'discover', factionId: relevantFaction.id, knownDescription: relevantFaction.identity },
+          ],
+        },
       ],
     };
     const compiled = compileSceneTurn(context, opening);
     const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(init!.body as string);
-      expect(body.instructions).toContain(
-        'an immediate threat, an unfolding urgent problem and/or specific accessible leads',
-      );
-      expect(body.instructions).toContain(
-        'Give EVERY active party member a short individual introduction by name',
-      );
-      expect(body.instructions).toContain('Introduce EVERY supplied faction by name and public role');
+      expect(body.instructions).toContain('80–120 words TOTAL across two or three short paragraphs');
+      expect(body.instructions).toContain('Explain the party gathering in one short sentence');
+      expect(body.instructions).toContain('invent a plausible recent shared circumstance');
+      expect(body.instructions).toContain('Character cards already identify the party');
+      expect(body.instructions).toContain('Autonomous constructs use NPC identities');
+      expect(body.instructions).toContain('Make two or three available people, objects or routes concrete');
+      expect(body.instructions).toContain('On the first actual player interaction with a previously only observed NPC');
+      expect(body.instructions).toContain('Reuse the same NPC ID');
+      expect(body.instructions).toContain('who or what is affected, and why delay matters');
+      expect(body.instructions).toContain('Fuller public descriptions belong in the journal for optional reading');
+      expect(body.instructions).not.toContain('EVERY supplied faction');
+      expect(body.instructions).not.toContain('short individual introduction');
       expect(body.instructions).toContain('at least one open onward route beyond the way back');
       expect(body.instructions).not.toContain('Opening turn0 can reveal zero');
       return response(sceneProtocol ? opening : compiled);
@@ -1464,13 +1592,14 @@ it.each([true, false])(
     expect(accepted.rewards).toMatchObject({ xp: 0, currency: 0 });
     expect(accepted.factionEffects?.map((effect) => effect.factionId)).toEqual([
       'wardens',
-      'traders',
-      'scholars',
     ]);
+    expect(accepted.journal).toContainEqual(expect.objectContaining({ kind: 'fact', name: 'How the party met' }));
+    expect(accepted.npcUpdates?.map((npc) => npc.npcId)).toEqual(['new:watchman', 'new:bellkeeper']);
     const facts = accepted.events.map((event) => event.fact).join(' ');
     for (const member of context.members) expect(facts).toContain(member.character.name);
-    for (const faction of context.factions.factions) {
-      expect(facts).toContain(faction.identity);
+    expect(facts).toContain(relevantFaction.identity);
+    for (const faction of context.factions.factions.slice(1)) {
+      expect(facts).not.toContain(faction.name);
       expect(facts).not.toContain(faction.privateAgenda);
     }
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -1537,7 +1666,7 @@ it('appends a saved story combat cause as its own local scene event', () => {
   ).toBe('success');
 });
 
-it('explains how to repair an outcome paraphrased outside its containing action fact', () => {
+it('binds paraphrased outcome metadata to its actual owning event without another correction', () => {
   const context = fixture();
   const scene = descent(context);
   const act = scene.beats[1];
@@ -1545,8 +1674,8 @@ it('explains how to repair an outcome paraphrased outside its containing action 
   context.turn.actions.find((action) => action.memberId === act.actor)!.text = 'Ask Iven about the levy.';
   const fact = 'Iven says that collectors take households marked on the levy rolls.';
   act.resolves = [{ id: 'intent:0', outcome: 'resolved', fact }];
-  expect(() => compileSceneTurn(context, scene)).toThrow(
-    `Include this outcome sentence: ${JSON.stringify(fact)}. A paraphrase does not satisfy this check.`,
+  expect(compileSceneTurn(context, scene).actionOutcomes).toContainEqual(
+    expect.objectContaining({ memberId: act.actor, obligationId: 'intent:0', fact: act.fact }),
   );
   act.fact = fact;
   expect(compileSceneTurn(context, scene).actionOutcomes).toContainEqual(
@@ -2084,17 +2213,191 @@ it('rejects teleportation, blocked routes and actions for passing players', () =
   expect(() => compileSceneTurn(context, value)).toThrow(/nonpassing/);
 });
 
-it('keeps processing errors retryable instead of returning fictional blockers', async () => {
+it('keeps repeated malformed scenes retryable without inventing a fictional refusal', async () => {
   const context = fixture();
   context.requestBudget = { used: 0, limit: 3 };
   const fetcher = vi.fn(async () => response({ version: 3, beats: [], summary: 'Incomplete' }));
-  await expect(
-    new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, tools(context)),
-  ).rejects.toThrow(/request limit/);
-  expect(fetcher).toHaveBeenCalledTimes(3);
+  const result = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, tools(context));
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(result.actions.every((action) => action.components.main?.processingFailure)).toBe(true);
+  expect(result.events.filter((event) => event.id.startsWith('fallback:observation:'))).toHaveLength(context.turn.actions.length);
+  expect(result.changes).toEqual([]);
+  expect(result.memberLocations).toEqual([]);
+  expect(result.rewards).toMatchObject({ xp: 0, currency: 0 });
+  expect(context.requestBudget.fallback).toContain('without further correction');
 });
 
-it('accepts alive and repairs a shortened feature name with precise feedback instead of repeated scene rewrites', async () => {
+it.each([false, true])('preserves independently valid travel when recovery stops (tool cap=%s)', async (toolCap) => {
+  const context = fixture();
+  context.requestBudget = { used: 0, limit: 8 };
+  const incomplete = descent(context);
+  const move = incomplete.beats[0];
+  if (move.kind !== 'move') throw new Error('Expected move.');
+  incomplete.beats = [move];
+  const fetcher = vi.fn(async () => {
+    if (toolCap && fetcher.mock.calls.length === 2)
+      return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: {
+        output: Array.from({ length: 21 }, (_, index) => ({ type: 'function_call', name: 'unknown_tool',
+          call_id: `invalid-${index}`, arguments: '{}' })),
+      } })}\n\n`);
+    return response(incomplete);
+  });
+  const accepted = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, tools(context));
+  expect(fetcher).toHaveBeenCalledTimes(toolCap ? 3 : 2);
+  expect(accepted.memberLocations).toContainEqual(expect.objectContaining({ memberId: move.actor, locationId: move.to }));
+  expect(accepted.actions.some((action) => action.memberId !== move.actor && action.components.main?.processingFailure)).toBe(true);
+  expect(accepted.events.filter((event) => event.id === `fallback:observation:${move.actor}`)).toEqual([]);
+});
+
+it('ends repeated tool-only rounds without replaying a saved check or waiting for the request limit', async () => {
+  const context = fixture();
+  context.requestBudget = { used: 0, limit: 8 };
+  context.turn.actions.forEach((action) => { action.text = 'Inspect the wall.'; });
+  const saved = { id: 'fallback-check', memberId: context.members[0].id, stat: 'WIS' as const,
+    dc: 10 as const, mode: 'normal' as const, dice: [1], modifier: 0, total: 1,
+    success: false, reason: 'The wall markings are worn.', lethal: false, source: 'test' };
+  context.turn.rolls.push(saved);
+  const gameTools = tools(context);
+  vi.mocked(gameTools).mockReturnValue(saved);
+  const fetcher = vi.fn(async () => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: {
+    output: [{ type: 'function_call', name: 'roll_check', call_id: `repeat-${fetcher.mock.calls.length}`,
+      arguments: JSON.stringify({ memberId: saved.memberId, stat: saved.stat, dc: saved.dc, mode: saved.mode, reason: saved.reason }) }],
+  } })}\n\n`));
+  const value = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
+  expect(fetcher).toHaveBeenCalledTimes(4);
+  expect(gameTools).toHaveBeenCalledTimes(1);
+  expect(context.turn.rolls).toEqual([saved]);
+  expect(value.actions[0].components.main?.status).toBe('failure');
+  expect(value.events.some((event) => event.id.startsWith('fallback:observation:'))).toBe(true);
+});
+
+it('preserves independent scene progress when the provider disconnects during repair', async () => {
+  const context = fixture();
+  context.requestBudget = { used: 0, limit: 8 };
+  const incomplete = descent(context);
+  const move = incomplete.beats[0];
+  if (move.kind !== 'move') throw new Error('Expected move.');
+  incomplete.beats = [move];
+  const gameTools = tools(context);
+  gameTools.checkpointAdjudication = vi.fn();
+  const fetcher = vi.fn(async () => {
+    if (fetcher.mock.calls.length === 1) return response(incomplete);
+    throw new TypeError('Connection lost during scene repair.');
+  });
+  const result = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
+  expect(gameTools.checkpointAdjudication).toHaveBeenCalledTimes(1);
+  expect(result.memberLocations).toContainEqual(expect.objectContaining({ memberId: move.actor, locationId: move.to }));
+  expect(result.actions.some((action) => action.memberId !== move.actor && action.components.main?.processingFailure)).toBe(true);
+});
+
+it.each([true, false])('recovers at the twenty-tool cap without running the extra resource call (scene=%s)', async (sceneProtocol) => {
+  const context = fixture();
+  context.sceneProtocol = sceneProtocol;
+  context.requestBudget = { used: 0, limit: 8 };
+  const actor = context.members[0];
+  const potion = { ...baseItem('unspent-gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 1 };
+  actor.state.inventory.push(potion);
+  context.turn.actions.forEach((action) => { action.text = 'Inspect the wall.'; });
+  const saved = { id: randomUUID(), memberId: actor.id, stat: 'WIS' as const, dc: 10 as const,
+    mode: 'normal' as const, dice: [2], modifier: 0, total: 2, success: false,
+    reason: 'The wall markings are worn.', lethal: false, source: 'test' };
+  const gameTools = tools(context);
+  vi.mocked(gameTools).mockImplementation(() => {
+    if (!context.turn.rolls.length) context.turn.rolls.push(saved);
+    return saved;
+  });
+  gameTools.useResource = vi.fn();
+  const calls = Array.from({ length: 20 }, (_, index) => ({
+    type: 'function_call', name: 'roll_check', call_id: `check-${index}`,
+    arguments: JSON.stringify({ memberId: actor.id, stat: 'WIS', dc: 10, mode: 'normal', reason: `Inspect marking ${index}.` }),
+  }));
+  calls.push({ type: 'function_call', name: 'use_resource', call_id: 'must-not-spend',
+    arguments: JSON.stringify({ memberId: actor.id, itemId: potion.id, abilityName: null, targetId: null }) });
+  const fetcher = vi.fn(async () => new Response(`data: ${JSON.stringify({ type: 'response.completed',
+    response: { output: calls } })}\n\n`));
+  const value = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
+  expect(fetcher).toHaveBeenCalledTimes(sceneProtocol ? 2 : 1);
+  expect(gameTools).toHaveBeenCalledTimes(20);
+  expect(gameTools.useResource).not.toHaveBeenCalled();
+  expect(context.turn.rolls).toEqual([saved]);
+  expect(actor.state.inventory).toContainEqual(potion);
+  expect(value.actions.find((action) => action.memberId === actor.id)?.components.main)
+    .toMatchObject({ status: 'failure', basis: 'check' });
+  expect(value.actions.filter((action) => action.memberId !== actor.id).every((action) => action.components.main?.processingFailure)).toBe(true);
+  expect(value.rewards).toMatchObject({ xp: 0, currency: 0 });
+  expect(context.requestBudget.fallback).toContain('twenty-tool limit');
+});
+
+it.each([true, false])('recovers when the engine exhausts the shared budget before the provider cap (scene=%s)', async (sceneProtocol) => {
+  const context = fixture();
+  context.sceneProtocol = sceneProtocol;
+  context.requestBudget = { used: 0, limit: 8 };
+  context.turn.actions.forEach((action) => { action.text = 'Inspect the wall.'; });
+  const gameTools = tools(context);
+  vi.mocked(gameTools).mockImplementation(() => { throw new ToolBudgetError(); });
+  const fetcher = vi.fn(async () => toolResponse('roll_check', { memberId: context.members[0].id,
+    stat: 'WIS', dc: 10, mode: 'normal', reason: 'Inspect the wall.' }));
+  const value = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
+  expect(fetcher).toHaveBeenCalledTimes(sceneProtocol ? 2 : 1);
+  expect(gameTools).toHaveBeenCalledTimes(1);
+  expect(context.turn.rolls).toEqual([]);
+  expect(value.actions.every((action) => action.components.main?.processingFailure)).toBe(true);
+  expect(context.requestBudget.fallback).toContain('twenty-tool limit');
+});
+
+it('recovers a compatibility turn at the tool cap without consuming a saved item twice', async () => {
+  const context = fixture();
+  context.requestBudget = { used: 0, limit: 8 };
+  const [healer, reader] = context.members;
+  const potion = { ...baseItem('saved-gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 1 };
+  healer.state.hp = 10;
+  healer.state.inventory.push(potion);
+  context.turn.actions.find((action) => action.memberId === healer.id)!.text = 'Drink Rescue Gel.';
+  context.turn.actions.find((action) => action.memberId === reader.id)!.text = 'Inspect the wall.';
+  const saved = { id: randomUUID(), memberId: reader.id, stat: 'WIS' as const, dc: 10 as const,
+    mode: 'normal' as const, dice: [2], modifier: 0, total: 2, success: false,
+    reason: 'The wall markings are worn.', lethal: false, source: 'test' };
+  const gameTools = tools(context);
+  vi.mocked(gameTools).mockReturnValue(saved);
+  gameTools.useResource = vi.fn(() => {
+    healer.state.hp = 16;
+    healer.state.inventory = healer.state.inventory.filter((item) => item.id !== potion.id);
+    return { memberId: healer.id, itemId: potion.id, abilityName: null, targetId: healer.id,
+      sourceName: potion.name, restored: 6, state: structuredClone(healer.state), targetState: structuredClone(healer.state) };
+  });
+  gameTools.validateResolution = vi.fn();
+  const use = { type: 'function_call', name: 'use_resource', call_id: 'heal',
+    arguments: JSON.stringify({ memberId: healer.id, itemId: potion.id, abilityName: null, targetId: null }) };
+  const calls = [use, ...Array.from({ length: 19 }, (_, index) => ({
+    type: 'function_call', name: 'roll_check', call_id: `check-${index}`,
+    arguments: JSON.stringify({ memberId: reader.id, stat: 'WIS', dc: 10, mode: 'normal', reason: `Inspect marking ${index}.` }),
+  })), { ...use, call_id: 'must-not-heal-twice' }];
+  const fetcher = vi.fn(async () => new Response(`data: ${JSON.stringify({ type: 'response.completed',
+    response: { output: calls } })}\n\n`));
+  const value = await new ChatGPTGM(auth, 'owner', 'test', fetcher).resolve(context, gameTools);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(gameTools).toHaveBeenCalledTimes(19);
+  expect(gameTools.useResource).toHaveBeenCalledTimes(1);
+  expect(gameTools.validateResolution).toHaveBeenCalledWith(value);
+  expect(healer.state.hp).toBe(16);
+  expect(healer.state.inventory.some((item) => item.id === potion.id)).toBe(false);
+  expect(value.narration).toContain('Rescue Gel');
+  expect(value.narration).toContain('fails');
+  expect(value).toMatchObject({ xp: 0, currency: 0 });
+});
+
+it('keeps an oversized scene retryable without spending more model requests', async () => {
+  const context = fixture();
+  context.requestBudget = { used: 0, limit: 8 };
+  const fetcher = vi.fn(async () => response({ padding: 'x'.repeat(2_000_001) }));
+  const value = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, tools(context));
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(value.actions.every((action) => action.components.main?.processingFailure)).toBe(true);
+  expect(value.events.some((event) => event.id.startsWith('fallback:observation:'))).toBe(true);
+  expect(context.requestBudget.fallback).toContain('Scene recovery');
+});
+
+it('repairs invalid NPC status once and derives a feature introduction from its typed declaration', async () => {
   const context = fixture();
   context.requestBudget = { used: 0, limit: 3 };
   const scene = descent(context);
@@ -2134,15 +2437,40 @@ it('accepts alive and repairs a shortened feature name with precise feedback ins
   });
   const gameTools = tools(context);
   const accepted = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
-  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(fetcher).toHaveBeenCalledTimes(2);
   expect(gameTools).not.toHaveBeenCalled();
   expect(accepted.npcUpdates).toContainEqual(expect.objectContaining({ npcId: 'iven', status: 'alive' }));
   expect(accepted.featureUpdates).toContainEqual(expect.objectContaining({
-    featureId: 'new:internal-telephone', aliases: ['telephone'], properties: { working: true },
+    featureId: 'new:internal-telephone', properties: { working: true },
   }));
+  const introduced = accepted.featureUpdates!.find((feature) => feature.featureId === 'new:internal-telephone')!;
+  expect(accepted.events.find((event) => event.id === introduced.eventId)?.fact).toContain('Internal ship telephone');
 });
 
-it('retains rejected scenes and correction instructions across tools and successive repairs', async () => {
+it('keeps recent complete NPC facts within the existing journal limit across scenes', () => {
+  const context = fixture();
+  const oldest = `Iven remembers the old levy. ${'x'.repeat(850)}`;
+  const retained = `Iven names the current collector. ${'y'.repeat(350)}`;
+  context.journal.push({ kind: 'npc', name: 'Iven', detail: `${oldest}\n${retained}` });
+  for (let turn = 0; turn < 20; turn++) {
+    const scene = descent(context);
+    const exchange = scene.beats.find((beat) => beat.kind === 'act');
+    if (!exchange || exchange.kind !== 'act') throw new Error('fixture');
+    exchange.fact = `Iven reports levy development ${turn}. ${'z'.repeat(300)}`;
+    const accepted = compileSceneTurn(context, scene);
+    const entry = accepted.journal.find((entry) => entry.name === 'Iven')!;
+    expect(entry.detail.length).toBeLessThanOrEqual(1500);
+    expect(entry.detail).toContain(exchange.fact);
+    if (turn === 0) {
+      expect(entry.detail).not.toContain(oldest);
+      expect(entry.detail).toContain(retained);
+    }
+    expect(accepted.events).toContainEqual(expect.objectContaining({ fact: exchange.fact }));
+    context.journal = accepted.journal;
+  }
+});
+
+it('bounds repair context to the latest rejected scene and paired tool round, preserving saved rolls', async () => {
   const context = fixture();
   const complete = descent(context);
   const move = complete.beats[0];
@@ -2186,20 +2514,20 @@ it('retains rejected scenes and correction instructions across tools and success
   const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
     const call = fetcher.mock.calls.length;
     const input = JSON.parse(init!.body as string).input.slice(1);
-    const scenes = input.flatMap((item: { content?: { type: string; text: string }[] }) =>
-      Array.isArray(item.content)
-        ? item.content.filter((part) => part.type === 'output_text').map((part) => JSON.parse(part.text))
-        : [],
+    const compact = (scene: SceneTurn) => ({ ...scene, beats: scene.beats.map(({ text: _text, ...beat }: Record<string, unknown>, index) => ({ index, ...beat })) });
+    const scenes = input.flatMap((item: { role?: string; content?: unknown }) =>
+      item.role === 'assistant' && typeof item.content === 'string' ? [JSON.parse(item.content)] : [],
     );
     const feedback = input
       .filter((item: { role?: string }) => item.role === 'user')
       .map((item: { content: string }) => item.content)
       .join(' ');
-    if (call > 1) {
-      expect(scenes).toContainEqual(missingFinding);
+    if (call > 1 && call <= 4) {
+      expect(scenes).toContainEqual(compact(missingFinding));
       expect(feedback).toContain('An investigation needs');
     }
-    for (let previous = 2; previous < Math.min(call, 4); previous++) {
+    if (call === 3 || call === 4) {
+      const previous = call - 1;
       expect(input).toContainEqual(
         expect.objectContaining({ type: 'function_call', call_id: `saved-${previous}` }),
       );
@@ -2211,6 +2539,7 @@ it('retains rejected scenes and correction instructions across tools and success
         }),
       );
     }
+    if (call >= 4) expect(input).not.toContainEqual(expect.objectContaining({ call_id: 'saved-2' }));
     if (call === 1) return response(missingFinding);
     if (call === 2 || call === 3)
       return new Response(
@@ -2237,13 +2566,15 @@ it('retains rejected scenes and correction instructions across tools and success
         })}\n\n`,
       );
     if (call === 4) return response(missingPlace);
-    expect(scenes).toContainEqual(missingPlace);
+    expect(scenes).toHaveLength(1);
+    expect(scenes).not.toContainEqual(compact(missingFinding));
+    expect(scenes).toContainEqual(compact(missingPlace));
     expect(feedback).toContain('move.place');
     return response(complete);
   });
   const accepted = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
   expect(fetcher).toHaveBeenCalledTimes(5);
-  expect(gameTools).toHaveBeenCalledTimes(2);
+  expect(gameTools).toHaveBeenCalledTimes(1);
   expect(context.turn.rolls).toEqual([saved]);
   expect(accepted.actions.find((action) => action.memberId === move.actor)?.components).toMatchObject({
     movement: { status: 'success' },
@@ -2340,7 +2671,7 @@ it('publishes one creative response and persists private preparation atomically 
     const member = game.members(campaign.id)[0];
     game.manageCharacter(campaign.id, host.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     game.start(campaign.id, host.id);
     await game.idle();
@@ -2408,7 +2739,7 @@ async function table(build: (context: GMContext, call: number) => unknown, saved
     const member = game.members(campaign.id).find((member) => member.playerId === player.id)!;
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
   }
   game.start(campaign.id, host.id);
@@ -2519,6 +2850,56 @@ function toolResponse(name: string, args: unknown) {
     })}\n\n`,
   );
 }
+
+it.each(['missing', 'empty', 'repair'])('publishes a place investigation and conversation with their original intent bindings (annotations=%s)', async (annotation) => {
+  const f = await table((context, call) => {
+    const actor = context.members.find((member) => member.character.name === 'Moryan')!;
+    const intents = submittedActionObligations(context, actor.id);
+    const at = memberScene(context.scene, actor.id).location.id!;
+    if (call === 1) {
+      const request = investigate(context, false);
+      request.intentId = intents.find((intent) => intent.kind === 'inspect')!.id;
+      request.source = { kind: 'place', id: at, locationId: at };
+      request.question = 'Where do the old trolley grooves lead?';
+      request.preparation = { id: 'grooves', locationId: at, cause: 'Old trolleys used the workshop.',
+        discoveries: ['Old trolley grooves converge at the workshop wall.'], actors: 'The workshop crew.',
+        nextChange: 'The grooves remain visible.', dueTurn: null, status: 'open' };
+      request.success = { text: 'Old trolley grooves converge at the wall.',
+        lead: { fact: 'The grooves can be followed to the wall.', locationId: at } };
+      return toolResponse('investigate', request);
+    }
+    return { version: 3, summary: 'Moryan notices the old grooves and speaks briefly with Iven.', beats: [
+      { kind: 'investigate', actor: actor.id, ...(annotation === 'empty' ? { resolves: [] } : annotation === 'repair' && call === 2 ? { resolves: [{
+        id: intents.find((intent) => intent.kind === 'talk')!.id, outcome: 'resolved',
+        fact: 'The finding is wrongly assigned to the conversation.',
+      }] } : {}) },
+      { kind: 'act', actor: actor.id, slot: 'minor', fact: 'Iven tells Moryan that he is waiting here.',
+        text: '“I am waiting here,” Iven tells Moryan.', npcs: [{ npcId: 'iven', name: 'Iven' }],
+        resolves: [{ id: intents.find((intent) => intent.kind === 'talk')!.id, outcome: 'resolved',
+          fact: 'Iven tells Moryan that he is waiting here.' }] },
+    ] };
+  });
+  try {
+    f.submit(Object.fromEntries(f.members.map((member) => [member.character.name,
+      member.character.name === 'Moryan' ? 'Inspect the surroundings, then talk to Iven.' : ''])));
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+    expect(f.fetcher).toHaveBeenCalledTimes(annotation === 'repair' ? 3 : 2);
+    expect(snapshot.history.at(-1)?.rolls).toEqual([]);
+    const turn = f.db.prepare('SELECT draft FROM turns WHERE campaign_id=? AND phase=\'complete\' ORDER BY number DESC LIMIT 1')
+      .get(f.campaign.id) as { draft: string };
+    const draft = JSON.parse(turn.draft);
+    const finding = Object.entries(draft.receipts).find(([key]) => key.startsWith('investigation:'))![1] as InvestigationResult;
+    expect(finding.source.kind).toBe('place');
+    expect(draft.adjudication.actionOutcomes).toContainEqual(expect.objectContaining({ obligationId: finding.intentId, outcome: 'resolved' }));
+    if (annotation === 'repair') {
+      const stage = f.db.prepare("SELECT payload FROM events WHERE turn_id=? AND kind='stage:adjudication'")
+        .get(draft.context.turn.id) as { payload: string };
+      expect(JSON.parse(stage.payload).corrections[0].feedback).toContain('saved investigation belongs to');
+    }
+  } finally { f.db.close(); }
+});
 
 it.each([false, true])(
   'handles available information and repeat requested abilities without unnecessary dice or charges (ability=%s)',
@@ -2898,6 +3279,10 @@ it('keeps prepared answers immutable while allowing new discoveries to be append
   ]);
   expect(extended[0].discoveries).toHaveLength(2);
   expect(updateGMMemory(extended, [{ ...extended[0], revealed: [] }])[0].revealed).toEqual([0]);
+  const appended = prepareGMNotes(memory, [{ id: memory[0].id, appendDiscoveries: ['The original is signed by the clerk.'] }]);
+  expect(appended[0].discoveries).toEqual(extended[0].discoveries);
+  expect(appended[0].cause).toBe(memory[0].cause);
+  expect(() => prepareGMNotes(memory, [{ id: memory[0].id, discoveries: ['Replacement.'], appendDiscoveries: ['Another.'] }])).toThrow(/omit discoveries/);
 });
 
 it('keeps registration and household notices distinct, including remote ownership and aliases', () => {
@@ -3399,7 +3784,7 @@ it('persists newly visible onward destinations at a split-party arrival without 
     const reservoir = Object.values(snapshot.scene.worldMap!.nodes).find(
       (node) => node.name === 'Reservoir',
     )!;
-    expect(arrived).not.toBe(snapshot.scene.location.id);
+    expect(snapshot.members.some((member) => memberScene(snapshot.scene, member.id).location.id === snapshot.scene.location.id)).toBe(true);
     for (const node of [pump, reservoir]) {
       expect(node.visited).toBe(false);
       expect(snapshot.scene.places?.[node.id]).toBeUndefined();
@@ -3510,4 +3895,408 @@ it('persists the generated currency name in the campaign and finalized turn acro
   } finally {
     f.db.close();
   }
+});
+
+it('publishes investigation limits from the same schema that validates calls, allowing expanded actor aliases', () => {
+  const schema = modelSchema(investigationSchema);
+  expect(schema.properties.answer).toMatchObject({ type: 'integer', minimum: 0, maximum: 5 });
+  expect(schema.properties.preparation.properties.discoveries).toMatchObject({
+    minItems: 1, maxItems: 6, items: { type: 'string', maxLength: 500 },
+  });
+  expect(schema.properties.success.properties.text.maxLength).toBe(2000);
+  expect(schema.properties.failure.properties.lead.properties.fact.maxLength).toBe(500);
+  expect(schema.properties.memberId.format).toBeUndefined();
+});
+
+it('deduplicates a meeting participant also supplied as an unchanged NPC update', () => {
+  const context = fixture();
+  const scene = descent(context);
+  const act = scene.beats[1];
+  if (act.kind !== 'act') throw new Error('fixture');
+  scene.beats[1] = { kind: 'meet', actor: act.actor, fact: act.fact, text: act.text,
+    person: { npcId: 'iven', name: 'Iven' }, npcs: [{ npcId: 'iven', name: 'Iven' }] };
+  const accepted = compileSceneTurn(context, scene);
+  for (const event of accepted.events) if (event.npcIds)
+    expect(event.npcIds).toEqual([...new Set(event.npcIds)]);
+  expect(accepted.npcUpdates!.filter((npc) => npc.npcId === 'iven')).toHaveLength(1);
+});
+
+it('records failed repair observations without changing the feature state, routes or objectives', () => {
+  const context = fixture();
+  const member = context.members[0];
+  context.members = [member];
+  context.turn.roster = [member.id];
+  context.turn.actions = [{ memberId: member.id, text: 'Repair the broken connector.', passed: false }];
+  const at = memberScene(context.scene, member.id).location.id!;
+  context.scene.features = { connector: { id: 'connector', name: 'Broken connector', aliases: [],
+    locationId: at, properties: { repaired: false }, fact: 'Broken connector remains unrepaired.' } };
+  context.turn.rolls.push({ id: randomUUID(), memberId: member.id, stat: 'INT', dc: 10, mode: 'advantage',
+    dice: [1, 4], modifier: 3, total: 7, success: false, reason: 'Repair the connector.', lethal: false, source: 'test' });
+  const fact = 'Patch braces the Broken connector but cannot repair it; a recessed contact is visible.';
+  const scene: SceneTurn = { version: 3, summary: fact, notes: [], beats: [{ kind: 'act', actor: member.id, slot: 'main', intent: 'action',
+    fact, text: fact, features: [{ featureId: 'connector', name: 'Broken connector', properties: { repaired: true } }] }] };
+  const accepted = compileSceneTurn(context, scene);
+  expect(accepted.actions[0].status).toBe('failure');
+  expect(accepted.featureUpdates![0]).toMatchObject({ observation: fact });
+  expect(accepted.featureUpdates![0].properties).toBeUndefined();
+  applyFeatureUpdates(context.scene, accepted, (ref) => ref);
+  expect(context.scene.features.connector).toMatchObject({ properties: { repaired: false }, observation: fact });
+  const beat = scene.beats[0];
+  if (beat.kind !== 'act') throw new Error('fixture');
+  beat.features![0].passable = true;
+  expect(() => compileSceneTurn(context, scene)).toThrow(/failed action cannot.*route/);
+  expect(context.turn.rolls).toHaveLength(1);
+});
+
+it('reports independent operation errors together without accepting the invalid scene', () => {
+  const context = fixture();
+  const scene = descent(context);
+  scene.beats.push(structuredClone(scene.beats[0]), structuredClone(scene.beats[1]));
+  let message = '';
+  try { compileSceneTurn(context, scene); } catch (error) { message = (error as Error).message; }
+  expect(message).toContain('Travel crosses one connection');
+  expect(message).toContain('One main and one minor action');
+  expect(message).toContain('beats[2]');
+  expect(message).toContain('beats[3]');
+});
+
+it('repairs a single beat without resending unaffected narration or replacing saved outcomes', async () => {
+  const context = fixture();
+  context.scene.currencyName = 'night marks';
+  const original = descent(context);
+  const invalid = structuredClone(original);
+  invalid.beats.push(structuredClone(original.beats[1]));
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    if (fetcher.mock.calls.length === 1) return response(invalid);
+    const wire = JSON.parse(init!.body as string);
+    const retained = wire.input.find((item: { role?: string }) => item.role === 'assistant');
+    expect(JSON.parse(retained.content).beats[0]).not.toHaveProperty('text');
+    expect(wire.input.at(-1).content).toContain('patches');
+    return response({ version: 3, patches: [{ index: 2, remove: true }] });
+  });
+  const accepted = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, tools(context));
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(accepted.sceneDraft?.passages.some((passage) => passage.text === ('text' in original.beats[0] ? original.beats[0].text : ''))).toBe(true);
+  expect(accepted.memberLocations).toHaveLength(1);
+  expect(() => mergeScenePatch(original, { version: 3, patches: [{ index: 99, remove: true }] })).toThrow(/indexes/);
+  expect(() => mergeScenePatch(original, { version: 3, patches: [{ index: 0, remove: true }, { index: 0, remove: true }] })).toThrow(/distinct/);
+});
+
+it('clears optional beat fields while preserving other fields, explicit nulls and named feature properties', () => {
+  const base = { beats: [{ kind: 'world', at: 'place:1', fact: 'The pier floods.', text: 'The pier floods.', progress: null }] };
+  const patch = decodeStructuredOutput({ version: 3, patches: [{ index: 0, unset: ['progress'],
+    beat: { $optional: [{ features: [{ featureId: 'pier', properties: { $entries: [
+      { key: 'depth', value: null }, { key: 'flooded', value: true },
+    ] } }] }] } }] });
+  const repaired = mergeScenePatch(base, patch);
+  expect(repaired).toEqual({ version: 3, beats: [{ kind: 'world', at: 'place:1', fact: 'The pier floods.', text: 'The pier floods.',
+    features: [{ featureId: 'pier', properties: { depth: null, flooded: true } }] }] });
+  expect(base.beats[0]).toHaveProperty('progress', null);
+  expect(() => mergeScenePatch(base, { version: 3, patches: [{ index: 0, beat: { progress: null } }] }, fixture()))
+    .toThrow(/Expected object, received null/);
+  for (const edit of [{ unset: ['text'] }, { unset: ['typo'] }, { unset: ['progress'], beat: { progress: null } },
+    { remove: true, unset: ['progress'] }])
+    expect(() => mergeScenePatch(base, { version: 3, patches: [{ index: 0, ...edit }] })).toThrow();
+  expect(() => decodeStructuredOutput({ $entries: [{ key: 'a', value: 1 }, { key: 'a', value: 2 }] })).toThrow(/unique/);
+});
+
+it('recognizes directed travel despite unrelated negative clauses without moving a negated traveller', () => {
+  const context = fixture();
+  const member = context.members[0];
+  const destination = Object.entries(context.scene.worldMap!.nodes).find(([id]) => id !== memberScene(context.scene, member.id).location.id)!;
+  for (const text of [`Walk east to ${destination[1].name}. Do not connect the shard to a network.`,
+    `Loop naar het ${destination[1].name}. Ik sluit de chip niet aan.`]) {
+    context.turn.actions[0].text = text;
+    expect(submittedTravel(context, member.id)?.goalId).toBe(destination[0]);
+  }
+  context.turn.actions[0].text = `Do not walk east to ${destination[1].name}.`;
+  expect(submittedTravel(context, member.id)).toBeUndefined();
+});
+
+it('retains a first arrival through a rejected unrelated feature update without inventing its danger assessment', async () => {
+  const context = fixture();
+  context.scene.currencyName = 'night marks';
+  const scene = descent(context);
+  const move = scene.beats[0];
+  const talk = scene.beats[1];
+  if (move.kind !== 'move' || talk.kind !== 'act') throw new Error('fixture');
+  const destination = randomUUID();
+  const origin = memberScene(context.scene, move.actor).location.id!;
+  context.scene.worldMap!.nodes[destination] = { id: destination, name: 'Test chamber', visited: false };
+  context.scene.worldMap!.connections.push({ from: origin, to: destination, label: 'Open stair', blocked: false, bidirectional: true });
+  move.to = destination;
+  move.place!.name = 'Test chamber';
+  context.turn.actions.find((action) => action.memberId === move.actor)!.text = 'Walk east to Test chamber. Do not touch the machinery.';
+  talk.features = [{ featureId: 'invalid-person-object', name: 'Iven', properties: { occupied: true } }];
+  const gameTools = tools(context);
+  gameTools.validateAdjudication = (input) => validateAdjudication(context, input);
+  const fetcher = vi.fn(async () => response(scene));
+  const accepted = await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, gameTools);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(accepted.memberLocations).toContainEqual(expect.objectContaining({ memberId: move.actor, locationId: destination }));
+  expect(accepted.placeUpdates).toContainEqual(expect.objectContaining({ ref: destination }));
+  expect(accepted.encounterRisks).toContainEqual(expect.objectContaining({ locationId: destination, danger: 'dangerous' }));
+  expect(accepted.featureUpdates?.some((feature) => feature.featureId === 'invalid-person-object') ?? false).toBe(false);
+  expect(context.turn.rolls).toEqual([]);
+});
+
+it.each([true, false])('requires full preparation for new investigation hooks and permits patches only for saved IDs (existing=%s)', async (existing) => {
+  const context = fixture();
+  if (existing) context.gmMemory = [{ id: 'saved-hook', locationId: context.scene.location.id!,
+    cause: 'A known cause.', discoveries: ['A prepared answer.'], actors: 'A keeper.', nextChange: 'The keeper returns.', dueTurn: null, status: 'open' }];
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const wire = JSON.parse(init!.body as string);
+    const tool = wire.tools[0].tools.find((tool: { name: string }) => tool.name === 'investigate');
+    const schema = tool.parameters.properties.preparation;
+    const fresh = existing ? schema.anyOf[1] : schema;
+    expect(fresh.required).toEqual(expect.arrayContaining(['id', 'cause', 'locationId', 'discoveries', 'actors', 'nextChange', 'dueTurn', 'status']));
+    expect(fresh.properties.discoveries.items.maxLength).toBe(500);
+    if (existing) {
+      expect(schema.anyOf[0].required).toEqual(['id']);
+      expect(schema.anyOf[0].properties.id.enum).toEqual(['saved-hook']);
+    }
+    return response(descent(context));
+  });
+  await new ChatGPTGM(auth, 'owner', 'test', fetcher).adjudicate(context, tools(context));
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it('derives public NPC identity labels and permits witnessed exits on successful interactions', () => {
+  const context = fixture();
+  const scene = descent(context);
+  const talk = scene.beats[1];
+  if (talk.kind !== 'act') throw new Error('fixture');
+  context.turn.actions.find((action) => action.memberId === talk.actor)!.text = 'Ask the masked keeper for audit access.';
+  talk.fact = talk.text = 'The masked keeper grants supervised inspection and opens the public approach to the audit room.';
+  talk.npcs = [{ npcId: 'new:keeper', name: 'North Gate Masked Keeper' }];
+  talk.exits = [{ to: 'new:audit', name: 'Audit room', label: 'Authorized approach', blocked: false, bidirectional: true }];
+  const accepted = compileSceneTurn(context, scene);
+  const keeper = accepted.npcUpdates!.find((person) => person.npcId === 'new:keeper')!;
+  expect(accepted.events.find((event) => event.id === keeper.eventId)?.fact).toContain('North Gate Masked Keeper');
+  expect(accepted.mapUpdates?.locations).toContainEqual({ ref: 'new:audit', name: 'Audit room' });
+  expect(accepted.mapUpdates?.connections).toContainEqual(expect.objectContaining({ to: 'new:audit', blocked: false }));
+  expect(accepted.memberLocations?.some((position) => position.locationId === 'new:audit')).toBe(false);
+});
+
+it('binds a known local NPC addressed by a unique first name without requiring redundant metadata', () => {
+  const context = fixture();
+  const actor = context.members[0];
+  const at = memberScene(context.scene, actor.id).location.id!;
+  context.members = [actor];
+  context.turn.roster = [actor.id];
+  context.turn.actions = [{ memberId: actor.id, text: 'Ask Dena about the reader.', passed: false }];
+  context.scene.npcs = { dena: { id: 'dena', name: 'Dena Orr', aliases: [], locationId: at,
+    status: 'alive', allegiance: null, fact: 'Dena Orr works at the reader.' } };
+  const scene: SceneTurn = { version: 3, notes: [], summary: 'Dena explains the reader.', beats: [{ kind: 'act', actor: actor.id,
+    slot: 'main', intent: 'action', fact: 'Dena explains that the reader is functioning.', text: '“The reader works,” Dena says.' }] };
+  const accepted = compileSceneTurn(context, scene);
+  expect(accepted.npcUpdates).toContainEqual(expect.objectContaining({ npcId: 'dena' }));
+  context.scene.npcs.other = { ...context.scene.npcs.dena, id: 'other', name: 'Dena Sen' };
+  expect(() => compileSceneTurn(context, scene)).toThrow(/Persist the person/);
+});
+
+it('resolves unique saved actor names and refuses ambiguous names', () => {
+  const c = fixture();
+  const actor = c.members[0];
+  expect(resolveActorReference(c, ` ${actor.character.name.toUpperCase()} `)).toBe(actor.id);
+  expect(resolveActorReference(c, 'actor:1')).toBe(actor.id);
+  c.scene.npcs = { tavin: { id: 'tavin', name: 'Tavin Reed', aliases: ['The mapmaker'], status: 'alive',
+    locationId: c.scene.location.id!, allegiance: null, fact: 'Tavin is wounded.' } };
+  expect(resolveActorReference(c, 'the mapmaker')).toBe('tavin');
+  c.members[1].character.name = actor.character.name;
+  expect(() => resolveActorReference(c, actor.character.name)).toThrow(/Ambiguous actor name/);
+  expect(resolveActorReference(c, actor.id)).toBe(actor.id);
+});
+
+it('executes a natural-language healing request with named actors and NPCs without inventing a potion action', async () => {
+  const spell = "Anatomist's Mercy";
+  const f = await table((c, call) => call === 1
+    ? toolResponse('use_resource', { memberId: 'Moryan', targetId: 'Tavin Reed', abilityName: spell, itemId: null })
+    : { version: 3, summary: 'Tavin receives treatment.', beats: [{ kind: 'act', actor: 'Moryan',
+        fact: 'Moryan uses Anatomist’s Mercy to treat Tavin Reed.', text: 'Moryan guides blood through the wound; Tavin receives treatment.' }] });
+  try {
+    const healer = f.members.find((m) => m.character.name === 'Moryan')!;
+    healer.character.abilities[1] = { name: spell, description: 'Guide blood through damaged vessels to heal a living ally.',
+      kind: 'utility', effect: 'mend', level: 1, stat: 'INT', dice: '1d6', bonus: 1 };
+    healer.state.inventory.push({ ...baseItem('tonic', 'Ruby Temple Tonic', 'consumable'), healing: 6, quantity: 1 });
+    f.db.prepare('UPDATE members SET sheet=?,state=? WHERE id=?').run(JSON.stringify(healer.character), JSON.stringify(healer.state), healer.id);
+    const scene = f.game.snapshot(f.campaign.id, f.host.id).scene;
+    scene.npcs = { ...scene.npcs, tavin: { id: 'tavin', name: 'Tavin Reed', aliases: [], status: 'alive',
+      locationId: memberScene(scene, healer.id).location.id!, allegiance: null, fact: 'Tavin is wounded.' } };
+    f.db.prepare('UPDATE campaigns SET scene=? WHERE id=?').run(JSON.stringify(scene), f.campaign.id);
+    const turnId = f.submit(Object.fromEntries(f.members.map((m) => [m.character.name,
+      m.id === healer.id ? 'I help healing Tavin using Blood magic, with my newly learned skills' : ''])));
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    const state = snapshot.members.find((m) => m.id === healer.id)!.state;
+    expect(state.abilityUses?.[spell]).toBe(1);
+    expect(state.inventory.find((item) => item.id === 'tonic')?.quantity).toBe(1);
+    expect(snapshot.history.find((turn) => turn.id === turnId)!.result!.narration).not.toContain('Ruby Temple Tonic');
+    const draft = JSON.parse((f.db.prepare('SELECT draft FROM turns WHERE id=?').get(turnId) as { draft: string }).draft);
+    expect(draft.adjudication.actions.find((a: { memberId: string }) => a.memberId === healer.id).components.minor).toBeNull();
+    expect(draft.scene.npcs.tavin.treatment.sourceName).toBe(spell);
+  } finally { f.db.close(); }
+});
+
+it('appends independent investigations without crossing their answer indexes and narrates both clues in two requests', async () => {
+  const answer = "The survivors have little food. The challenge is 'Who keeps the road?' and response 'The last traveler.'";
+  const otherAnswer = 'The shrine door is identified by its blue-tiled lintel.';
+  const f = await table((c, call) => {
+    const request = investigate(c, false);
+    if (call === 1) return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { output:
+      c.members.map((actor, index) => ({ type: 'function_call', name: 'investigate', call_id: `notice-${index}`,
+        arguments: JSON.stringify({ ...request, memberId: actor.id,
+          source: { ...request.source, id: `new:notice-${index}`, name: `Rescue notice ${index}`, locationId: memberScene(c.scene, actor.id).location.id! },
+          preparation: { id: 'rescue', appendDiscoveries: [index ? otherAnswer : answer] }, answer: 0,
+          success: { text: 'The notice explains: {{finding}} {{lead}}', lead: { fact: 'The notice remains available here.', locationId: memberScene(c.scene, actor.id).location.id! } },
+          failure: { ...request.failure, lead: { fact: 'The notice remains available here.', locationId: memberScene(c.scene, actor.id).location.id! } },
+        }),
+      })) } })}\n\n`);
+    return { version: 3, summary: 'The notices identify the rescue challenge and shrine.',
+      beats: c.members.map((actor) => ({ kind: 'investigate', actor: actor.id })) };
+  });
+  try {
+    const actor = f.members.find((m) => m.character.name === 'Moryan')!;
+    const memory = [{ id: 'rescue', locationId: memberScene(f.game.snapshot(f.campaign.id, f.host.id).scene, actor.id).location.id!,
+      cause: 'PRIVATE: the stranded expedition prepared a challenge.', discoveries: ['The expedition is stranded below.'],
+      actors: 'The mapmaker.', nextChange: 'The notice remains visible.', status: 'open', dueTurn: null }];
+    f.db.prepare('UPDATE campaigns SET gm_memory=? WHERE id=?').run(JSON.stringify(memory), f.campaign.id);
+    const turnId = f.submit(Object.fromEntries(f.members.map((m) => [m.character.name, 'Read the rescue notice.'])));
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    const narration = snapshot.history.find((turn) => turn.id === turnId)!.result!.narration;
+    expect(narration.split(answer)).toHaveLength(2);
+    expect(narration.split(otherAnswer)).toHaveLength(2);
+    expect(narration).not.toContain('PRIVATE');
+    const draft = JSON.parse((f.db.prepare('SELECT draft FROM turns WHERE id=?').get(turnId) as { draft: string }).draft);
+    expect(draft.gmMemory.find((n: { id: string }) => n.id === 'rescue')).toMatchObject({
+      cause: memory[0].cause, discoveries: [memory[0].discoveries[0], answer, otherAnswer], revealed: [1, 2],
+    });
+  } finally { f.db.close(); }
+});
+
+it.each([true, false])('honors frozen social stakes and preserves them across replay (success=%s)', async (success) => {
+  const goal = { intent: 'Get a bowl in exchange for a blessing', success: 'The innkeeper accepts the blessing and serves Moryan one bowl of soup.' };
+  const f = await table((c, call) => {
+    const actor = c.members.find((m) => m.character.name === 'Moryan')!;
+    const check = { memberId: actor.id, stat: 'CHA', dc: 10, mode: 'normal', lethal: false,
+      circumstances: { favorable: false, adverse: false }, reason: 'Moryan offers a blessing in exchange for soup.', goal } as const;
+    if (call === 1) return toolResponse('roll_check', check);
+    expect(() => f.game.roll(f.campaign.id, c.turn.id, { ...check, goal: { ...goal, success: 'The innkeeper gives away the whole inn.' } }))
+      .toThrow(/locked/);
+    return { version: 3, summary: success && call > 2 ? goal.success : 'The innkeeper refuses.', beats: [{
+      kind: 'act', actor: 'Moryan', fact: success && call > 2 || !success && call === 2 ? '{{success}}' : 'The innkeeper refuses the barter.',
+      text: success && call > 2 ? 'After considering the blessing, {{success}}' : 'The innkeeper asks for copper instead.',
+    }] };
+  });
+  try {
+    f.draw.mockImplementation((sides) => sides === 20 ? success ? 20 : 1 : 1);
+    const turnId = f.submit(Object.fromEntries(f.members.map((m) => [m.character.name,
+      m.character.name === 'Moryan' ? 'Convince the innkeeper to accept a blessing in exchange for soup.' : ''])));
+    await f.game.idle();
+    const snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
+    expect(f.draw.mock.calls.filter(([sides]) => sides === 20)).toHaveLength(1);
+    const done = snapshot.history.find((turn) => turn.id === turnId)!;
+    expect(done.rolls[0].goal).toEqual(goal);
+    if (success) {
+      expect(done.result!.narration.split(goal.success)).toHaveLength(2);
+      expect(done.result!.journal).toContainEqual(expect.objectContaining({ detail: goal.success }));
+    } else {
+      expect(done.result!.narration).not.toContain(goal.success);
+      expect(done.result!.journal.some((entry) => entry.detail === goal.success)).toBe(false);
+    }
+  } finally { f.db.close(); }
+});
+
+it('checkpoints independent travel and a failed roll while a healing tool is unresolved, then retries only the unfinished work', async () => {
+  const spell = "Anatomist's Mercy";
+  const destination = randomUUID();
+  let failHealing = true;
+  let resumed: Awaited<ReturnType<NonNullable<GameMaster['adjudicate']>>> | undefined;
+  const f = await table((c, call) => {
+    const healer = c.members.find((m) => m.character.name === 'Moryan')!;
+    const traveler = c.members.find((m) => m.character.name === 'Lobsterano')!;
+    const reader = c.members.find((m) => m.character.name === 'Katooluman')!;
+    const healing = { memberId: 'Moryan', targetId: 'Tavin Reed', abilityName: spell, itemId: null };
+    if (call === 1) return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { output: [
+      { type: 'function_call', name: 'roll_check', call_id: 'saved-mark-check', arguments: JSON.stringify({
+        memberId: reader.id, stat: 'INT', dc: 20, mode: 'normal', lethal: false, reason: 'Decipher the faded painted mark.',
+      }) },
+      { type: 'function_call', name: 'use_resource', call_id: 'unfinished-heal', arguments: JSON.stringify(healing) },
+    ] } })}\n\n`);
+    if (call <= 3 || call === 5) return toolResponse('use_resource', healing);
+    if (call === 4) return { version: 3, summary: 'The traveler reaches the side room; the mark remains illegible.', beats: [
+      { kind: 'move', actor: traveler.id, to: destination, fact: 'Lobsterano reaches Recovery Room.', text: 'Lobsterano reaches Recovery Room.' },
+      { kind: 'act', actor: reader.id, fact: 'Katooluman cannot decipher the faded painted mark.', text: 'The faded mark remains illegible.' },
+    ] };
+    return { version: 2, turnId: c.turn.id, events: [],
+      actions: adjudicationInput(c).schemaExample.actions.filter((a) => a.memberId === healer.id) };
+  }, { scene: tower.scene as Scene, journal: tower.journal,
+    members: [...tower.members, { id: randomUUID(), name: 'Lobsterano', action: 'Go to Recovery Room.' }] });
+  try {
+    const heal = f.provider.adjudicate!;
+    f.provider.adjudicate = async (c, t) => {
+      const use = t.useResource!;
+      t.useResource = (input) => {
+        if (failHealing) throw new Error('Temporary healing processing failure.');
+        return use(input);
+      };
+      return resumed = await heal(c, t);
+    };
+    const healer = f.members.find((m) => m.character.name === 'Moryan')!;
+    const traveler = f.members.find((m) => m.character.name === 'Lobsterano')!;
+    healer.character.abilities[1] = { name: spell, description: 'Heal a living ally through blood magic.',
+      kind: 'utility', effect: 'mend', level: 1, stat: 'INT', dice: '1d6', bonus: 1 };
+    f.db.prepare('UPDATE members SET sheet=? WHERE id=?').run(JSON.stringify(healer.character), healer.id);
+    const scene = f.game.snapshot(f.campaign.id, f.host.id).scene;
+    const origin = memberScene(scene, traveler.id).location.id!;
+    scene.places![destination] = { location: { id: destination, name: 'Recovery Room', atmosphere: 'An empty side room.', hazard: '' },
+      encounter: null, loot: [], encounterRisk: { danger: 'safe', reason: 'A sheltered room.' } };
+    scene.worldMap!.nodes[destination] = { id: destination, name: 'Recovery Room', visited: true };
+    scene.worldMap!.connections.push({ from: origin, to: destination, label: 'Open doorway', blocked: false, bidirectional: true });
+    scene.npcs = { ...scene.npcs, tavin: { id: 'tavin', name: 'Tavin Reed', aliases: [], status: 'alive',
+      locationId: memberScene(scene, healer.id).location.id!, allegiance: null, fact: 'Tavin is wounded.' } };
+    f.db.prepare('UPDATE campaigns SET scene=? WHERE id=?').run(JSON.stringify(scene), f.campaign.id);
+    const turnId = f.submit({ Moryan: 'Heal Tavin using Blood magic.', Lobsterano: 'Go to Recovery Room.', Katooluman: 'Decipher the faded painted mark.' });
+    await f.game.idle();
+    let snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    expect(snapshot.turn?.phase).toBe('failed');
+    expect(snapshot.turn?.error).toContain('saved dice and resources');
+    expect(f.fetcher).toHaveBeenCalledTimes(4);
+    const finalRequest = JSON.parse(f.fetcher.mock.calls[3][1]!.body as string);
+    expect(finalRequest.tools).toBeUndefined();
+    const saved = () => JSON.parse((f.db.prepare('SELECT draft FROM turns WHERE id=?').get(turnId) as { draft: string }).draft);
+    const partial = saved().partialAdjudication;
+    const travel = partial.actions.find((a: { memberId: string }) => a.memberId === traveler.id);
+    expect(travel.components.movement.status).toBe('success');
+    expect(partial.actions.find((a: { memberId: string }) => a.memberId === healer.id).components.main.processingFailure).toBe(true);
+    expect(saved().members.find((m: { id: string }) => m.id === healer.id).state.abilityUses[spell]).toBeUndefined();
+    const rolls = f.db.prepare('SELECT * FROM rolls WHERE turn_id=? ORDER BY rowid').all(turnId);
+    expect(rolls).toHaveLength(1);
+    const diceBefore = f.draw.mock.calls.filter(([sides]) => sides === 20).length;
+    failHealing = false;
+    f.game.retry(f.campaign.id, f.host.id);
+    await f.game.idle();
+    snapshot = f.game.snapshot(f.campaign.id, f.host.id);
+    const feedback = (f.db.prepare("SELECT payload FROM events WHERE turn_id=? AND kind='stage:adjudication' ORDER BY id DESC LIMIT 1").get(turnId) as { payload: string }).payload;
+    for (const action of partial.actions) for (const phase of ['main', 'minor', 'movement'] as const) {
+      const component = action.components[phase];
+      if (component && !component.processingFailure)
+        expect(resumed!.actions.find((a) => a.memberId === action.memberId)?.components[phase], feedback).toEqual(component);
+    }
+    expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+    expect(f.fetcher).toHaveBeenCalledTimes(7);
+    expect(f.db.prepare('SELECT * FROM rolls WHERE turn_id=? ORDER BY rowid').all(turnId).filter((row: any) => !JSON.parse(row.result).notation)).toEqual(rolls);
+    expect(f.draw.mock.calls.filter(([sides]) => sides === 20)).toHaveLength(diceBefore);
+    expect(saved().adjudication.actions.find((a: { memberId: string }) => a.memberId === traveler.id).components).toEqual(travel.components);
+    expect(snapshot.members.find((m) => m.id === healer.id)!.state.abilityUses?.[spell]).toBe(1);
+    expect(memberScene(snapshot.scene, traveler.id).location.id).toBe(destination);
+    expect(snapshot.history.find((turn) => turn.id === turnId)!.result!.narration).not.toContain('processing failure');
+  } finally { f.db.close(); }
 });

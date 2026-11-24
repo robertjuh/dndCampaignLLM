@@ -3,6 +3,7 @@ import type { SceneFeature } from './scene-state';
 import { z } from 'zod';
 import type { WorldProgressionState } from './world-progression';
 import { ailments } from './ailments';
+import { armourPerks, perkKinds, protectiveKinds } from './equipment-perks';
 import type { TurnResolution } from './turn-resolution';
 import type { Quest } from './quests';
 
@@ -43,6 +44,7 @@ export const abilitySchema = z.preprocess(
     .object({
       name: z.string().min(1).max(80),
       description: z.string().min(1).max(500),
+      iconId: z.string().uuid().optional(),
       kind: z.enum(['combat', 'utility']),
       effect: z.enum(['strike', 'mend', 'restoration', 'barrier', 'rally', 'assist', 'guard', 'cleanse']),
       targeting: z.enum(['single', 'multiple', 'area', 'party']).optional(),
@@ -109,6 +111,7 @@ export const itemSchema = z
   .object({
     id: z.string().min(1).max(100),
     name: z.string().min(1).max(100),
+    iconId: z.string().uuid().optional(),
     kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic', 'tool']),
     rarity: z.enum(['Common', 'Uncommon', 'Rare', 'Legendary', 'Cursed']),
     scaling: z.array(statSchema).max(2),
@@ -130,6 +133,13 @@ export const itemSchema = z
     sourceId: z.string().min(1).max(200).optional(),
     attackBonus: z.number().int().min(0).max(3).default(0),
     checkBonus: z.number().int().min(0).max(3).default(0),
+    attributeBonus: z
+      .object({ stat: statSchema, amount: z.number().int().min(1).max(3) })
+      .strict()
+      .optional(),
+    attributePenalty: statSchema.optional(),
+    perk: z.enum(armourPerks).optional(),
+    storyHook: z.string().trim().min(1).max(500).optional(),
     immunities: z.array(ailmentSchema).max(2).optional(),
     onHit: z
       .object({ ailment: ailmentSchema, chance: z.number().int().min(1).max(100) })
@@ -140,6 +150,17 @@ export const itemSchema = z
   })
   .strict()
   .superRefine((item, ctx) => {
+    if (item.perk && (item.rarity === 'Common' || !perkKinds[item.perk].includes(item.kind)))
+      ctx.addIssue({ code: 'custom', message: 'Armour perks require Uncommon or higher protective equipment.' });
+    if (item.attributePenalty && (!item.attributeBonus || item.rarity !== 'Common' || !protectiveKinds.some((kind) => kind === item.kind)))
+      ctx.addIssue({ code: 'custom', message: 'Only Common protective items have an attribute penalty.' });
+    if (
+      item.attributeBonus &&
+      (!['armour', 'helmet', 'boots', 'shield'].includes(item.kind) ||
+        item.attributeBonus.amount !==
+          { Common: 1, Uncommon: 1, Rare: 2, Cursed: 2, Legendary: 3 }[item.rarity])
+    )
+      ctx.addIssue({ code: 'custom', message: 'Armour attribute bonuses must match the item rarity.' });
     if (item.currencyValue && item.kind !== 'tool')
       ctx.addIssue({ code: 'custom', message: 'Collectible currency must be a currency pouch.' });
     if (
@@ -238,9 +259,19 @@ export const levelUpRewardSchema = z
   })
   .strict();
 export type LevelUpReward = z.infer<typeof levelUpRewardSchema>;
+export const placeholderEquipmentName =
+  /\b(?:weapon|armou?r|helmet|boots?|shield|focus|relic|equipment|item|piece|wapen|harnas|helm|schild|voorwerp)\s*#?\s*\d+\s*$/i;
 export const lootSchema = z
   .object({
-    name: z.string().min(1).max(100),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .refine(
+        (name) => !placeholderEquipmentName.test(name),
+        'Use a descriptive, world-fitting item name instead of a numbered placeholder.',
+      ),
     kind: z.enum(['weapon', 'armour', 'helmet', 'boots', 'shield', 'focus', 'consumable', 'relic', 'tool']),
     scaling: z.array(statSchema).max(2),
     hands: z.union([z.literal(1), z.literal(2)]),
@@ -258,8 +289,14 @@ export const characterSchema = z
     portraitId: z.string().uuid().optional(),
     portraitError: z.string().max(300).optional(),
     traits: z.array(traitSchema).max(3),
-    equipmentOptions: z.array(itemSchema).length(5),
-    selectedEquipmentIds: z.array(z.string()).max(2).default([]),
+    // Five-item pools are retained only for existing saves and queued replacements.
+    equipmentOptions: z
+      .array(itemSchema)
+      .refine(
+        (items) => items.length === 5 || items.length === 7,
+        'Expected seven starting equipment offers.',
+      ),
+    selectedEquipmentIds: z.array(z.string()).max(3).default([]),
     healingItemName: z.string().min(1).max(100),
     concept: z.string().max(1000),
     background: z.string().max(1500),
@@ -328,12 +365,42 @@ export const campaignSchema = z
       ctx.addIssue({ code: 'custom', message: 'Custom field names must be unique.', path: ['custom'] });
   });
 export type CampaignConfig = z.infer<typeof campaignSchema>;
+export const campaignDraftSchema = campaignSchema.innerType().extend({
+  name: z.string().trim().max(100),
+  setting: z.string().trim().max(1700),
+});
+export const improvedPremiseSchema = z
+  .object({
+    setting: z.string().trim().min(1).max(1700),
+    premise: z.string().trim().min(1).max(2000),
+    tone: z.string().trim().min(1).max(1000),
+    partyGoal: z.string().trim().max(1000),
+    instructions: z.string().trim().min(1).max(3000),
+  })
+  .strict();
+export type CampaignImprovement = z.infer<typeof improvedPremiseSchema>;
+export const campaignImprovementRequestSchema = campaignDraftSchema.extend({
+  previousDraft: improvedPremiseSchema.optional(),
+});
+export const startingStorySchema = z
+  .object({
+    memberId: z.string(),
+    itemId: z.string(),
+    hook: z.string().trim().min(1).max(500),
+    rumour: z.string().trim().min(1).max(700),
+  })
+  .strict();
+export type StartingStory = z.infer<typeof startingStorySchema>;
 export const checkSchema = z
   .object({
     memberId: z.string().uuid(),
     stat: statSchema,
     dc: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
     reason: z.string().min(1).max(500),
+    goal: z.object({
+      intent: z.string().trim().min(1).max(300),
+      success: z.string().trim().min(1).max(500),
+    }).strict().nullable().optional(),
     mode: z.enum(['normal', 'advantage', 'disadvantage']),
     // Absent/null preserves legacy checks; new checks keep both sides until the engine combines them.
     circumstances: z.object({ favorable: z.boolean(), adverse: z.boolean() }).strict().nullable().optional(),
@@ -349,7 +416,7 @@ export const resourceUseSchema = z
     memberId: z.string().uuid(),
     itemId: z.string().min(1).max(100).nullable(),
     abilityName: z.string().min(1).max(80).nullable(),
-    targetId: z.string().uuid().nullable(),
+    targetId: z.string().trim().min(1).max(100).nullable(),
   })
   .strict();
 export type ResourceUse = z.infer<typeof resourceUseSchema>;
@@ -480,6 +547,7 @@ export const outcomeSchema = z
             itemStatus: z.string().max(500).optional(),
             npcId: z.string().max(100).optional(),
             npcStatus: z.string().max(1000).optional(),
+            portraitId: z.string().uuid().optional(),
             featureId: z.string().max(100).optional(),
             featureStatus: z.string().optional(),
           })
@@ -502,6 +570,7 @@ export const outcomeSchema = z
   .strict();
 export type Outcome = z.infer<typeof outcomeSchema>;
 export type CharacterState = {
+  startingRumour?: string;
   factionConnectionPreference?: 'allow' | 'unaffiliated';
   factionInitialized?: boolean;
   factionAffiliation?: FactionAffiliation | null;
@@ -530,7 +599,18 @@ export type CharacterState = {
   abilityUses?: Record<string, number>;
   abilityGuard?: number;
   abilityAssist?: number;
-  abilityBarrier?: { amount: number; sourceId: string };
+  abilityBarrier?: { amount: number; sourceId: string; expiresRound?: number };
+  combatCover?: { sourceId: string; evidence: string };
+  combatPerks?: {
+    round: number;
+    openingStrikeUsed?: boolean;
+    retaliation?: boolean;
+    temporaryDefense?: number;
+    restorativeRound?: number;
+    reinforcedRound?: number;
+    thornsRound?: number;
+    opportunistRound?: number;
+  };
 };
 export const enemySchema = z
   .object({
@@ -558,6 +638,12 @@ export type Enemy = z.infer<typeof enemySchema> & {
   readyRound?: number;
   withdrawn?: boolean;
   stunned?: boolean;
+  intent?: { targetId: string; round: number };
+  opening?: { sourceId: string; beneficiaryId: string | null; expiresRound: number };
+  hindered?: boolean;
+  hinderedReason?: string;
+  rallyOpenings?: Record<string, string>;
+  position?: string;
   conditions?: string[];
   conditionTurns?: Record<string, number>;
 };
@@ -578,6 +664,9 @@ export type NPCState = {
   factionId?: string | null;
   followingMemberId?: string | null;
   fact: string;
+  conditions?: string[];
+  conditionTurns?: Record<string, number>;
+  treatment?: { sourceName: string; healing: number; cured: string[] };
   enemy?: Enemy;
 };
 export type InvestigationRecord = {
@@ -615,6 +704,7 @@ export type Scene = {
     {
       information: string;
       rewardRolled: boolean;
+      setbackRewardRolled?: boolean;
       investigation?: InvestigationRecord;
       attempts?: Record<string, { information: string; investigation: InvestigationRecord }>;
     }
@@ -671,15 +761,40 @@ export const npcReactionSchema = z
   .strict();
 export type NPCReaction = z.infer<typeof npcReactionSchema>;
 
+export const combatManeuverSchema = z
+  .object({
+    effect: z.enum(['opening', 'hinder', 'interrupt', 'push', 'cover']),
+    intent: z.string().trim().min(3).max(500),
+    beneficiaryId: z.string().uuid().nullable().default(null),
+    sourceId: z.string().min(1).max(200).nullable().default(null),
+    evidence: z.string().trim().min(1).max(1000).nullable().default(null),
+    destination: z.string().trim().min(1).max(160).nullable().default(null),
+  })
+  .strict();
+export type CombatManeuver = z.infer<typeof combatManeuverSchema>;
+export const combatRollEffectSchema = z.object({
+  effect: z.enum(['advantage', 'disadvantage', 'hinder', 'ally-advantage']),
+  targetId: z.string().min(1).max(100),
+  beneficiaryId: z.string().uuid().optional(),
+  intent: z.string().trim().min(3).max(500),
+  reason: z.string().trim().min(3).max(240),
+  sourceId: z.string().min(1).max(200).optional(),
+  evidence: z.string().trim().min(1).max(1000).optional(),
+}).strict();
+
 export const combatSchema = z
   .object({
+    voiceLines: z.array(z.object({
+      actorId: z.string().min(1).max(100),
+      line: z.string().trim().min(1).max(240).regex(/^[^\r\n]+$/, 'Keep a voice line on one line.'),
+    }).strict()).max(110).optional(),
     npcReactions: z.array(npcReactionSchema).max(6).optional(),
     actions: z
       .array(
         z
           .object({
             memberId: z.string().uuid(),
-            intent: z.enum(['action', 'orientation']).optional(),
+            intent: z.enum(['action', 'orientation', 'instinct']).optional(),
             main: z.enum([
               'attack',
               'defend',
@@ -710,6 +825,8 @@ export const combatSchema = z
             minorSlot: z.enum(slots).nullable().default(null),
             dc: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]).optional(),
             effect: z.enum(['damage', 'stun', 'influence']).optional(),
+            maneuver: combatManeuverSchema.nullable().optional(),
+            rollEffect: combatRollEffectSchema.optional(),
             cureCondition: ailmentSchema.nullable().optional(),
             weaponSlot: z.enum(['left', 'right', 'natural']).nullable().optional(),
             environment: environmentalActionSchema.nullable().optional(),
@@ -723,6 +840,13 @@ export const combatSchema = z
   })
   .strict();
 export type CombatInput = z.infer<typeof combatSchema>;
+const combatTargetIds = z.array(z.string().min(1).max(100)).max(3)
+  .refine((ids) => new Set(ids).size === ids.length, 'Targets must be distinct.');
+export const combatSelectionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('attack'), targetIds: z.tuple([z.string().min(1).max(100)]) }).strict(),
+  z.object({ kind: z.literal('ability'), targetIds: combatTargetIds }).strict(),
+]);
+export type CombatSelection = z.infer<typeof combatSelectionSchema>;
 export const supportActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('help-up'), targetId: z.string().uuid() }).strict(),
   z
@@ -741,6 +865,8 @@ export type Member = {
   replacement?: { characterId: string; character: Character } | null;
 };
 export type Action = {
+  npcDeal?: { conversationId: string; cost: number };
+  combatSelection?: CombatSelection;
   gathering?: { id: string; locationId: string; route: string[] };
   submittedAt?: string;
   memberId: string;
@@ -754,6 +880,7 @@ export type Action = {
 export type Roll = Check & {
   id: string;
   dice: number[];
+  keptDie?: number;
   modifier: number;
   // Freeze passive check contributions with the dice; legacy rolls omit this evidence.
   equipmentBonuses?: { itemId: string; name: string; bonus: number }[];
@@ -766,6 +893,7 @@ export type Roll = Check & {
   notation?: string;
 };
 export type Turn = {
+  combatRules?: 2;
   id: string;
   number: number;
   phase: 'collecting' | 'queued' | 'resolving' | 'failed' | 'complete';
@@ -790,6 +918,8 @@ export type Turn = {
   equipmentChanges?: { memberId: string; characterName: string; description: string }[];
 };
 export type Snapshot = {
+  npcConversation?: import('./npc-chat').NPCConversation;
+  combatPreviews?: { memberId: string; targetIds: string[] }[];
   factions?: PublicFaction[];
   id: string;
   config: CampaignConfig;
@@ -858,23 +988,40 @@ export function templateCharacter(name = 'New character', species = 'Custom spec
       },
     ],
     selectedEquipmentIds: [],
-    equipmentOptions: Array.from({ length: 5 }, (_, i) => ({
-      id: `starter-${i}`,
-      name: `Starting weapon ${i + 1}`,
-      kind: 'weapon' as const,
-      rarity: 'Common' as const,
-      scaling: [stats[i % stats.length]],
-      requirements: { STR: 0, DEX: 0, INT: 0, CHA: 0, CON: 0, WIS: 0 },
-      hands: 1 as const,
-      light: stats[i % stats.length] === 'DEX',
-      damage: '1d6',
-      defense: 0,
-      initiativePenalty: 0,
-      healing: 0,
-      attackBonus: 0,
-      checkBonus: 0,
-      description: 'A simple starting weapon.',
-    })),
+    equipmentOptions: (['weapon', 'armour', 'boots', 'weapon', 'helmet', 'shield', 'relic'] as const).map(
+      (kind, i) => ({
+        id: `starter-${i}`,
+        name: [
+          'Short sword',
+          'Chainmail',
+          'Travel boots',
+          'Hunting knife',
+          'Iron cap',
+          'Round shield',
+          'Carved keepsake',
+        ][i],
+        kind,
+        rarity: 'Common' as const,
+        scaling:
+          kind === 'weapon'
+            ? [i === 0 ? ('STR' as const) : ('DEX' as const)]
+            : kind === 'armour'
+              ? ['DEX' as const]
+              : kind === 'relic'
+                ? ['WIS' as const]
+                : [],
+        requirements: { STR: 0, DEX: 0, INT: 0, CHA: 0, CON: 0, WIS: 0 },
+        hands: 1 as const,
+        light: kind === 'weapon' && i === 3,
+        damage: kind === 'weapon' ? '1d6' : '1d4',
+        defense: ['armour', 'boots', 'helmet', 'shield'].includes(kind) ? 1 : 0,
+        initiativePenalty: 0,
+        healing: 0,
+        attackBonus: 0,
+        checkBonus: kind === 'relic' ? 1 : 0,
+        description: 'Reliable equipment for a new adventurer.',
+      }),
+    ),
     healingItemName: 'Healing consumable',
   };
 }

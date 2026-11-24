@@ -47,7 +47,7 @@ it('preserves an earlier local encounter die when a later draw fails before draf
     });
     for (const [index, player] of players.entries()) {
       const character = templateCharacter(`Scout ${index}`);
-      character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+      character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
       game.join(campaign.inviteCode!, player.id, game.saveCharacter(player.id, character).id);
     }
     game.start(campaign.id, host.id);

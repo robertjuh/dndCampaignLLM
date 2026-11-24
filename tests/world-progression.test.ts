@@ -270,7 +270,7 @@ it('preserves an already validated encounter checkpoint journal exactly when res
   expect(value.journal).toEqual(frozen);
 });
 
-it('accepts a supplied consolidation at the journal limit and requests bounded repair when canonical append cannot fit', () => {
+it('keeps complete recent journal facts locally and requests repair only when the new evidence itself cannot fit', () => {
   const c = context();
   const value = proposal(c);
   const event = progress(value);
@@ -281,6 +281,11 @@ it('accepts a supplied consolidation at the journal limit and requests bounded r
   expect(value.journal[0].detail).toBe(consolidated);
   expect(c.journal[0].detail).toHaveLength(1470);
   value.journal[0].detail = 'A paraphrase of the new observation.';
+  expect(() => validateWorldProgression(c, value, resolve)).not.toThrow();
+  expect(value.journal[0].detail).toBe(event.fact);
+  expect(c.journal[0].detail).toHaveLength(1470);
+  event.fact = 'x'.repeat(1501);
+  value.journal[0].detail = event.fact;
   expect(() => validateWorldProgression(c, value, resolve)).toThrow(JournalCapacityError);
 });
 

@@ -75,7 +75,7 @@ async function table() {
   });
   for (const [index, player] of players.entries()) {
     const character = templateCharacter(`Traveller ${index}`);
-    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
     const saved = game.saveCharacter(player.id, character);
     game.join(campaign.inviteCode!, player.id, saved.id);
   }

@@ -26,6 +26,8 @@ export default defineConfig({
       HOST: '0.0.0.0',
       GATHER_PUBLIC_URL: `http://${lanAddress}:3100`,
       GATHER_DATA_DIR: mkdtempSync(join(tmpdir(), 'gather-browser-')),
+      GATHER_ICON_URL: '',
+      GOOGLE_CLIENT_ID: '',
     },
   },
 });

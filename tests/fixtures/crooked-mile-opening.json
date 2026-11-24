@@ -1,0 +1,295 @@
+[
+  {
+    "version": 3,
+    "currencyName": "Crowns",
+    "beats": [
+      {
+        "kind": "world",
+        "at": "place:1",
+        "fact": "A delayed coach brought you together at the Crooked Mile Inn. The inn floor unrolls toward the marsh. Mara Flint braces the stamped hearthstone with a bending poker while a Guild surveyor watches. The Brass surveyor duck demands a witness. The narrow dry route between the toll gates leads uphill.",
+        "text": "A delayed coach brought you together at the Crooked Mile Inn. The inn floor unrolls toward the marsh. Mara Flint braces the stamped hearthstone with a bending poker while a Guild surveyor watches. The Brass surveyor duck demands a witness. The narrow dry route between the toll gates leads uphill.",
+        "place": {
+          "name": "Crooked Mile Inn Common Room",
+          "atmosphere": "Rain rattles the slate roof; hearthlight glitters on wet floorboards and brass.",
+          "hazard": "The common-room floor is unrolling toward deep marsh water, carrying tables and a mule; the poker bracing the stamped hearthstone is bending, while toll gates outside narrow the route to dry ground.",
+          "danger": "dangerous",
+          "riskReason": "Delay risks the sliding tables and their occupants reaching the marsh water, while the dry route outside is narrowing."
+        },
+        "exits": [
+          {
+            "to": "new:dry-road",
+            "name": "Dry road",
+            "label": "Uphill between the toll gates",
+            "blocked": false,
+            "bidirectional": true
+          }
+        ],
+        "npcs": [
+          {
+            "npcId": "new:mara-flint",
+            "name": "Mara Flint",
+            "aliases": [
+              "innkeeper"
+            ],
+            "locationId": "place:1"
+          },
+          {
+            "npcId": "new:guild-surveyor",
+            "name": "Guild Surveyor",
+            "aliases": [
+              "surveyor at the threshold"
+            ],
+            "locationId": "place:1"
+          },
+          {
+            "npcId": "new:brass-surveyor-duck",
+            "name": "Brass Surveyor Duck",
+            "aliases": [
+              "brass duck"
+            ],
+            "locationId": "place:1",
+            "status": "alive"
+          }
+        ],
+        "factions": [],
+        "journal": [
+          {
+            "kind": "fact",
+            "name": "The passengers’ shared circumstance",
+            "fact": "The delayed baronial coach brought its passengers together at the Crooked Mile Inn for supper; their prior acquaintance is not established."
+          },
+          {
+            "kind": "location",
+            "name": "Crooked Mile Inn Common Room",
+            "fact": "The floor is unrolling toward the marsh with two occupied tables and a mule aboard; Mara Flint’s bending poker braces a hearthstone stamped PUBLIC HIGHWAY. The brass surveyor duck lies beneath a bench demanding a witness. Outside, toll gates are narrowing the dry route."
+          }
+        ]
+      }
+    ],
+    "summary": "The sliding floor threatens the Crooked Mile Inn.",
+    "notes": [],
+    "opening": {
+      "npcs": [
+        {
+          "id": "new:mara-flint",
+          "name": "Mara Flint",
+          "role": "Innkeeper, bracing the hearthstone with a bending poker."
+        },
+        {
+          "id": "new:guild-surveyor",
+          "name": "Guild Surveyor",
+          "role": "A surveyor at the threshold, ink running off his cuffs."
+        },
+        {
+          "id": "new:brass-surveyor-duck",
+          "name": "Brass Surveyor Duck",
+          "role": "A brass surveyor duck beneath a bench, stamping PUBLIC HIGHWAY and demanding a witness."
+        }
+      ],
+      "features": [
+        {
+          "id": "new:hearthstone",
+          "name": "Stamped Hearthstone",
+          "description": "The hearthstone bears the fresh brass stamp PUBLIC HIGHWAY; a bending poker braces it while the floor unrolls toward the marsh."
+        },
+        {
+          "id": "new:toll-gates",
+          "name": "Rival Survey Crews’ Toll Gates",
+          "description": "Outside, rival crews stake claims and their gates narrow the route to dry ground."
+        },
+        {
+          "id": "new:lantern-route",
+          "name": "Lantern-Marked Marsh Path",
+          "description": "A visible route beyond the toll gates."
+        }
+      ],
+      "quests": [],
+      "mysteries": [
+        {
+          "id": "new:duck-deed-dispute",
+          "name": "The Duck’s Deed",
+          "description": "The duck’s belly is said to contain a deed that could bear on control of the causeways; the deed’s authenticity and what it might establish remain unknown."
+        }
+      ]
+    }
+  },
+  {
+    "version": 3,
+    "currencyName": "Crowns",
+    "beats": [
+      {
+        "kind": "world",
+        "at": "place:1",
+        "fact": "A delayed coach brought you together at the Crooked Mile Inn. The inn floor unrolls toward the marsh. Mara Flint braces the stamped hearthstone with a bending poker while a Guild surveyor watches. The Brass surveyor duck demands a witness. The narrow dry route between the toll gates leads uphill.",
+        "text": "A delayed coach brought you together at the Crooked Mile Inn. The inn floor unrolls toward the marsh. Mara Flint braces the stamped hearthstone with a bending poker while a Guild surveyor watches. The Brass surveyor duck demands a witness. The narrow dry route between the toll gates leads uphill.",
+        "place": {
+          "name": "Crooked Mile Inn, Common Room",
+          "atmosphere": "Rain rattles the slate roof; firelight shivers over a floor slowly sliding toward the marsh.",
+          "hazard": "The common-room floor is unrolling toward deep marsh water, carrying two occupied tables and a mule; the poker bracing the hearthstone is bending, and the dry route outside is narrowing behind toll gates.",
+          "danger": "dangerous",
+          "riskReason": "The sliding floor threatens to carry occupants into deep water, while the remaining dry exit is shrinking."
+        },
+        "exits": [
+          {
+            "to": "new:dry-road",
+            "name": "Dry road",
+            "label": "Uphill between the toll gates",
+            "blocked": false,
+            "bidirectional": true
+          }
+        ],
+        "npcs": [
+          {
+            "npcId": "new:mara-flint",
+            "name": "Mara Flint",
+            "aliases": [
+              "innkeeper"
+            ],
+            "locationId": "place:1",
+            "status": "alive"
+          },
+          {
+            "npcId": "new:guild-surveyor",
+            "name": "Guild surveyor",
+            "aliases": [
+              "surveyor at the threshold"
+            ],
+            "locationId": "place:1",
+            "status": "alive"
+          },
+          {
+            "npcId": "new:surveyor-duck",
+            "name": "Brass surveyor duck",
+            "aliases": [
+              "duck"
+            ],
+            "locationId": "place:1",
+            "status": "alive"
+          }
+        ],
+        "features": [
+          {
+            "featureId": "new:hearthstone",
+            "name": "Stamped hearthstone",
+            "aliases": [
+              "hearthstone"
+            ],
+            "properties": {
+              "inscription": "PUBLIC HIGHWAY",
+              "bracedBy": "Mara Flint's poker",
+              "state": "Poker visibly bending; floor unrolling toward the marsh"
+            }
+          },
+          {
+            "featureId": "new:sliding-common-room",
+            "name": "Unrolling common-room floor",
+            "aliases": [
+              "sliding floor"
+            ],
+            "properties": {
+              "state": "Carrying two occupied tables and a mule toward marsh water",
+              "hazard": "Deep water"
+            }
+          },
+          {
+            "featureId": "new:narrowing-dry-route",
+            "name": "Narrow dry route",
+            "aliases": [
+              "dry route",
+              "toll gates"
+            ],
+            "properties": {
+              "state": "Rival survey crews' toll gates are narrowing the remaining path"
+            }
+          }
+        ],
+        "factions": [
+          {
+            "type": "discover",
+            "factionId": "office",
+            "knownDescription": "The Baronial Road Office maintains highways."
+          }
+        ],
+        "journal": [
+          {
+            "kind": "fact",
+            "name": "Gathering at the Crooked Mile Inn",
+            "description": "The delayed baronial coach brought its passengers together for supper; their reasons for traveling remain unstated."
+          },
+          {
+            "kind": "location",
+            "name": "Crooked Mile Inn, Common Room",
+            "description": "A brass surveyor duck stamped the hearthstone PUBLIC HIGHWAY, and the common-room floor began unrolling toward marsh water."
+          },
+          {
+            "kind": "fact",
+            "name": "Public claims to routes",
+            "description": "The Baronial Road Office claims road maintenance; the Brindlefen Ferry Guild claims flood crossings. These are public claims, not verified conclusions about the disputed deed."
+          }
+        ],
+        "progress": [
+          {
+            "thread": "premise",
+            "kind": "threat",
+            "discovery": "The inn’s common-room floor is unrolling toward deep marsh water; its occupants and a mule are sliding with it."
+          }
+        ]
+      }
+    ],
+    "summary": "The sliding floor threatens the Crooked Mile Inn.",
+    "notes": [
+      {
+        "id": "new:sliding-common-room-mystery",
+        "locationId": "place:1",
+        "cause": "The duck stamped a disputed deed.",
+        "discoveries": [
+          "There are two seals on the deed."
+        ],
+        "actors": "The surveyor and the duck",
+        "nextChange": "",
+        "dueTurn": null,
+        "status": "open"
+      }
+    ],
+    "opening": {
+      "npcs": [
+        {
+          "npcId": "new:mara-flint",
+          "name": "Mara Flint",
+          "role": "Innkeeper bracing the stamped hearthstone with a bending poker."
+        },
+        {
+          "npcId": "new:guild-surveyor",
+          "name": "Guild surveyor",
+          "role": "A surveyor at the threshold, watching the room as ink runs from his cuffs."
+        },
+        {
+          "npcId": "new:surveyor-duck",
+          "name": "Brass surveyor duck",
+          "role": "A brass surveyor duck beneath a bench, loudly demanding a witness."
+        }
+      ],
+      "features": [
+        {
+          "featureId": "new:hearthstone",
+          "name": "Stamped hearthstone"
+        },
+        {
+          "featureId": "new:sliding-common-room",
+          "name": "Unrolling common-room floor"
+        },
+        {
+          "featureId": "new:narrowing-dry-route",
+          "name": "Narrowing route to dry ground"
+        }
+      ],
+      "quests": [],
+      "mysteries": [
+        {
+          "id": "new:sliding-common-room-mystery",
+          "name": "The stamped hearthstone and disputed deed"
+        }
+      ]
+    }
+  }
+]

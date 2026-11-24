@@ -1,3 +1,4 @@
+import { chatCommand } from '../shared/npc-chat';
 import Fastify, { type FastifyRequest, type FastifyReply } from 'fastify';
 import cookie from '@fastify/cookie';
 import { z } from 'zod';
@@ -7,13 +8,21 @@ import { ChatGPTAuth } from './auth';
 import { ChatGPTGM, PracticeGM, ProviderError } from './providers';
 import { RuleError } from '../shared/rules';
 import { localDice } from './random';
-import { campaignLanguageSchema, characterSchema, levelUpChoiceSchema, slots } from '../shared/schema';
+import {
+  campaignLanguageSchema,
+  combatSelectionSchema,
+  campaignDraftSchema,
+  campaignImprovementRequestSchema,
+  improvedPremiseSchema,
+  characterSchema,
+  levelUpChoiceSchema,
+  slots,
+} from '../shared/schema';
 import type { GoogleAuth } from './google';
 import { tokenHash } from './game';
 import type { ModelTraceSink } from './model-log';
-import { randomUUID } from 'node:crypto';
-import { generatePortrait, PortraitError } from './portraits';
 import type { CampaignConfig } from '../shared/schema';
+import { LocalIcons } from './icons';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -34,9 +43,10 @@ const actionInput = z
     // Legacy clients may still send this field; it no longer gates resolution.
     acceptsLethalRisk: z.boolean().default(false),
     abilityName: z.string().min(1).max(80).nullable().default(null),
+    combatSelection: combatSelectionSchema.optional(),
   })
   .strict()
-  .refine((a) => a.passed || a.text.length > 0, 'Write an action or choose Pass.');
+  .refine((a) => a.passed || a.combatSelection || a.text.length > 0, 'Write an action.');
 const loopback = (ip: string) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip);
 
 export async function createApp(options: {
@@ -56,6 +66,15 @@ export async function createApp(options: {
         ? new PracticeGM()
         : new ChatGPTGM(options.auth, owner, config.model, fetch, options.modelTrace));
   const game = new Game(options.db, providers, undefined, () => localDice);
+  const icons = new LocalIcons(options.db);
+  app.addHook('preSerialization', async (_request, _reply, payload) => {
+    if (payload && typeof payload === 'object') {
+      if ('members' in payload && 'scene' in payload && 'config' in payload) {
+        icons.attach(payload);
+      } else if ('equipmentOptions' in payload && 'abilities' in payload) icons.attach(payload);
+    }
+    return payload;
+  });
   const streams = new Set<() => void>();
   const requests = new Map<string, { start: number; count: number }>();
   const googleOrigin = options.google ? new URL(options.google.config.redirectUri).origin : undefined;
@@ -111,11 +130,12 @@ export async function createApp(options: {
   };
   const snap = (id: string, req: FastifyRequest) => {
     const snapshot = game.snapshot(id, req.player.id);
+    icons.attach(snapshot);
     return { ...snapshot, ...(snapshot.isHost ? { partyOrigins: options.partyOrigins ?? [] } : {}) };
   };
   app.get('/api/me', async (request) => ({
     ...request.player,
-    characters: game.characters(request.player.id),
+    characters: icons.attach(game.characters(request.player.id)),
     campaigns: game.list(request.player.id),
     joinAtRoot: (options.partyOrigins ?? []).some((origin) => new URL(origin).host === request.headers.host),
   }));
@@ -198,16 +218,37 @@ export async function createApp(options: {
     return reply.redirect(result.url);
   });
   app.post('/api/characters', async (request) => game.saveCharacter(request.player.id, request.body));
+  app.get('/api/icons/:id', async (request, reply) => {
+    let image: Buffer | undefined;
+    try {
+      image = await icons.image(campaignId(request));
+    } catch (error) {
+      if (error instanceof z.ZodError) throw error;
+      return reply.code(503).send({ error: 'The local icon service is unavailable.' });
+    }
+    if (!image) throw new GameError('Icon not found.', 404);
+    return reply.header('Cache-Control', 'private, max-age=31536000, immutable')
+      .type('image/png').send(image);
+  });
   app.get('/api/portraits/:id', async (request, reply) => {
+    const id = campaignId(request);
     const portrait = options.db
       .prepare('SELECT image FROM character_portraits WHERE id = ?')
-      .get(campaignId(request)) as { image: Buffer } | undefined;
-    if (!portrait) throw new GameError('Portrait not found.', 404);
+      .get(id) as { image: Buffer } | undefined;
+    let image = portrait?.image;
+    if (!image) {
+      try {
+        image = await icons.image(id, 'portrait');
+      } catch {
+        return reply.code(503).send({ error: 'The local portrait service is unavailable.' });
+      }
+    }
+    if (!image) throw new GameError('Portrait not found.', 404);
     // The random image ID is a shareable capability, including for the shared display.
     return reply
       .header('Cache-Control', 'private, max-age=31536000, immutable')
-      .type('image/jpeg')
-      .send(portrait.image);
+      .type(portrait ? 'image/jpeg' : 'image/png')
+      .send(image);
   });
   app.get('/api/characters/ability-stats', async (request) => {
     if (!loopback(request.ip))
@@ -258,24 +299,28 @@ export async function createApp(options: {
         portraitId: undefined,
         portraitError: undefined,
       });
-      if (portraitCampaign?.provider !== 'practice') {
-        try {
-          const image = await generatePortrait(character, portraitCampaign, controller.signal);
-          const portraitId = randomUUID();
-          options.db.prepare('INSERT INTO character_portraits(id, image) VALUES(?, ?)').run(portraitId, image);
-          character.portraitId = portraitId;
-        } catch (error) {
-          if (controller.signal.aborted) throw new GameError('Generation was cancelled.', 499);
-          character.portraitError =
-            error instanceof PortraitError
-              ? error.message
-              : error instanceof Error && error.name === 'TimeoutError'
-                ? 'Portrait generation timed out. Your character is ready to save.'
-                : 'The portrait could not be created. Your character is ready to save.';
-        }
-      }
       controller.signal.throwIfAborted();
-      return character;
+      return icons.attach(character, { campaign: portraitCampaign });
+    } finally {
+      reply.raw.off('close', cancel);
+    }
+  });
+  app.post('/api/campaigns/improve-premise', async (request, reply) => {
+    const { previousDraft, ...config } = campaignImprovementRequestSchema.parse(request.body);
+    if (!config.premise.trim() && !config.setting.trim())
+      throw new GameError('Add a premise or setting to inspire the improvement.');
+    if (config.provider !== 'chatgpt') throw new GameError('Prompt improvement is available with ChatGPT.');
+    const provider = providers(request.player.id, config);
+    if (!provider.improvePremise) throw new GameError('Prompt improvement is not available.', 503);
+    const controller = new AbortController();
+    const cancel = () => {
+      if (!reply.raw.writableEnded) controller.abort();
+    };
+    reply.raw.on('close', cancel);
+    try {
+      const result = improvedPremiseSchema.parse(await provider.improvePremise(config, controller.signal, previousDraft));
+      controller.signal.throwIfAborted();
+      return result;
     } finally {
       reply.raw.off('close', cancel);
     }
@@ -319,6 +364,11 @@ export async function createApp(options: {
     game.start(id, request.player.id);
     return snap(id, request);
   });
+  app.post('/api/campaigns/:id/npc-chat', async (request) => {
+    const id = authorizeRead(request);
+    await game.chats.command(id, request.player.id, chatCommand.parse(request.body));
+    return snap(id, request);
+  });
   app.post('/api/campaigns/:id/action', async (request) => {
     const id = campaignId(request);
     const action = actionInput.parse(request.body);
@@ -330,7 +380,20 @@ export async function createApp(options: {
       action.passed,
       action.acceptsLethalRisk,
       action.abilityName,
+      null,
+      null,
+      action.combatSelection,
     );
+    return snap(id, request);
+  });
+  app.post('/api/campaigns/:id/action/preview', async (request) => {
+    const id = campaignId(request);
+    const { turnId, targets } = z.object({
+      turnId: z.string().uuid(),
+      targets: z.array(z.string().min(1).max(100)).max(3)
+        .refine((targets) => new Set(targets).size === targets.length),
+    }).strict().parse(request.body);
+    game.previewCombat(id, request.player.id, turnId, targets);
     return snap(id, request);
   });
   app.post('/api/campaigns/:id/gathering', async (request) => {
@@ -407,7 +470,7 @@ export async function createApp(options: {
         itemId: z.string().optional(),
         targetId: z.string().uuid().optional(),
         abilityName: z.string().min(1).max(80).optional(),
-        itemIds: z.array(z.string()).length(2).optional(),
+        itemIds: z.array(z.string()).min(2).max(3).optional(),
         slot: z.enum(slots).optional(),
         dropItemIds: z.array(z.string().min(1).max(100)).max(8).optional(),
       })
@@ -497,6 +560,7 @@ export async function createApp(options: {
   });
   app.addHook('onClose', async () => {
     streams.forEach((close) => close());
+    await icons.close();
     await game.idle();
   });
   game.resumeQueued();

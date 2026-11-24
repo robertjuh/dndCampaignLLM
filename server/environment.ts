@@ -26,6 +26,9 @@ export function environmentalFacts(
     [
       [`scene:${context.scene.location.name}:atmosphere`, context.scene.location.atmosphere],
       [`scene:${context.scene.location.name}:hazard`, context.scene.location.hazard],
+      ...(context.scene.encounter?.enemies ?? []).map((enemy) => [
+        `enemy:${enemy.id}`, `${enemy.name}. ${enemy.description}${enemy.position ? ` Position: ${enemy.position}.` : ''}`,
+      ]),
       ...localJournal.map((entry) => [`journal:${entry.kind}:${entry.name}`, entry.detail]),
       ...Object.values(context.scene.npcs ?? {})
         .filter((npc) => npc.locationId === context.scene.location.id)

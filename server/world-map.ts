@@ -6,6 +6,7 @@ import { gatheringProgress } from '../shared/gathering';
 import { isInCombat } from '../shared/rules';
 import { containingStructure, locationConnections, passageConnections } from '../shared/structures';
 import { structureSceneAtEvent, witnessedLocations } from './structures';
+import { npcNameKey, npcNames } from '../shared/npcs';
 
 export function gatheringOptions(
   context: GMContext,
@@ -148,7 +149,8 @@ export function submittedTravel(context: GMContext, memberId: string) {
       const target = directed.replace(/^(?:the|de|het)\s+/u, '');
       const goals = Object.entries(knownLocations(context.scene)).filter(([, name]) => {
         const full = normalize(name).replace(/^(?:the|de|het)\s+/u, '');
-        return matches(target, full) || matches(target, full.split(' ').at(-1)!);
+        return matches(target, full) || matches(target, full.split(' ').at(-1)!) ||
+          new RegExp(`\\b(?:to|towards?|naar|richting) (?:the |de |het )?${full}(?: |$)`, 'u').test(target);
       });
       if (goals.length === 1 && goals[0][0] !== origin) return { goalId: goals[0][0] };
     }
@@ -525,6 +527,28 @@ export function actorReferences(context: GMContext) {
   );
 }
 
+/** Aliases and unique saved names resolve to identities; ambiguous names never choose an actor. */
+export function resolveActorReference(context: GMContext, reference: string) {
+  const references = actorReferences(context);
+  if (Object.hasOwn(references, reference)) return references[reference].id;
+  const actors = [
+    ...context.members.map((member) => ({ id: member.id, name: member.character.name, aliases: [] })),
+    ...Object.values(context.scene.npcs ?? {}),
+  ];
+  if (actors.some((actor) => actor.id === reference)) return reference;
+  const matches = actors.filter((actor) => npcNames(actor).some((name) => npcNameKey(name) === npcNameKey(reference)));
+  if (matches.length > 1) throw new Error(`Ambiguous actor name ${JSON.stringify(reference)}; use the supplied actor alias or exact saved ID.`);
+  return matches.length === 1 ? matches[0].id : reference;
+}
+
+export function resolveLocationReference(context: GMContext, reference: string) {
+  const places = locationReferences(context);
+  if (Object.hasOwn(places, reference)) return places[reference].id;
+  const matches = Object.values(places).filter((place) => npcNameKey(place.name) === npcNameKey(reference));
+  if (matches.length > 1) throw new Error(`Ambiguous place name ${JSON.stringify(reference)}; use the supplied place alias or exact saved ID.`);
+  return matches.length === 1 ? matches[0].id : reference;
+}
+
 /** Repair only unambiguous reference spelling and existing movement proofs, never outcomes. */
 export function normalizeAdjudicationReferences(context: GMContext, input: unknown): unknown {
   const record = (value: unknown): value is Record<string, unknown> =>
@@ -615,7 +639,11 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     return Object.fromEntries(
       Object.entries(value).map(([name, item]) => [
         name,
-        keys.includes(name) ? resolve(item, `${path}.${name}`) : item,
+        keys.includes(name)
+          ? ['memberId', 'followingMemberId'].includes(name) && typeof item === 'string'
+            ? resolveActorReference(context, item)
+            : resolve(item, `${path}.${name}`)
+          : item,
       ]),
     );
   };
@@ -643,18 +671,17 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     return { ...operation, quest };
   };
   if (input.version === 3) {
-    const actors = actorReferences(context);
     output.beats = beats.map((beat, index) => {
       if (!record(beat)) return beat;
       const path = `beats[${index}]`;
       const next = fields(beat, ['move', 'transport'].includes(String(beat.kind)) ? ['to'] : ['at'], path) as Record<string, unknown>;
-      if (typeof beat.actor === 'string') next.actor = actors[beat.actor]?.id ?? beat.actor;
+      if (typeof beat.actor === 'string') next.actor = resolveActorReference(context, beat.actor);
       if (record(beat.stop)) next.stop = fields(beat.stop, ['at'], `${path}.stop`);
       if (Array.isArray(beat.quests)) next.quests = beat.quests.map((operation, i) => questOperation(operation, `${path}.quests[${i}].quest`));
       if (Array.isArray(beat.factions))
         next.factions = beat.factions.map((effect) =>
           record(effect) && typeof effect.memberId === 'string'
-            ? { ...effect, memberId: actors[effect.memberId]?.id ?? effect.memberId }
+            ? { ...effect, memberId: resolveActorReference(context, effect.memberId) }
             : effect,
         );
       if (Array.isArray(beat.exits)) next.exits = list(beat.exits, ['to'], `${path}.exits`);
@@ -662,7 +689,7 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
       if (Array.isArray(beat.npcs)) next.npcs = list(beat.npcs, ['locationId'], `${path}.npcs`);
       const companion = (item: unknown) =>
         record(item) && typeof item.followingMemberId === 'string'
-          ? { ...item, followingMemberId: actors[item.followingMemberId]?.id ?? item.followingMemberId }
+          ? { ...item, followingMemberId: resolveActorReference(context, item.followingMemberId) }
           : item;
       if (Array.isArray(next.npcs)) next.npcs = next.npcs.map(companion);
       if (record(beat.person)) next.person = companion(beat.person);
@@ -676,19 +703,19 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     });
     if (Array.isArray(input.notes)) output.notes = (list(input.notes, ['locationId'], 'notes') as unknown[]).map((note) =>
       record(note) && record(note.journey) && typeof note.journey.memberId === 'string'
-        ? { ...note, journey: { ...note.journey, memberId: actors[note.journey.memberId]?.id ?? note.journey.memberId } }
+        ? { ...note, journey: { ...note.journey, memberId: resolveActorReference(context, note.journey.memberId) } }
         : note);
   }
   if (Array.isArray(output.structureUpdates)) output.structureUpdates = output.structureUpdates.map((structure, i) => structureFields(structure, `structureUpdates[${i}]`));
   if (Array.isArray(output.structureMoves)) output.structureMoves = list(output.structureMoves, ['to'], 'structureMoves');
   for (const [name, keys] of Object.entries({
-    memberLocations: ['locationId'],
+    memberLocations: ['locationId', 'memberId'],
     placeUpdates: ['ref'],
-    events: ['locationRef'],
+    events: ['locationRef', 'memberId'],
     arrivals: ['locationId'],
     encounterRisks: ['locationId'],
     worldProgress: ['locationId'],
-    npcUpdates: ['locationId'],
+    npcUpdates: ['locationId', 'followingMemberId'],
     featureUpdates: ['locationId'],
   }))
     if (name in output) output[name] = list(output[name], keys, name);
@@ -712,6 +739,7 @@ export function normalizeAdjudicationReferences(context: GMContext, input: unkno
     output.actions = output.actions.map((action, index) => {
       if (!record(action)) return action;
       const next = { ...action };
+      if (typeof next.memberId === 'string') next.memberId = resolveActorReference(context, next.memberId);
       if ('search' in next) next.search = fields(next.search, ['locationId'], `actions[${index}].search`);
       if (record(next.travel))
         next.travel = {

@@ -16,7 +16,7 @@ import { engineEvents } from '../server/turn-resolution';
 import { projectJournal } from '../shared/journal';
 import { ensureLocations } from '../shared/locations';
 import { ensureUniqueEnemyNames, npcNameKey } from '../shared/npcs';
-import { baseItem, initialScene, initialState } from '../shared/rules';
+import { baseItem, initialScene, initialState, runCombat } from '../shared/rules';
 import { enemySchema, templateCharacter, type Enemy } from '../shared/schema';
 import { factualNarration, turnAdjudicationSchema } from '../shared/turn-resolution';
 
@@ -216,6 +216,71 @@ it('keeps aliases targetable in a later combat round', () => {
   expect(plan.actions[0].blockedReason).toBeUndefined();
 });
 
+it.each(['item', 'combat ability', 'utility ability'] as const)(
+  'normalizes and executes combat NPC healing with a %s',
+  (source) => {
+    const c = context();
+    const actor = c.members[0];
+    const item = { ...baseItem('gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 1 };
+    actor.state.inventory.push(item);
+    const ability = actor.character.abilities[0];
+    Object.assign(ability, {
+      name: 'Worker Mend',
+      effect: 'mend',
+      kind: source === 'utility ability' ? 'utility' : 'combat',
+    });
+    c.scene.npcs = {
+      worker: {
+        id: 'worker',
+        name: 'Injured Rail Worker',
+        aliases: [],
+        locationId: c.scene.location.id!,
+        status: 'alive',
+        allegiance: null,
+        fact: 'The worker is wounded.',
+      },
+    };
+    c.scene.encounter!.victory = false;
+    c.scene.encounter!.enemies[0].withdrawn = false;
+    c.scene.encounter!.initiative = [{ id: actor.id, total: 20 }];
+    c.turn.actions[0].text =
+      source === 'item'
+        ? 'Heal the Injured Rail Worker with Rescue Gel.'
+        : 'Use Worker Mend on the Injured Rail Worker.';
+    const plan = normalizeCombatInput(c, {
+      actions: [
+        {
+          memberId: actor.id,
+          targetId: 'worker',
+          main: source === 'item' ? 'heal' : 'ability',
+          abilityName: source === 'item' ? null : ability.name,
+          mainItemId: source === 'item' ? item.id : null,
+        },
+      ],
+    });
+    expect(plan.actions[0]).toMatchObject({
+      main: source === 'item' ? 'heal' : 'ability',
+      targetId: 'worker',
+    });
+    const logs = runCombat(
+      c.members,
+      c.scene.encounter!,
+      plan,
+      () => 4,
+      undefined,
+      undefined,
+      Object.values(c.scene.npcs),
+    );
+    expect(logs.join(' ')).toContain('Injured Rail Worker');
+    expect(c.scene.npcs.worker.treatment).toMatchObject({
+      sourceName: source === 'item' ? item.name : ability.name,
+      healing: expect.any(Number),
+    });
+    if (source === 'item') expect(actor.state.inventory.some((item) => item.id === 'gel')).toBe(false);
+    else expect(actor.state.abilityUses?.[ability.name]).toBe(1);
+  },
+);
+
 it('keeps death authoritative after the old encounter is replaced', () => {
   const c = context();
   c.scene.encounter!.enemies[0].hp = 0;
@@ -236,6 +301,18 @@ it('keeps death authoritative after the old encounter is replaced', () => {
   expect(() => persistentEnemy(c, proposed, c.scene.location.id!)).toThrow('permanently dead');
   const value = update(c);
   expect(() => validateNPCUpdates(c, value, () => c.scene.location.id!)).toThrow('permanent');
+});
+
+it('keeps an attack and self-healing separate when the enemy is also a saved NPC', () => {
+  const c = context();
+  const actor = c.members[0];
+  c.scene.npcs = knownNPCs(c.scene);
+  c.scene.encounter!.victory = false;
+  c.scene.encounter!.enemies[0].withdrawn = false;
+  actor.state.inventory.push({ ...baseItem('gel', 'Rescue Gel', 'consumable'), healing: 6, quantity: 1 });
+  c.turn.actions[0].text = 'Attack Captain Mara and drink Rescue Gel.';
+  const plan = normalizeCombatInput(c, { actions: [{ memberId: actor.id, main: 'attack', targetId: 'captain' }] });
+  expect(plan.actions[0]).toMatchObject({ main: 'attack', targetId: 'captain', minor: 'heal', minorItemId: 'gel' });
 });
 
 it('moves observed NPC state over an open route and excludes stale journal presence at the old place', () => {
@@ -378,7 +455,7 @@ it('restores a returning opponent through the real start tool, without new loot,
     player = game.identify(),
     campaign = game.create(host.id, context().config);
   const character = templateCharacter('Pirate');
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   game.join(campaign.inviteCode!, player.id, game.saveCharacter(player.id, character).id);
   game.start(campaign.id, host.id);
   await game.idle();

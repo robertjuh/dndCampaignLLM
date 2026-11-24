@@ -410,7 +410,7 @@ it('routes a Legendary utility through the game and publishes its check and char
     const member = game.members(campaign.id)[0];
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     game.start(campaign.id, host.id);
     await game.idle();

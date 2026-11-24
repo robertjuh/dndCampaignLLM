@@ -45,7 +45,7 @@ test('turn pages follow the latest scene and preserve older scenes while browsin
     const member = joined.members.find((m) => m.id === joined.myMemberId)!;
     await post(player.request, `/api/campaigns/${campaign.id}/character`, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     await page.goto(`/campaign/${campaign.id}`);
     await player.goto(`/campaign/${campaign.id}`);

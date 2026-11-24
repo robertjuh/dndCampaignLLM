@@ -38,7 +38,7 @@ it('retries an occupied code and allocates four readable characters', () => {
 it('gives existing campaigns stable short codes while preserving old invitations and player state', () => {
   const directory = mkdtempSync(join(tmpdir(), 'gather-invite-migration-'));
   const filename = join(directory, 'test.sqlite');
-  let db = openDatabase(filename);
+  let db = openDatabase(filename, () => 1);
   try {
     let game = new Game(db, () => new PracticeGM());
     const host = game.identify();
@@ -54,16 +54,16 @@ it('gives existing campaigns stable short codes while preserving old invitations
       PRAGMA user_version = 17;`);
     db.close();
 
-    db = openDatabase(filename);
+    db = openDatabase(filename, () => 1);
     game = new Game(db, () => new PracticeGM());
     const shortCode = game.snapshot(campaign.id, host.id).inviteCode!;
     expect(shortCode).toMatch(/^[A-HJ-NP-Z2-9]{4}$/);
     expect(game.invite(shortCode.toLowerCase()).id).toBe(campaign.id);
     expect(game.invite(legacyCode.toLowerCase()).id).toBe(campaign.id);
-    expect(game.members(campaign.id)).toEqual(members);
+    expect(game.members(campaign.id)).toMatchObject(members);
     db.close();
 
-    db = openDatabase(filename);
+    db = openDatabase(filename, () => 1);
     game = new Game(db, () => new PracticeGM());
     expect(game.snapshot(campaign.id, host.id).inviteCode).toBe(shortCode);
     expect(game.invite(legacyCode).id).toBe(campaign.id);

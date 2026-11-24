@@ -741,7 +741,7 @@ describe.each(settings)('campaign-independent continuity at $place', (s) => {
       const campaign = game.create(host.id, context(s).config);
       for (const [i, player] of players.entries()) {
         const character = templateCharacter(i ? 'Companion' : 'Traveller');
-        character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+        character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
         game.join(campaign.inviteCode!, player.id, game.saveCharacter(player.id, character).id);
       }
       game.start(campaign.id, host.id);

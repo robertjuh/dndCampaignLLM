@@ -63,7 +63,7 @@ async function fixture() {
     const member = game.members(campaign.id).find((member) => member.playerId === player.id)!;
     game.manageCharacter(campaign.id, player.id, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
     // Isolate assistance from randomly chosen starting gear.
     const current = game.members(campaign.id).find((member) => member.playerId === player.id)!;

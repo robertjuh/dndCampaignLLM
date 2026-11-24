@@ -11,7 +11,7 @@ test('legacy lethal warnings do not add a warning or acceptance step to action s
   page,
 }) => {
   const character = templateCharacter('Mira');
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   const saved = await post<{ id: string }>(page.request, '/api/characters', character);
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
     ruleset: 'roguelike-v1',

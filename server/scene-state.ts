@@ -101,6 +101,22 @@ export function validateFeatureUpdates(
       throw new Error(
         'Scene state needs a public resolved event at an observed place, or a caused change to a known feature.',
       );
+    if (!previous && !names.some((name) => featureNameKey(event.fact).includes(featureNameKey(name)))) {
+      // "the audit cabinet" can identify "Relay Audit Cabinet" without another model request.
+      const words = update.name.split(/\s+/u);
+      const alias = words.slice(1).map((_, index) => words.slice(index + 1).join(' ')).find((alias) => {
+        const key = featureNameKey(alias);
+        return alias.split(/\s+/u).length >= 2 && featureNameKey(event.fact).includes(key) &&
+          !actors.some((actor) => actor.names.some((name) => featureNameKey(name) === key)) &&
+          !items.some((item) => featureNameKey(item.name) === key) &&
+          !Object.values(projected.features ?? {}).some((feature) => feature.locationId === locationId &&
+            [feature.name, ...feature.aliases].some((name) => featureNameKey(name).endsWith(key)));
+      });
+      if (alias && (update.aliases?.length ?? 0) < 12) {
+        update.aliases = [...(update.aliases ?? []), alias];
+        names.push(alias);
+      }
+    }
     if (!previous && !names.some((name) => featureNameKey(event.fact).includes(featureNameKey(name))))
       throw new Error(
         `New scene feature ${JSON.stringify(update.featureId)} (${JSON.stringify(update.name)}) must be named in its public fact for event ${JSON.stringify(event.id)}. Include its exact name or an accurate declared alias in that fact. Check every new feature; changing text or location alone cannot fix a missing name in fact.`,
@@ -148,7 +164,7 @@ export function validateFeatureUpdates(
         featureConnection(context.scene, route));
     if (route && (!routeEdge || ![route.from, route.to].includes(locationId)))
       throw new Error(
-        'A feature can control a route at its place only; discover new routes through mapUpdates.',
+        `A feature can control a route at its place only. Feature ${JSON.stringify(update.featureId)} needs an exit connecting ${JSON.stringify(route.from)} and ${JSON.stringify(route.to)} at its location. Use the same place refs in the world beat's exits, or omit route and passable on ordinary scenery.`,
       );
     if (update.passable !== undefined && !route)
       throw new Error('Feature passability needs its saved or supplied route.');
@@ -188,6 +204,7 @@ export function validateFeatureUpdates(
           ]),
         ],
         properties: { ...previous?.properties, ...update.properties },
+        observation: update.observation ?? (update.properties || update.passable !== undefined ? undefined : previous?.observation),
         route,
         fact: event.fact,
       },
@@ -214,6 +231,7 @@ export function applyFeatureUpdates(scene: Scene, value: TurnAdjudication, resol
       ],
       locationId: resolve(update.locationId),
       properties: { ...previous?.properties, ...update.properties },
+      observation: update.observation ?? (update.properties || update.passable !== undefined ? undefined : previous?.observation),
       fact: value.events.find((event) => event.id === update.eventId)!.fact,
       route:
         update.route === undefined

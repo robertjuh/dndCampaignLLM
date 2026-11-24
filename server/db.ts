@@ -3,26 +3,28 @@ import { randomInt } from 'node:crypto';
 import { migrateLocations, migrateWorldMaps, migrateWorldMapPositions } from './location-migration';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { rollStartingEquipment, grantEquipmentPowers } from '../shared/rules';
+import { rollStartingEquipment, grantEquipmentPowers, startingEquipmentSelected, rollArmourAttribute, effectiveStats, modifier, RuleError } from '../shared/rules';
 import { localDice } from './random';
 import {
   abilitySchema,
+  placeholderEquipmentName,
   stats,
   type Character,
   type CharacterState,
   type Item,
   type Stat,
   type Scene,
+  type CampaignConfig,
 } from '../shared/schema';
 
-export function openDatabase(filename: string) {
+export function openDatabase(filename: string, migrationDraw = localDice.draw) {
   if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
   const db = new Database(filename);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 22) throw new Error('This database was created by a newer Gather version.');
+  if (version > 29) throw new Error('This database was created by a newer Gather version.');
   if (version === 0)
     db.transaction(() => {
       db.exec(`
@@ -522,6 +524,296 @@ export function openDatabase(filename: string) {
                 db.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).run(migrated, row.id);
             }
       db.pragma('user_version = 22');
+    })();
+  if (version < 23)
+    db.transaction(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS campaign_memory (
+        id INTEGER PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, turn_number INTEGER NOT NULL,
+        source_id TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
+        entity_ids TEXT NOT NULL, actor_ids TEXT NOT NULL, location_id TEXT,
+        UNIQUE(turn_id, source_id)
+      );
+      CREATE INDEX IF NOT EXISTS campaign_memory_campaign ON campaign_memory(campaign_id, turn_number);
+      CREATE TABLE IF NOT EXISTS campaign_memory_indexed (
+        turn_id TEXT PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE
+      );
+      PRAGMA user_version = 23;`);
+    })();
+  if (version < 24)
+    db.transaction(() => {
+      const upgradeOffers = (character: Character, previous: Item[]) => {
+        if (previous.length === 7 && previous.filter((item) => item.kind === 'weapon').length === 2)
+          return previous;
+        let rolled: Item[];
+        try {
+          rolled = rollStartingEquipment(character, localDice.draw);
+        } catch (error) {
+          // Legacy characters with no usable hands keep their original offers and loadout.
+          if (error instanceof RuleError) return previous;
+          throw error;
+        }
+        const result: Item[] = [];
+        for (const weapon of [true, false]) {
+          const limit = weapon ? 2 : 5;
+          const kept = previous
+            .filter((item) => (item.kind === 'weapon') === weapon)
+            .slice(0, limit);
+          const additions = rolled
+            .filter((item) => (item.kind === 'weapon') === weapon)
+            .slice(0, limit - kept.length);
+          result.push(
+            ...kept,
+            ...additions.map((item, index) => ({
+              ...item,
+              id: `starter-upgrade-${weapon ? 'weapon' : 'gear'}-${index}`,
+            })),
+          );
+        }
+        return result;
+      };
+      const upgradeSheet = (sheet: Character) => {
+        sheet.equipmentOptions = upgradeOffers(sheet, sheet.equipmentOptions);
+        if (!startingEquipmentSelected(sheet.equipmentOptions, sheet.selectedEquipmentIds))
+          sheet.selectedEquipmentIds = [];
+        return sheet;
+      };
+      const upgradeMember = (member: { character: Character; state: CharacterState }) => {
+        member.character = upgradeSheet(member.character);
+        if (!member.state.equipmentChosen)
+          member.state.starterEquipment = upgradeOffers(member.character, member.state.starterEquipment);
+      };
+      for (const row of db.prepare('SELECT id, sheet FROM characters').all() as {
+        id: string;
+        sheet: string;
+      }[])
+        db.prepare('UPDATE characters SET sheet = ? WHERE id = ?').run(
+          JSON.stringify(upgradeSheet(JSON.parse(row.sheet))),
+          row.id,
+        );
+      for (const row of db.prepare('SELECT id, sheet, state FROM members').all() as {
+        id: string;
+        sheet: string;
+        state: string;
+      }[]) {
+        const member = { character: JSON.parse(row.sheet), state: JSON.parse(row.state) };
+        upgradeMember(member);
+        db.prepare('UPDATE members SET sheet = ?, state = ? WHERE id = ?').run(
+          JSON.stringify(member.character),
+          JSON.stringify(member.state),
+          row.id,
+        );
+      }
+      for (const row of db
+        .prepare("SELECT id, draft FROM turns WHERE phase != 'complete' AND draft IS NOT NULL")
+        .all() as { id: string; draft: string }[]) {
+        const draft = JSON.parse(row.draft);
+        for (const member of draft.members ?? []) upgradeMember(member);
+        db.prepare('UPDATE turns SET draft = ? WHERE id = ?').run(JSON.stringify(draft), row.id);
+      }
+      // Queued replacements retain the equipment their player already chose.
+      db.pragma('user_version = 24');
+    })();
+  if (version < 25)
+    db.transaction(() => {
+      const names = {
+        English: {
+          weapon: 'Sidearm',
+          armour: 'Protective garb',
+          helmet: 'Headguard',
+          boots: 'Travel boots',
+          shield: 'Guard shield',
+          focus: 'Channeling focus',
+          relic: 'Keepsake',
+          consumable: 'Restorative',
+          tool: 'Hand tool',
+        },
+        Nederlands: {
+          weapon: 'Handwapen',
+          armour: 'Beschermende kleding',
+          helmet: 'Hoofdbescherming',
+          boots: 'Reislaarzen',
+          shield: 'Verweerschild',
+          focus: 'Geleider',
+          relic: 'Aandenken',
+          consumable: 'Herstelmiddel',
+          tool: 'Handgereedschap',
+        },
+      };
+      const repair = (input: unknown, language: CampaignConfig['language'] = 'English'): unknown => {
+        if (Array.isArray(input)) return input.map((value) => repair(value, language));
+        if (!input || typeof input !== 'object') return input;
+        const value = Object.fromEntries(
+          Object.entries(input).map(([key, child]) => [key, repair(child, language)]),
+        );
+        if (
+          typeof value.name !== 'string' ||
+          typeof value.kind !== 'string' ||
+          !Object.hasOwn(names.English, value.kind) ||
+          (value.name.trim() && !placeholderEquipmentName.test(value.name.trim()))
+        )
+          return value;
+        // Reuse the saved physical description, so a sci-fi carbine cannot become a fantasy sword.
+        const description = typeof value.description === 'string' ? value.description : '';
+        const phrase = description
+          .match(/^(?:an?|the|een|de|het)\s+(.+)/i)?.[1]
+          .split(
+            /[,.!?;\n]|\s+(?:with|that|which|for|used|crafted|forged|woven|made|met|die|dat|voor|gemaakt|geweven)\s+/i,
+          )[0]
+          .trim();
+        const descriptive =
+          phrase &&
+          phrase.length <= 80 &&
+          phrase.split(/\s+/).length <= 8 &&
+          !/^(?:wearer|wielder|user|drager|gebruiker)\b/i.test(phrase) &&
+          !/[\d+]|\b(?:HP|defen[cs]e|damage|STR|DEX|INT|CHA|CON|WIS|rolls?|checks?|bonus)\b/i.test(phrase);
+        const localized = language === 'Nederlands' ? names.Nederlands : names.English;
+        value.name = descriptive
+          ? phrase[0].toLocaleUpperCase() + phrase.slice(1)
+          : localized[value.kind as Item['kind']];
+        return value;
+      };
+      for (const row of db.prepare('SELECT id, sheet FROM characters').all() as {
+        id: string;
+        sheet: string;
+      }[])
+        db.prepare('UPDATE characters SET sheet = ? WHERE id = ?').run(
+          JSON.stringify(repair(JSON.parse(row.sheet))),
+          row.id,
+        );
+      for (const row of db
+        .prepare(
+          'SELECT m.id, m.sheet, m.state, m.replacement, c.config FROM members m JOIN campaigns c ON c.id = m.campaign_id',
+        )
+        .all() as Record<string, string>[])
+        for (const field of ['sheet', 'state', 'replacement'])
+          if (row[field])
+            db.prepare(`UPDATE members SET ${field} = ? WHERE id = ?`).run(
+              JSON.stringify(repair(JSON.parse(row[field]), JSON.parse(row.config).language)),
+              row.id,
+            );
+      for (const row of db
+        .prepare('SELECT id, scene, config FROM campaigns WHERE scene IS NOT NULL')
+        .all() as Record<string, string>[])
+        db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(
+          JSON.stringify(repair(JSON.parse(row.scene), JSON.parse(row.config).language)),
+          row.id,
+        );
+      for (const row of db
+        .prepare(
+          "SELECT t.id, t.draft, t.result, c.config FROM turns t JOIN campaigns c ON c.id = t.campaign_id WHERE t.phase != 'complete'",
+        )
+        .all() as Record<string, string>[])
+        for (const field of ['draft', 'result'])
+          if (row[field])
+            db.prepare(`UPDATE turns SET ${field} = ? WHERE id = ?`).run(
+              JSON.stringify(repair(JSON.parse(row[field]), JSON.parse(row.config).language)),
+              row.id,
+            );
+      db.pragma('user_version = 25');
+    })();
+  if (version < 26)
+    db.transaction(() => {
+      const bonuses = new Map<string, Item['attributeBonus']>();
+      const repair = (input: unknown, scope = 'live'): any => {
+        if (Array.isArray(input)) return input.map((child) => repair(child, scope));
+        if (!input || typeof input !== 'object') return input;
+        const value: Record<string, any> = Object.fromEntries(
+          Object.entries(input).map(([key, child]) => [
+            key,
+            repair(
+              child,
+              key === 'character' && 'state' in input && 'id' in input ? `member:${input.id}` : scope,
+            ),
+          ]),
+        );
+        if (['armour', 'helmet', 'boots', 'shield'].includes(value.kind) && typeof value.id === 'string') {
+          const key = `${scope}:${value.id}`;
+          const bonus = bonuses.get(key) ?? rollArmourAttribute(value as Item, migrationDraw).attributeBonus;
+          bonuses.set(key, bonus);
+          value.attributeBonus = bonus;
+        }
+        if (
+          value.stats &&
+          value.equipment &&
+          !Array.isArray(value.equipment) &&
+          typeof value.maxHp === 'number'
+        ) {
+          const extra =
+            2 * (modifier(effectiveStats(value as CharacterState).CON) - modifier(value.stats.CON));
+          value.maxHp += extra;
+          value.hp = Math.min(value.hp, value.maxHp);
+        }
+        return value;
+      };
+      for (const row of db.prepare('SELECT id, sheet FROM characters').all() as {
+        id: string;
+        sheet: string;
+      }[])
+        db.prepare('UPDATE characters SET sheet = ? WHERE id = ?').run(
+          JSON.stringify(repair(JSON.parse(row.sheet), `character:${row.id}`)),
+          row.id,
+        );
+      for (const row of db.prepare('SELECT id, sheet, state, replacement FROM members').all() as Record<
+        string,
+        string
+      >[])
+        for (const field of ['sheet', 'state', 'replacement'])
+          if (row[field])
+            db.prepare(`UPDATE members SET ${field} = ? WHERE id = ?`).run(
+              JSON.stringify(
+                repair(
+                  JSON.parse(row[field]),
+                  field === 'sheet'
+                    ? `member:${row.id}`
+                    : field === 'replacement'
+                      ? `replacement:${row.id}`
+                      : 'live',
+                ),
+              ),
+              row.id,
+            );
+      for (const row of db.prepare('SELECT id, scene FROM campaigns WHERE scene IS NOT NULL').all() as {
+        id: string;
+        scene: string;
+      }[])
+        db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(
+          JSON.stringify(repair(JSON.parse(row.scene))),
+          row.id,
+        );
+      for (const row of db
+        .prepare("SELECT id, draft, result FROM turns WHERE phase != 'complete'")
+        .all() as Record<string, string>[])
+        for (const field of ['draft', 'result'])
+          if (row[field])
+            db.prepare(`UPDATE turns SET ${field} = ? WHERE id = ?`).run(
+              JSON.stringify(repair(JSON.parse(row[field]))),
+              row.id,
+            );
+      db.pragma('user_version = 26');
+    })();
+  if (version < 27)
+    db.transaction(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS generated_icons (
+        id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, subject TEXT NOT NULL, image BLOB
+      ); PRAGMA user_version = 27;`);
+    })();
+  if (version < 28)
+    db.transaction(() => {
+      const hasColumn = (table: 'turns' | 'actions', column: string) =>
+        (db.pragma(`table_info(${table})`) as { name: string }[]).some(({ name }) => name === column);
+      if (!hasColumn('turns', 'combat_rules')) db.exec('ALTER TABLE turns ADD COLUMN combat_rules INTEGER');
+      if (!hasColumn('actions', 'combat_selection')) db.exec('ALTER TABLE actions ADD COLUMN combat_selection TEXT');
+      db.pragma('user_version = 28');
+    })();
+  if (version < 29)
+    db.transaction(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS npc_conversations (
+        campaign_id TEXT PRIMARY KEY REFERENCES campaigns(id), data TEXT NOT NULL
+      )`);
+      if (!(db.pragma('table_info(actions)') as { name: string }[]).some(column => column.name === 'npc_deal'))
+        db.exec('ALTER TABLE actions ADD COLUMN npc_deal TEXT');
+      db.pragma('user_version = 29');
     })();
   // A model may have been interrupted after a roll. Keep its receipts and require a deliberate retry.
   db.prepare(

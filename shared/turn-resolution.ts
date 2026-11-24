@@ -32,7 +32,14 @@ export type ActionOutcomeV1 = z.infer<typeof actionOutcomeV1Schema>;
 const componentStatus = z.enum(['success', 'failure', 'partial', 'blocked']);
 export const actionComponentSchema = actionOutcomeV1Schema
   .omit({ actionId: true, memberId: true })
-  .extend({ status: componentStatus, processingFailure: z.literal(true).optional() });
+  .extend({
+    status: componentStatus,
+    processingFailure: z.literal(true).optional(),
+    withoutCheck: z.object({
+      sourceId: z.string().trim().min(1).max(700),
+      evidence: z.string().trim().min(8).max(1500),
+    }).strict().optional(),
+  });
 export type ActionComponent = z.infer<typeof actionComponentSchema>;
 export const actionOutcomeSchema = actionOutcomeV1Schema.extend({
   intent: z.enum(['action', 'orientation', 'search']).optional(),
@@ -82,6 +89,7 @@ export const resolvedEventV1Schema = z
   .strict();
 export type ResolvedEventV1 = z.infer<typeof resolvedEventV1Schema>;
 export const resolvedEventSchema = resolvedEventV1Schema.extend({
+  dialogue: z.literal(true).optional(),
   // Public participants in an NPC exchange, not people merely mentioned in prose.
   npcIds: z.array(z.string().min(1).max(100)).min(1).max(12).optional(),
   presentation: z.literal('log').optional(),
@@ -343,6 +351,8 @@ export const turnResolutionV1Schema = z
     actionDescriptions: z.record(z.string()).optional(),
     // Public pre-roll context, keyed by its immutable check event; never proof of a new outcome.
     checkReasons: z.record(z.string().max(200), z.string().min(1).max(500)).optional(),
+    // Selected public clues and earned stakes must survive narration repairs and fallbacks.
+    spokenFacts: z.array(z.string().trim().min(1).max(500)).max(40).optional(),
   })
   .strict();
 export const turnResolutionV2Schema = turnResolutionV1Schema.extend({
@@ -437,31 +447,49 @@ export function narrationEvents(resolution: TurnResolution) {
 }
 
 export function narrationParagraphs(resolution: TurnResolution, narration: TurnNarration): string[] {
-  return (
+  const paragraphs = (
     narration.version === 1
       ? resolution.events.map((event) => narration.eventNarrations[event.id])
       : narration.passages.map((passage) => passage.text)
-  ).concat(narration.closing ? [narration.closing] : []);
+  ).concat(narration.closing ? [narration.closing] : []).filter((paragraph) => typeof paragraph === 'string');
+  const key = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[\p{P}\s]+/gu, ' ').trim();
+  for (const fact of resolution.spokenFacts ?? [])
+    if (!key(paragraphs.join(' ')).includes(key(fact))) paragraphs.push(fact);
+  const findingSentences = (resolution.spokenFacts ?? []).flatMap((fact) =>
+    fact.split(/(?<=[.!?])\s+|\n+/).map(key));
+  const seen: string[] = [];
+  return paragraphs.map((paragraph) => {
+    const sentences = paragraph.split(/(?<=[.!?])\s+|\n+/);
+    const retained = sentences.filter((sentence) => {
+      const normalized = key(sentence);
+      const finding = findingSentences.some((fact) => ` ${normalized} `.includes(` ${fact} `));
+      if (finding && seen.some((previous) => ` ${previous} `.includes(` ${normalized} `))) return false;
+      seen.push(normalized);
+      return true;
+    });
+    return retained.length === sentences.length ? paragraph : retained.join(' ');
+  }).filter((paragraph) => paragraph.trim());
 }
 
 /** A presentation failure must not invalidate already resolved gameplay. */
 export function factualNarration(
   resolution: TurnResolution,
   language: CampaignConfig['language'],
+  groupCombat = false,
 ): TurnNarration {
   const neutral =
     language === 'Nederlands'
       ? 'Het vastgelegde resultaat blijft van kracht.'
       : 'The recorded outcome stands.';
   const compact = (fact: string, limit: number) => {
-    const sentences = fact.replace(/\bDC\s*\d+\b/gi, '').split(/(?<=[.!?])\s+|\n+/);
+    const sentences = fact.split(/(?<=[.!?])\s+|\n+/);
     let text = '';
     for (const sentence of sentences) {
       if (/\b(?:XP|DCs?\d*|experience points?|difficulty class|ervaringspunten)\b/i.test(sentence)) continue;
       if (text.length + sentence.length + 1 > limit) break;
       text += `${text ? ' ' : ''}${sentence.trim()}`;
     }
-    return text.trim() || neutral;
+    return text.trim() || (neutral.length <= limit ? neutral : '…');
   };
   // ponytail: oversized facts use whole-sentence excerpts; the full resolution stays saved.
   const events = narrationEvents(resolution);
@@ -487,10 +515,14 @@ export function factualNarration(
       return null;
     return main.fact;
   });
-  const limit = Math.floor((maxNarrationLength - events.length * 2) / Math.max(1, events.length));
+  const reserved = (resolution.spokenFacts ?? []).reduce((length, fact) => length + fact.length + 2, 0);
+  const limit = Math.floor((maxNarrationLength - reserved - events.length * 2) / Math.max(1, events.length));
+  const dialogue = resolution.events.filter((event) => 'dialogue' in event && event.dialogue);
+  const withoutDialogue = (fact: string) =>
+    dialogue.reduce((text, event) => text.replaceAll(event.fact, ''), fact).trim();
   const outcomes = resolution.actions
     .filter((action) => action.status !== 'passed')
-    .map((action) => compact(action.fact, Math.floor(1100 / Math.max(1, resolution.actions.length))));
+    .map((action) => compact(withoutDialogue(action.fact), Math.floor(1100 / Math.max(1, resolution.actions.length))));
   const progress =
     events.filter((event) => event.kind === 'world').at(-1)?.fact ??
     events.filter((event) => event.kind === 'action').at(-1)?.fact;
@@ -523,6 +555,20 @@ export function factualNarration(
         .filter(Boolean)
         .join(' ')
     : [...new Set(outcomes), progress].filter(Boolean).join(' ') || neutral;
+  const passages: { eventIds: string[]; text: string }[] = [];
+  for (const [index, event] of events.entries()) {
+    const text = compact(facts[index] ?? event.fact, limit);
+    const previous = events[index - 1];
+    const passage = passages.at(-1);
+    if (groupCombat && passage && event.kind === 'combat' && event.memberId &&
+      previous?.kind === 'combat' && previous.memberId === event.memberId &&
+      'phase' in previous && 'phase' in event && previous.phase === event.phase && passage.eventIds.length < 4) {
+      passage.eventIds.push(event.id);
+      passage.text += ` ${text}`;
+    } else {
+      passages.push({ eventIds: [event.id], text });
+    }
+  }
   return assembleResolvedNarration(resolution, {
     version: 2,
     turnId: resolution.turnId,
@@ -535,7 +581,7 @@ export function factualNarration(
               .join('\n\n'),
           },
         ]
-      : events.map((event, index) => ({ eventIds: [event.id], text: compact(facts[index]!, limit) })),
+      : passages,
     closing: '',
     summary: compact(situation, 1900),
   });
@@ -737,6 +783,8 @@ export function assembleResolvedNarration(resolution: TurnResolution, input: unk
   const text = narrationParagraphs(resolution, narration).join('\n\n');
   if (!text.trim() || text.length > maxNarrationLength)
     throw new Error('Complete narration exceeds the story budget or is empty.');
+  if (resolution.turnNumber === 0 && text.trim().split(/\s+/u).length > 120)
+    throw new Error('Keep the complete spoken opening within 80–120 words; fuller background belongs in the journal.');
   if (
     /\b(?:XP|DCs?\d*|experience points?|difficulty class|ervaringspunten)\b/i.test(
       `${text}\n${narration.summary}`,

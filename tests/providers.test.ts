@@ -2537,7 +2537,7 @@ it('generates a custom template from the supplied concept without a species cata
           abilities: context.schemaExample.abilities,
           items: context.rolledEquipment.map((item: { id: string }, i: number) => ({
             id: item.id,
-            name: `Silk-bound equipment ${i}`,
+            name: `Silk-bound keepsake ${i}`,
             description: 'Woven silk equipment.',
           })),
         }
@@ -2573,8 +2573,28 @@ it('generates a custom template from the supplied concept without a species cata
     species: 'Elf spider',
     traits: [{ name: 'Chaotic anatomy' }, { name: 'Silk instinct' }],
   });
-  expect(result.equipmentOptions[0].name).toBe('Silk-bound equipment 0');
+  expect(result.equipmentOptions[0].name).toBe('Silk-bound keepsake 0');
   const request = (fetcher.mock.calls as unknown as [string, RequestInit][])[0];
   expect(request[1].body).toContain(concept);
   expect(request[1].body).not.toContain('api_key');
+});
+
+it('generates a grounded NPC reply with a confirmable offer and no game tools', async () => {
+  const reply = { text: 'Vijf munten, dan open ik de kelder.', offer: { action: 'Betaal voor toegang tot de kelder', cost: 5 } };
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(init!.body as string);
+    expect(body.tools).toBeUndefined();
+    expect(JSON.parse(body.input[0].content).messages.at(-1).text).toBe('Wat kost het?');
+    return stream([event({type:'response.completed', response:{status:'completed',output:[
+      {type:'message',content:[{type:'output_text',text:JSON.stringify(reply)}]},
+    ]}})]);
+  });
+  const gm = new ChatGPTGM({accessToken: async () => 'test-token'} as unknown as ChatGPTAuth, 'owner', 'test-model', fetcher);
+  expect(await gm.npcReply({
+    language:'Nederlands', setting:'Haven', tone:'Rustig', speaker:'Mira',
+    npc:{name:'Waard',fact:'De waard heeft de sleutel.',status:'alive',allegiance:null},
+    location:{name:'Herberg',atmosphere:'',hazard:''}, surroundings:[], currencyName:'munten',
+    messages:[{id:randomUUID(),role:'speaker',text:'Wat kost het?'}], recentStory:'',
+  }, new AbortController().signal)).toEqual(reply);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

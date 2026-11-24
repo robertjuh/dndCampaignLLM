@@ -3,6 +3,7 @@ import { type CampaignConfig, type Character } from '../shared/schema';
 import { AbilityChoices, CharacterSheet, EquipmentChoices } from './CharacterSheet';
 import { api, ApiError } from './api';
 import { ModelSelect } from './ModelSelect';
+import { startingEquipmentSelected } from '../shared/rules';
 
 const Field = ({ label, children }: { label: string; children: ReactNode }) => (
   <label className="field">
@@ -102,7 +103,12 @@ export function CharacterEditor({
   }
   async function save(e: FormEvent) {
     e.preventDefault();
-    if (!sheet || sheet.selectedEquipmentIds.length !== 2 || !abilitiesChosen) return;
+    if (
+      !sheet ||
+      !startingEquipmentSelected(sheet.equipmentOptions, sheet.selectedEquipmentIds) ||
+      !abilitiesChosen
+    )
+      return;
     setBusy(true);
     setError('');
     try {
@@ -198,8 +204,8 @@ export function CharacterEditor({
         {generationStarted !== null && (
           <>
             <p className="muted small" role="status">
-              ChatGPT is creating your character and portrait · {elapsed}s elapsed. This can take up to four
-              minutes.
+              ChatGPT is creating your character · {elapsed}s elapsed. This can take up to two minutes.
+              Your portrait will load in the background.
             </p>
             <button type="button" className="text-link" onClick={() => generation.current?.abort()}>
               Cancel generation
@@ -230,8 +236,9 @@ export function CharacterEditor({
           </div>
         )}
         <p className="muted small">
-          Enter a name to keep it exactly, describe your concept, and choose your starting abilities and two
-          starting pieces. Players use the host’s connected ChatGPT plan; no separate sign-in is needed.
+          Enter a name to keep it exactly, describe your concept, and choose your starting abilities, one
+          weapon and two non-weapon equipment pieces. Players use the host’s connected ChatGPT plan; no
+          separate sign-in is needed.
         </p>
       </div>
       {sheet && (
@@ -264,7 +271,12 @@ export function CharacterEditor({
         </span>
         <button
           className="button"
-          disabled={busy || !sheet || sheet.selectedEquipmentIds.length !== 2 || !abilitiesChosen}
+          disabled={
+            busy ||
+            !sheet ||
+            !startingEquipmentSelected(sheet.equipmentOptions, sheet.selectedEquipmentIds) ||
+            !abilitiesChosen
+          }
         >
           Save character
         </button>

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ChatGPTGM, readResponseStream } from '../server/providers';
 import type { ChatGPTAuth } from '../server/auth';
-import { templateCharacter, type Item, type Character } from '../shared/schema';
+import { templateCharacter, type Item, type Character, type CampaignConfig } from '../shared/schema';
 
 import { localDice } from '../server/random';
 
@@ -25,6 +25,106 @@ const auth = {
   accessToken: async () => 'test-token',
   models: async () => [{ id: 'available-model', name: 'Available' }],
 } as unknown as ChatGPTAuth;
+it.each(['premise', 'instructions'] as const)('improves a premise while correcting invalid %s and preserving existing instructions', async (invalidField) => {
+  const campaign: CampaignConfig = {
+    ruleset: 'roguelike-v1',
+    name: '',
+    setting: 'Orbital colonies',
+    premise: 'space pirates',
+    partyGoal: 'Find a missing ship',
+    tone: 'Hopeful',
+    language: 'Nederlands',
+    instructions: 'No magic',
+    custom: [{ key: 'Era', value: 'Distant future' }],
+    provider: 'chatgpt',
+    model: 'chosen-model',
+  };
+  let attempt = 0;
+  const fetcher = vi.fn(
+    async () =>
+      streamedItems([
+        {
+          type: 'message',
+          content: [
+            {
+              type: 'output_text',
+              text: JSON.stringify({
+                setting: 'Orbital colonies',
+                tone: 'Hopeful',
+                partyGoal: 'Find the ship',
+                premise:
+                  ++attempt === 1 && invalidField === 'premise'
+                    ? ''
+                    : attempt < 4
+                      ? 'Een verloren schip stuurt noodsignalen uit de toekomst.'
+                      : 'Een noodsignaal leidt naar een schip zonder bemanning.',
+                instructions: attempt === 1 && invalidField === 'instructions'
+                  ? 'Begin met een noodsignaal.'
+                  : 'No magic\n\nDe groep ontmoet elkaar bij een noodsignaal. Begin met de redding van een schip dat lucht verliest.',
+              }),
+            },
+          ],
+        },
+      ]).response,
+  );
+  const result = await new ChatGPTGM(auth, 'owner', campaign.model, fetcher as typeof fetch).improvePremise(
+    campaign,
+  );
+  expect(result.premise).toContain('schip');
+  expect(result.instructions).toContain('No magic');
+  expect(result.instructions).toContain('lucht verliest');
+  const request = JSON.parse(
+    (fetcher.mock.calls as unknown as [unknown, RequestInit][])[0][1].body as string,
+  );
+  expect(request.model).toBe('chosen-model');
+  expect(JSON.parse(request.input[0].content)).toEqual({ campaign });
+  expect(request.instructions).toContain('surprising concrete detail');
+  expect(request.instructions).toContain('instructions (1–3000)');
+  expect(request.instructions).toContain('preserve existing campaign.instructions verbatim');
+  expect(request.instructions).toContain('one concrete situation already unfolding');
+  expect(request.instructions).toContain('first interaction');
+  expect(request.instructions).toContain('Nederlands');
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(campaign.premise).toBe('space pirates');
+  expect(campaign.instructions).toBe('No magic');
+  const rerolled = await new ChatGPTGM(auth, 'owner', campaign.model, fetcher as typeof fetch).improvePremise(
+    campaign,
+    undefined,
+    result,
+  );
+  expect(rerolled.premise).not.toBe(result.premise);
+  expect(fetcher).toHaveBeenCalledTimes(4);
+  const rerollRequest = JSON.parse(
+    (fetcher.mock.calls as unknown as [unknown, RequestInit][])[2][1].body as string,
+  );
+  expect(JSON.parse(rerollRequest.input[0].content)).toEqual({ campaign, previousDraft: result });
+});
+
+it('corrects placeholder equipment names while preserving the server-rolled mechanics', async () => {
+  const sheet = generationSheet(templateCharacter());
+  let namingAttempt = 0;
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const context = JSON.parse(JSON.parse(init!.body as string).input[0].content);
+    const value = context.rolledEquipment
+      ? {
+          abilities: context.schemaExample.abilities,
+          items: context.rolledEquipment.map((item: Item, i: number) => ({
+            id: item.id,
+            name: ++namingAttempt <= 7 ? `Robert's armor ${i + 1}` : item.name,
+            description: item.description,
+          })),
+        }
+      : sheet;
+    return streamedItems([
+      { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(value) }] },
+    ]).response;
+  });
+  const result = await new ChatGPTGM(auth, 'owner', '', fetcher as typeof fetch).generate('adventurer');
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(result.equipmentOptions.filter((item) => item.kind === 'weapon')).toHaveLength(2);
+  expect(result.equipmentOptions.every((item) => !item.name.includes('Robert'))).toBe(true);
+  expect(result.equipmentOptions.every((item) => item.rarity === 'Common')).toBe(true);
+});
 function streamedItems(items: unknown[], terminal = 'response.completed', close = true) {
   const cancel = vi.fn();
   const response = new Response(
@@ -121,7 +221,7 @@ it.each(['frame', 'stream'] as const)('bounds an unfinished %s and cancels it', 
   expect(cancel).toHaveBeenCalledOnce();
 });
 it.each(['assist', 'mend'] as const)(
-  'generates a character with utility %s, then names five server-rolled equippable items',
+  'generates a character with utility %s, then names seven server-rolled equippable items',
   async (utilityEffect) => {
     const sheet = generationSheet(templateCharacter('Sea warrior', 'Custom sea creature'));
     sheet.abilities[1].effect = utilityEffect;
@@ -144,7 +244,7 @@ it.each(['assist', 'mend'] as const)(
     const result = await new ChatGPTGM(auth, 'owner', '', fetcher as typeof fetch).generate('sea warrior');
     const { abilities: _abilities, combatAffinity: _affinity, ...expectedSheet } = sheet;
     expect(result).toMatchObject(expectedSheet);
-    expect(result.equipmentOptions).toHaveLength(5);
+    expect(result.equipmentOptions).toHaveLength(7);
     expect(result.abilities).toEqual([]);
     expect(result.abilityOptions!.map((a) => a.kind)).toEqual(['combat', 'utility', 'combat', 'utility']);
     expect(result.abilityOptions!.filter((a) => a.kind === 'combat').map((a) => a.effect)).toEqual([

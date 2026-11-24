@@ -12,7 +12,7 @@ test('helping and healing allies lock the turn, while self healing is instant du
   page,
 }) => {
   const character = templateCharacter('Mira');
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   const saved = await post<{ id: string }>(page.request, '/api/characters', character);
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
     ruleset: 'roguelike-v1',
@@ -33,7 +33,7 @@ test('helping and healing allies lock the turn, while self healing is instant du
   });
   const mira = snapshot.members.find((member) => member.id === snapshot.myMemberId)!;
   const healerCharacter = templateCharacter('Neri');
-  healerCharacter.selectedEquipmentIds = healerCharacter.equipmentOptions.slice(0, 2).map((item) => item.id);
+  healerCharacter.selectedEquipmentIds = healerCharacter.equipmentOptions.slice(0, 3).map((item) => item.id);
   healerCharacter.abilities[0] = {
     ...healerCharacter.abilities[0],
     name: 'Restoring touch',
@@ -109,7 +109,7 @@ test('helping and healing allies lock the turn, while self healing is instant du
   expect(commands[0]).toEqual({ type: 'help-up', targetId: mira.id });
   await expect(page.getByLabel('Your action', { exact: true })).toHaveValue('I help up Mira.');
   await expect(page.getByLabel('Your action', { exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Pass', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Pass', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Update action', exact: true })).toBeDisabled();
   await expect(page.getByText('Downed · needs help', { exact: true })).toBeVisible();
 

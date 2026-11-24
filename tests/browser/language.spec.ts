@@ -17,7 +17,7 @@ async function joinReady(request: APIRequestContext, campaign: Snapshot) {
   const member = joined.members.find((member) => member.id === joined.myMemberId)!;
   await post(request, `/api/campaigns/${campaign.id}/character`, {
     type: 'starter',
-    itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+    itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
   });
 }
 

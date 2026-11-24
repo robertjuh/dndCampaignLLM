@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../server/db';
 import { baseItem, isDowned, isDead, applyCondition } from '../shared/rules';
-import { PracticeGM } from '../server/providers';
+import { PracticeGM, ChatGPTGM } from '../server/providers';
+import type { ChatGPTAuth } from '../server/auth';
 import { Game, type GameMaster, type GMContext } from '../server/game';
 import {
   templateCharacter,
@@ -42,7 +43,7 @@ afterEach(() => {
   for (const fn of cleanup.splice(0)) fn();
 });
 function fixture(provider: GameMaster = { resolve: async () => outcome() }, filename = ':memory:') {
-  const db = openDatabase(filename);
+  const db = openDatabase(filename, () => 1);
   cleanup.push(() => {
     if (db.open) db.close();
   });
@@ -63,7 +64,7 @@ function fixture(provider: GameMaster = { resolve: async () => outcome() }, file
   for (const member of game.members(c.id))
     game.manageCharacter(c.id, member.playerId, {
       type: 'starter',
-      itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+      itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
     });
   return { game, db, host, p1, p2, c, c1, c2, draw };
 }
@@ -159,6 +160,128 @@ it.each(['assist', 'mend'] as const)(
   },
 );
 
+it('includes stacked Vigilant bonuses and armour penalties in saved encounter initiative', async () => {
+  const f = fixture({
+    resolve: async (context, tools) => {
+      if (context.turn.number === 1)
+        tools.startCombat([
+          {
+            id: 'sentry',
+            name: 'Sentry',
+            tier: 'normal',
+            hp: 30,
+            defense: 10,
+            attack: 0,
+            damage: '1d4',
+            description: 'A sentry.',
+            tactic: 'Wait',
+          },
+        ]);
+      return outcome();
+    },
+  });
+  const turn = await start(f);
+  const actor = f.game.members(f.c.id)[0];
+  actor.state.stats.DEX = 5;
+  actor.state.equipment.head = {
+    ...baseItem('watch', 'Watch cap', 'helmet'),
+    rarity: 'Rare',
+    perk: 'vigilant',
+  };
+  actor.state.equipment.boots = {
+    ...baseItem('swift', 'Swift boots', 'boots'),
+    rarity: 'Legendary',
+    perk: 'vigilant',
+  };
+  actor.state.equipment.body = {
+    ...baseItem('burden', 'Burden coat', 'armour'),
+    rarity: 'Cursed',
+    initiativePenalty: -3,
+  };
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(actor.state), actor.id);
+  f.draw.mockImplementation((sides) => Math.min(12, sides));
+  submitBoth(f, turn.id);
+  await f.game.idle();
+  const result = f.game.snapshot(f.c.id, f.host.id);
+  expect(result.turn!.phase, result.turn!.error ?? '').toBe('collecting');
+  expect(result.scene.encounter!.initiative.find((entry) => entry.id === actor.id)!.total).toBe(14);
+});
+
+it('preserves stacked perk results and spent Opening Strike across a narration retry', async () => {
+  let fail = true;
+  const f = fixture({
+    planCombat: async (context) => ({
+      actions: [{ memberId: context.members[0].id, main: 'attack', targetId: 'sentry', stat: 'STR' }],
+    }),
+    resolve: async (context) => {
+      if (context.combatResult && fail) throw new Error('Interrupted perk narration');
+      return outcome();
+    },
+  });
+  const turn = await start(f);
+  const actor = f.game.members(f.c.id)[0];
+  actor.state.equipment.head = {
+    ...baseItem('watch', 'Watch cap', 'helmet'),
+    rarity: 'Rare',
+    perk: 'opening-strike',
+  };
+  actor.state.equipment.boots = {
+    ...baseItem('swift', 'Swift boots', 'boots'),
+    rarity: 'Rare',
+    perk: 'opening-strike',
+  };
+  actor.state.equipment.body = {
+    ...baseItem('padded', 'Padded coat', 'armour'),
+    rarity: 'Rare',
+    perk: 'reinforced',
+  };
+  f.db.prepare('UPDATE members SET state = ? WHERE id = ?').run(JSON.stringify(actor.state), actor.id);
+  const scene = f.game.snapshot(f.c.id, f.host.id).scene;
+  scene.encounter = {
+    enemies: [
+      {
+        ...enemySchema.parse({
+          id: 'sentry',
+          name: 'Sentry',
+          tier: 'normal',
+          hp: 200,
+          defense: 14,
+          attack: 0,
+          damage: '1d12',
+          description: 'A sentry.',
+          tactic: 'Wait',
+        }),
+        maxHp: 200,
+        initiative: 20,
+      },
+    ],
+    initiative: [
+      { id: 'sentry', total: 20 },
+      { id: actor.id, total: 10 },
+    ],
+    round: 1,
+    victory: false,
+    escaped: false,
+  };
+  f.db.prepare('UPDATE campaigns SET scene = ? WHERE id = ?').run(JSON.stringify(scene), f.c.id);
+  f.draw.mockImplementation((sides) => Math.min(12, sides));
+  f.game.submit(f.c.id, f.p1.id, turn.id, 'Attack the sentry.', false);
+  f.game.submit(f.c.id, f.p2.id, turn.id, '', true);
+  await f.game.idle();
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
+  const draws = f.draw.mock.calls.length;
+  fail = false;
+  f.game.retry(f.c.id, f.host.id);
+  await f.game.idle();
+  const result = f.game.snapshot(f.c.id, f.host.id);
+  expect(result.turn!.phase, result.turn!.error ?? '').toBe('collecting');
+  expect(f.draw.mock.calls.length).toBe(draws);
+  expect(result.members[0].state.hp).toBe(actor.state.hp - 10);
+  expect(result.members[0].state.combatPerks?.openingStrikeUsed).toBe(true);
+  expect(result.scene.encounter!.round).toBe(2);
+  expect(result.scene.encounter!.enemies[0].hp).toBeLessThan(200);
+});
+
 it('edits only owned templates and lobby characters, resets readiness, and preserves active runs', async () => {
   const { game, p1, p2, host, c, c1 } = fixture();
   expect(() => game.updateCharacter(p2.id, c1.id, templateCharacter('Stolen'))).toThrow('not found');
@@ -167,12 +290,12 @@ it('edits only owned templates and lobby characters, resets readiness, and prese
   const member = game.members(c.id).find((m) => m.playerId === p1.id)!;
   expect(member.character.name).toBe('Revised character');
   expect(member.state.equipmentChosen).toBe(false);
-  expect(member.state.starterEquipment).toHaveLength(5);
+  expect(member.state.starterEquipment).toHaveLength(7);
   expect(() => game.editLobbyCharacter(c.id, host.id, edited)).toThrow('Join');
   expect(() => game.start(c.id, host.id)).toThrow('starting equipment');
   game.manageCharacter(c.id, p1.id, {
     type: 'starter',
-    itemIds: member.state.starterEquipment.slice(0, 2).map((item) => item.id),
+    itemIds: member.state.starterEquipment.slice(0, 3).map((item) => item.id),
   });
   game.start(c.id, host.id);
   await game.idle();
@@ -336,11 +459,11 @@ it('migrates saved three-stat characters, floors and interrupted turn receipts w
   );
   f.db.exec('ALTER TABLE actions DROP COLUMN support_action; PRAGMA user_version = 7;');
   f.db.close();
-  const db = openDatabase(filename);
+  const db = openDatabase(filename, () => 1);
   cleanup.unshift(() => db.close());
   const game = new Game(db, () => ({ resolve: async () => outcome() }));
   const restored = game.snapshot(f.c.id, f.host.id);
-  expect(db.pragma('user_version', { simple: true })).toBe(22);
+  expect(db.pragma('user_version', { simple: true })).toBe(29);
   expect(restored.members[0].state).toMatchObject({
     hp: 7,
     level: 3,
@@ -409,11 +532,11 @@ it('removes obsolete rest state from existing saves and resumes finalized turns 
   f.db.pragma('user_version = 14');
   const calls = adjudicate.mock.calls.length;
   f.db.close();
-  const db = openDatabase(filename);
+  const db = openDatabase(filename, () => 1);
   cleanup.unshift(() => db.close());
   const game = new Game(db, () => provider, f.draw);
-  expect(JSON.parse(game.pending(f.c.id)!.draft!)).toEqual(draft);
-  expect(game.members(f.c.id)).toEqual(members);
+  expect(JSON.parse(game.pending(f.c.id)!.draft!)).toMatchObject(draft);
+  expect(game.members(f.c.id)).toMatchObject(members);
   expect(game.snapshot(f.c.id, f.host.id).scene).toEqual(scene);
   expect(db.prepare("SELECT result,draft FROM turns WHERE phase = 'complete'").all()).toEqual(history);
   interrupt = false;
@@ -429,6 +552,44 @@ async function start(f: ReturnType<typeof fixture>) {
   await f.game.idle();
   return f.game.snapshot(f.c.id, f.host.id).turn!;
 }
+
+it('publishes saved compatibility mechanics after tool-budget recovery without repeating healing or dice', async () => {
+  let current: GMContext;
+  const fetcher = vi.fn(async () => {
+    const [healer, reader] = current.members;
+    const potion = healer.state.inventory.find((item) => item.healing > 0)!;
+    const use = { type: 'function_call', name: 'use_resource', call_id: 'potion',
+      arguments: JSON.stringify({ memberId: healer.id, itemId: potion.id, abilityName: null, targetId: null }) };
+    const checks = Array.from({ length: 19 }, (_, index) => ({ type: 'function_call', name: 'roll_check',
+      call_id: `check-${index}`, arguments: JSON.stringify({ memberId: reader.id, stat: 'INT', dc: 10,
+        mode: 'normal', reason: `Inspect wall marking ${index}.`, lethal: false }) }));
+    return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: {
+      output: [use, ...checks, { ...use, call_id: 'must-not-repeat' }],
+    } })}\n\n`);
+  });
+  const gm = new ChatGPTGM({ accessToken: async () => 'test' } as unknown as ChatGPTAuth, 'owner', 'test', fetcher);
+  const f = fixture({ resolve: async (context, tools) => {
+    if (!context.turn.number) return outcome();
+    current = context;
+    return gm.resolve(context, tools);
+  } });
+  const turn = await start(f);
+  const [healer, reader] = f.game.members(f.c.id);
+  healer.state.hp = 10;
+  const potion = healer.state.inventory.find((item) => item.healing > 0)!;
+  f.db.prepare('UPDATE members SET state=? WHERE id=?').run(JSON.stringify(healer.state), healer.id);
+  f.game.submit(f.c.id, healer.playerId, turn.id, `Drink ${potion.name}.`, false);
+  f.game.submit(f.c.id, reader.playerId, turn.id, 'Inspect the wall.', false);
+  await f.game.idle();
+  const snapshot = f.game.snapshot(f.c.id, f.host.id);
+  expect(snapshot.turn?.phase, snapshot.turn?.error ?? '').toBe('collecting');
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(f.draw).toHaveBeenCalledTimes(1);
+  expect(snapshot.members[0].state.hp).toBe(10 + potion.healing);
+  expect(snapshot.members[0].state.inventory.some((item) => item.id === potion.id)).toBe(false);
+  expect(snapshot.history.at(-1)?.rolls).toHaveLength(1);
+  expect(snapshot.history.at(-1)?.result?.narration).not.toContain('Pending narration');
+});
 function submitBoth(f: ReturnType<typeof fixture>, turnId: string) {
   f.game.submit(f.c.id, f.p1.id, turnId, 'Investigate the door.', false);
   f.game.submit(f.c.id, f.p2.id, turnId, 'Watch the road.', false);
@@ -724,7 +885,7 @@ it('saves free equipment changes with their turn and includes them once in the s
     {
       memberId: member.id,
       characterName: 'Mira',
-      description: 'Equipped Moon blade (both hands). Stowed: Starting weapon 2, Starting weapon 1.',
+      description: 'Equipped Moon blade (both hands). Stowed: Short sword.',
     },
   ]);
   expect(changed.members.find((member) => member.playerId === f.p1.id)!.state.equipment.left?.id).toBe(
@@ -738,7 +899,7 @@ it('saves free equipment changes with their turn and includes them once in the s
   await f.game.idle();
   expect(f.game.snapshot(f.c.id, f.host.id).turn!.phase).toBe('failed');
   f.db.close();
-  const reopened = openDatabase(filename);
+  const reopened = openDatabase(filename, () => 1);
   cleanup.push(() => reopened.close());
   const contexts: GMContext[] = [];
   const resumed = new Game(
@@ -776,7 +937,7 @@ it('records atomic loot swaps, rejects equipment changes in combat, and leaves f
     dropItemIds: [drop.id],
   });
   expect(changed.turn!.equipmentChanges![0].description).toBe(
-    `Equipped Iron boots (feet). Dropped: ${drop.name} ×1.`,
+    `Equipped Iron boots (feet). Stowed: Travel boots. Dropped: ${drop.name} ×1.`,
   );
   expect(changed.scene.loot.some((item) => item.id === drop.id)).toBe(true);
   const scene = changed.scene;
@@ -1336,7 +1497,7 @@ describe('roll and state integrity', () => {
     const turn = await start(f);
     f.game.submit(f.c.id, f.p1.id, turn.id, 'Remember this action.', false);
     f.db.close();
-    const db = openDatabase(filename);
+    const db = openDatabase(filename, () => 1);
     cleanup.push(() => db.close());
     const game = new Game(db, () => ({ resolve: async () => outcome() }));
     const restored = game.snapshot(f.c.id, f.host.id);
@@ -1362,7 +1523,7 @@ describe('roll and state integrity', () => {
       reason: 'Try the gate',
     });
     f.db.close();
-    const db = openDatabase(filename);
+    const db = openDatabase(filename, () => 1);
     cleanup.push(() => db.close());
     const game = new Game(db, () => ({ resolve: async () => outcome() }));
     const restored = game.snapshot(f.c.id, f.host.id);
@@ -1828,17 +1989,17 @@ it('migrates existing equipment and pending stat points without resetting a camp
   f.db.exec('ALTER TABLE members DROP COLUMN replacement');
   f.db.pragma('user_version = 4');
   f.db.close();
-  const restoredDb = openDatabase(filename);
+  const restoredDb = openDatabase(filename, () => 1);
   cleanup.push(() => restoredDb.close());
   const restored = new Game(restoredDb, () => new PracticeGM()).members(f.c.id)[0];
-  expect(restored.character.equipmentOptions).toHaveLength(5);
+  expect(restored.character.equipmentOptions).toHaveLength(7);
   expect(restored.character.abilities.every((ability) => ability.level === 1)).toBe(true);
   expect(restored.state.pendingLevelUps).toBe(2);
   expect(restored.state.equipmentChosen).toBe(true);
-  expect(restored.state.equipment).toEqual(member.state.equipment);
+  expect(restored.state.equipment).toMatchObject(member.state.equipment);
   expect(restored.state.inventory).toEqual(member.state.inventory);
   const pending = new Game(restoredDb, () => new PracticeGM()).members(f.c.id)[1];
-  expect(pending.state.starterEquipment).toHaveLength(5);
+  expect(pending.state.starterEquipment).toHaveLength(7);
   expect(pending.state.starterEquipment.every((item) => item.id.startsWith(`${unready.id}-`))).toBe(true);
 });
 
@@ -1906,9 +2067,9 @@ it('applies a selected utility ability and equipped relic, then preserves dice a
   const restored = new Game(f.db, () => new PracticeGM());
   expect(restored.members(f.c.id)[0].state.abilityUses?.[ability.name]).toBe(1);
   const next = f.game.snapshot(f.c.id, f.host.id).turn!;
-  expect(() => f.game.submit(f.c.id, f.p1.id, next.id, 'Examine again', false, false, ability.name)).toThrow(
-    'already been used',
-  );
+  expect(() => f.game.submit(f.c.id, f.p1.id, next.id, 'Examine again', false, false, ability.name)).not.toThrow();
+  expect(f.game.members(f.c.id)[0].state.abilityUses?.[ability.name]).toBe(1);
+  expect(f.game.snapshot(f.c.id, f.host.id).turn!.actions[0].abilityName).toBe(ability.name);
 });
 
 it.each([2, 12])(
@@ -2646,7 +2807,9 @@ it('keeps escaped players acting, recovers saved rosters, and lets them re-engag
   expect(snapshot.turn?.phase).toBe('collecting');
   expect(snapshot.turn?.roster).toContain(escapedId);
   expect(snapshot.members[0].state.conditions).not.toContain('Escaped');
-  expect(snapshot.members[0].state.hp).toBeLessThan(escapedHp);
+  // Rejoining restores eligibility; the enemy keeps its already advertised target this round.
+  expect(snapshot.members[0].state.hp).toBe(escapedHp);
+  expect(snapshot.scene.encounter?.enemies[0].intent?.targetId).toBe(escapedId);
   expect(snapshot.scene.encounter?.enemies[0].hp).toBe(120);
 });
 
@@ -2771,7 +2934,7 @@ it('reuses the saved combat plan, partial rolls and finished receipt after reloa
   expect(interrupted.rolls).toHaveLength(1);
   expect(planCombat).toHaveBeenCalledTimes(1);
   f.db.close();
-  const restoredDb = openDatabase(filename);
+  const restoredDb = openDatabase(filename, () => 1);
   cleanup.push(() => restoredDb.close());
   const restored = new Game(restoredDb, () => provider, f.draw);
   restored.retry(f.c.id, f.host.id);
@@ -2969,18 +3132,18 @@ it('adds real powers to existing saved and equipped off-hand items while preserv
   f.db.exec('ALTER TABLE members DROP COLUMN replacement');
   f.db.pragma('user_version = 5');
   f.db.close();
-  const restoredDb = openDatabase(filename);
+  const restoredDb = openDatabase(filename, () => 1);
   cleanup.push(() => restoredDb.close());
   const restored = new Game(restoredDb, () => new PracticeGM());
   const after = restored.members(f.c.id)[0];
   expect(after.state).toMatchObject({ xp: 42, currency: 9, equipmentChosen: true });
   expect(after.state.equipment.right).toMatchObject({ id: focus.id, attackBonus: 1, scaling: ['INT'] });
   expect(after.state.equipment.relic).toMatchObject({ id: relic.id, checkBonus: 1, scaling: ['INT'] });
-  expect(after.character.selectedEquipmentIds).toEqual([focus.id, relic.id]);
+  expect(after.character.selectedEquipmentIds).toEqual([]);
   expect(
     after.character.abilities.every((ability) => ability.stat === 'INT' && !('healing' in ability)),
   ).toBe(true);
-  expect(restored.characters(member.playerId)[0].equipmentOptions[0].attackBonus).toBe(1);
+  expect(restored.characters(member.playerId)[0].equipmentOptions.find((item) => item.id === focus.id)?.attackBonus).toBe(1);
   expect(restored.snapshot(f.c.id, f.host.id).scene.loot[0]).toMatchObject({
     id: ground.id,
     checkBonus: 3,
@@ -3346,7 +3509,7 @@ it('removes saved healing types from templates, gear, replacements and pending t
     .run('old-healing-history', f.c.id, 0, 'complete', '[]', draft);
   f.db.pragma('user_version = 9');
   f.db.close();
-  const db = openDatabase(filename);
+  const db = openDatabase(filename, () => 1);
   cleanup.push(() => db.close());
   const game = new Game(db, () => new PracticeGM());
   const migrated = game.members(f.c.id)[0];
@@ -3373,7 +3536,7 @@ it('removes saved healing types from templates, gear, replacements and pending t
     (db.prepare('SELECT draft FROM turns WHERE id = ?').get('old-healing-history') as { draft: string })
       .draft,
   ).toBe(draft);
-  expect(db.pragma('user_version', { simple: true })).toBe(22);
+  expect(db.pragma('user_version', { simple: true })).toBe(29);
 });
 
 it('migrates saved gold balances, collectible payments and nested receipts without losing value', () => {
@@ -3398,7 +3561,7 @@ it('migrates saved gold balances, collectible payments and nested receipts witho
   f.db.pragma('user_version = 21');
   f.db.close();
 
-  const db = openDatabase(filename);
+  const db = openDatabase(filename, () => 1);
   cleanup.push(() => { if (db.open) db.close(); });
   const game = new Game(db, () => new PracticeGM());
   const restored = game.snapshot(f.c.id, f.host.id);

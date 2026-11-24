@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import {
   FlaskConical,
   Footprints,
@@ -24,7 +25,6 @@ import {
   abilityTargets,
   abilityPowerSummary,
   characterDrawbacks,
-  chooseStartingEquipment,
   initialState,
   modifier,
   availableAbilities,
@@ -34,8 +34,15 @@ import {
   abilityDice,
   isHealingAbility,
   isRally,
+  effectiveStats,
+  defense,
+  startingEquipmentPreview,
+  itemAttributes,
 } from '../shared/rules';
-import { conditionDuration } from '../shared/ailments';
+import { conditionDuration, ailmentRules } from '../shared/ailments';
+import { perkAmount, perkDescription, perkNames, type ArmourPerk } from '../shared/equipment-perks';
+import { ItemBonus } from './ItemBonus';
+import { GeneratedIcon, loadGeneratedImage } from './GeneratedIcon';
 
 export const slotLabels = {
   left: 'Left hand',
@@ -57,13 +64,58 @@ const itemIcons: Record<Item['kind'], LucideIcon> = {
   relic: Gem,
   tool: Wrench,
 };
+const perkIcons: Record<ArmourPerk, LucideIcon> = {
+  reinforced: Shield,
+  thorns: Sword,
+  bulwark: ShieldPlus,
+  vigilant: Zap,
+  'escape-artist': Footprints,
+  recuperating: Heart,
+  scrambler: Footprints,
+  quickstep: Footprints,
+  enduring: Shield,
+  rescuer: Users,
+  restorative: Heart,
+  'opening-strike': Crosshair,
+  retaliator: RotateCcw,
+  opportunist: Crosshair,
+  'last-stand': ShieldPlus,
+  fortified: Shield,
+  hardy: Heart,
+};
 
-export function ItemIcon({ kind }: { kind: Item['kind'] }) {
+export function ItemIcon({ kind, iconId, size = 32 }: Pick<Item, 'kind' | 'iconId'> & { size?: 32 | 64 }) {
   const Icon = itemIcons[kind];
-  return <Icon className="item-icon" size={16} aria-hidden="true" focusable="false" />;
+  return (
+    <GeneratedIcon
+      iconId={iconId}
+      size={size}
+      fallback={<Icon className="item-icon" size={16} aria-hidden="true" focusable="false" />}
+    />
+  );
 }
 
-export function ItemDetails({ item, compact = false, currencyName = 'currency' }: { item: Item; compact?: boolean; currencyName?: string }) {
+function AbilityIcon({ ability }: { ability: Ability }) {
+  const Icon = ability.kind === 'utility' ? Sparkles :
+    isHealingAbility(ability) ? Heart : ability.effect === 'strike' ? Zap : Shield;
+  return (
+    <GeneratedIcon
+      iconId={ability.iconId}
+      size={64}
+      fallback={<Icon className="item-icon" size={16} aria-hidden="true" />}
+    />
+  );
+}
+
+export function ItemDetails({
+  item,
+  compact = false,
+  currencyName = 'currency',
+}: {
+  item: Item;
+  compact?: boolean;
+  currencyName?: string;
+}) {
   const requirements = stats
     .filter((stat) => item.requirements[stat] > 0)
     .map((stat) => `${item.requirements[stat]} ${stat}`)
@@ -71,33 +123,104 @@ export function ItemDetails({ item, compact = false, currencyName = 'currency' }
   const details = [
     item.rarity,
     item.kind,
-    item.currencyValue ? `${item.currencyValue} ${currencyName} · Added to your balance when collected` : item.kind === 'tool' && 'Story item · Carried in your backpack',
+    item.currencyValue
+      ? `${item.currencyValue} ${currencyName} · Added to your balance when collected`
+      : item.kind === 'tool' && 'Story item · Carried in your backpack',
     item.kind === 'weapon' &&
       `Innate dice + ${item.damage}${item.scaling.length ? ` + 2 × ${item.scaling.join('/')} modifier` : ''} damage (minimum 1)`,
     item.kind === 'armour' && item.scaling.length > 0 && `${item.scaling.join('/')} defense`,
-    item.defense > 0 && `+${item.defense} defense`,
-    item.kind === 'shield' &&
-      `1d${shieldBlockSides(item.rarity)} block per enemy hit while equipped (including critical hits); each shield rolls once, reducing damage to a minimum of 0; disabled while Stunned, Frozen or Electrocuted`,
-    item.healing > 0 && `Heal ${item.healing} HP`,
-    item.attackBonus > 0 && `+${item.attackBonus} ${item.scaling.join('/')} attack rolls while equipped`,
-    item.checkBonus > 0 &&
-      `+${item.checkBonus} ${item.scaling.join('/')} out-of-combat checks while equipped`,
     ['weapon', 'shield', 'focus'].includes(item.kind) && item.hands === 2 && 'Two-handed',
     item.light && 'Light',
-    item.immunities?.length && `Immune to ${item.immunities.join(', ')} while equipped`,
-    item.onHit &&
-      `${item.onHit.chance}% chance to inflict ${item.onHit.ailment} on ${item.kind === 'focus' ? `matching ${item.scaling.join('/')} main attacks` : 'weapon hits (100% on critical hits)'}`,
-    item.grantedAbility &&
-      `Grants ${item.grantedAbility.name} while equipped · ${abilityMechanics(item.grantedAbility)}`,
-    item.initiativePenalty < 0 && `${item.initiativePenalty} initiative`,
-    requirements && `Requires ${requirements}`,
+    requirements && `Requires ${requirements} in base attributes`,
   ]
     .filter(Boolean)
     .join(' · ');
   return (
     <>
       <small>{details}</small>
-      {item.description && !item.currencyValue &&
+      <div className="item-bonuses" aria-label={`${item.name} bonuses`}>
+        {item.defense > 0 && (
+          <ItemBonus
+            icon={Shield}
+            label={`+${item.defense} defense`}
+            description={`Adds +${item.defense} defense while equipped, making enemy attacks less likely to hit. Defense bonuses from distinct pieces stack.`}
+          />
+        )}
+        {itemAttributes(item).map(([stat, amount]) => (
+          <ItemBonus
+            key={stat}
+            icon={Sparkles}
+            label={`${amount > 0 ? '+' : '−'}${Math.abs(amount)} ${stat}`}
+            description={`${amount > 0 ? '+' : '−'}${Math.abs(amount)} ${stat} while equipped. Changes the attribute used for attacks, checks and derived statistics. Equipment bonuses and penalties stack; equal bonuses and penalties cancel. Equipment requirements use base attributes.`}
+          />
+        ))}
+        {item.perk && (
+          <ItemBonus
+            icon={perkIcons[item.perk]}
+            label={`${perkNames[item.perk]} +${perkAmount(item)}`}
+            description={perkDescription(item)}
+          />
+        )}
+        {item.kind === 'shield' && (
+          <ItemBonus
+            icon={ShieldPlus}
+            label={`1d${shieldBlockSides(item.rarity)} block`}
+            description={`1d${shieldBlockSides(item.rarity)} block per enemy hit while equipped (including critical hits); each shield rolls once, reducing damage to a minimum of 0; disabled while Stunned, Frozen or Electrocuted. Does not block hazards or ongoing ailments. A fully blocked hit can still inflict an ailment.`}
+          />
+        )}
+        {item.healing > 0 && (
+          <ItemBonus
+            icon={Heart}
+            label={`Heal ${item.healing} HP`}
+            description={`Heal ${item.healing} HP, up to the target's maximum HP. A healing consumable is spent on use; using it on an ally costs your main action.`}
+          />
+        )}
+        {item.attackBonus > 0 && (
+          <ItemBonus
+            icon={Crosshair}
+            label={`+${item.attackBonus} ${item.scaling.join('/')} attack`}
+            description={`+${item.attackBonus} ${item.scaling.join('/')} attack rolls while equipped. Applies to attacks using a matching scaling attribute. Distinct equipped pieces stack.`}
+          />
+        )}
+        {item.checkBonus > 0 && (
+          <ItemBonus
+            icon={Sparkles}
+            label={`+${item.checkBonus} ${item.scaling.join('/')} checks`}
+            description={`+${item.checkBonus} ${item.scaling.join('/')} out-of-combat checks while equipped. Distinct equipped pieces stack.`}
+          />
+        )}
+        {item.immunities?.map((ailment) => (
+          <ItemBonus
+            key={ailment}
+            icon={Shield}
+            label={`Immune to ${ailment}`}
+            description={`Immune to ${ailment} while equipped: prevents its application and ongoing effects. Normally: ${ailmentRules[ailment].mechanic} Multiple copies of the same immunity protect against the same ailment.`}
+          />
+        ))}
+        {item.onHit && (
+          <ItemBonus
+            icon={Zap}
+            label={`${item.onHit.ailment} on hit`}
+            description={`${item.onHit.chance}% chance to inflict ${item.onHit.ailment} on ${item.kind === 'focus' ? `matching ${item.scaling.join('/')} main attacks` : 'weapon hits (100% on critical hits)'}. ${ailmentRules[item.onHit.ailment].mechanic}`}
+          />
+        )}
+        {item.grantedAbility && (
+          <ItemBonus
+            icon={WandSparkles}
+            label={`Grants ${item.grantedAbility.name}`}
+            description={`Grants ${item.grantedAbility.name} while equipped · ${abilityMechanics(item.grantedAbility)}. One charge returns after a successful encounter; re-equipping does not refresh it.`}
+          />
+        )}
+        {item.initiativePenalty < 0 && (
+          <ItemBonus
+            icon={Clock3}
+            label={`${item.initiativePenalty} initiative`}
+            description={`${item.initiativePenalty} initiative while equipped. Changes your position in the combat turn order; penalties and bonuses from distinct pieces stack.`}
+          />
+        )}
+      </div>
+      {item.description &&
+        !item.currencyValue &&
         (compact ? (
           <details className="item-description">
             <summary>Description</summary>
@@ -106,6 +229,7 @@ export function ItemDetails({ item, compact = false, currencyName = 'currency' }
         ) : (
           <small>{item.description}</small>
         ))}
+      {item.storyHook && <small>Story connection: {item.storyHook}</small>}
     </>
   );
 }
@@ -243,9 +367,11 @@ export function Abilities({
           <span className="eyebrow">
             {ability.kind === 'combat' ? 'Combat' : 'Utility'} · Level {ability.level}
           </span>
-          <h4>{ability.name}</h4>
+          <h4 className="icon-heading">
+            <AbilityIcon ability={ability} /><span>{ability.name}</span>
+          </h4>
           {ability.equipmentId && <small>Granted by equipped Legendary gear</small>}
-          <AbilityDetails ability={ability} scores={state?.stats ?? character.stats} />
+          <AbilityDetails ability={ability} scores={state ? effectiveStats(state) : character.stats} />
           {state && (
             <small className="ability-uses">
               <span>
@@ -300,50 +426,88 @@ export function EquipmentChoices({
 }) {
   let preview: CharacterState | null = null;
   let previewError = '';
-  if (selected.length === 2) {
+  const before = state ?? initialState({ ...character, selectedEquipmentIds: [] }, 'preview');
+  if (selected.length) {
     try {
-      preview = state
-        ? structuredClone(state)
-        : initialState({ ...character, selectedEquipmentIds: [] }, 'preview');
+      preview = structuredClone(before);
       preview.starterEquipment = items;
-      chooseStartingEquipment(character, preview, selected);
+      preview = startingEquipmentPreview(character, preview, selected);
     } catch (error) {
       preview = null;
       previewError = (error as Error).message;
     }
   }
+  const groups =
+    items.length === 5
+      ? [{ label: 'Starting equipment', items, limit: 2 }]
+      : [
+          { label: 'Weapons', items: items.filter((item) => item.kind === 'weapon'), limit: 1 },
+          { label: 'Non-weapon equipment', items: items.filter((item) => item.kind !== 'weapon'), limit: 2 },
+        ];
   return (
     <section className="equipment-selection">
       <h3>Choose your starting equipment</h3>
       <p className="muted small">
-        Select 2 of 5 pieces · {selected.length}/2 selected. Spare items that share an equipment slot go in
-        your backpack.
+        {items.length === 5 ? 'Select 2 of 5 pieces.' : 'Choose 1 of 2 weapons and 2 of 5 non-weapon pieces.'}{' '}
+        Spare items that share an equipment slot go in your backpack.
       </p>
-      <div className="equipment-choices">
-        {items.map((item) => (
-          <button
-            type="button"
-            key={item.id}
-            aria-pressed={selected.includes(item.id)}
-            disabled={disabled || (!selected.includes(item.id) && selected.length === 2)}
-            onClick={() =>
-              onChange(
-                selected.includes(item.id) ? selected.filter((id) => id !== item.id) : [...selected, item.id],
-              )
-            }
-          >
-            <b>
-              <ItemIcon kind={item.kind} />
-              {item.name}
-            </b>
-            <ItemDetails item={item} />
-            <span>{selected.includes(item.id) ? 'Selected' : 'Choose piece'}</span>
-          </button>
-        ))}
-      </div>
+      {groups.map((group) => (
+        <div key={group.label} role="group" aria-label={group.label}>
+          <h4>
+            {group.label} · {group.items.filter((item) => selected.includes(item.id)).length}/{group.limit}{' '}
+            selected
+          </h4>
+          <div className="equipment-choices">
+            {group.items.map((item) => (
+              <div className="equipment-choice" key={item.id}>
+                <button
+                  type="button"
+                  className="equipment-choice-select"
+                  aria-pressed={selected.includes(item.id)}
+                  disabled={
+                    disabled ||
+                    (!selected.includes(item.id) &&
+                      group.limit > 1 &&
+                      group.items.filter((item) => selected.includes(item.id)).length >= group.limit)
+                  }
+                  onClick={() =>
+                    onChange(
+                      selected.includes(item.id)
+                        ? selected.filter((id) => id !== item.id)
+                        : [
+                            ...selected.filter(
+                              (id) => group.limit !== 1 || !group.items.some((item) => item.id === id),
+                            ),
+                            item.id,
+                          ],
+                    )
+                  }
+                >
+                  <b className="icon-heading">
+                    <ItemIcon kind={item.kind} iconId={item.iconId} size={64} />
+                    <span>{item.name}</span>
+                  </b>
+                  <span>{selected.includes(item.id) ? 'Selected' : 'Choose piece'}</span>
+                </button>
+                <ItemDetails item={item} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
       {preview && (
         <div className="starting-loadout" aria-label="Starting loadout preview">
           <b>Your starting loadout</b>
+          <p>
+            Total Defense: {defense(character, before)} → {defense(character, preview)}
+          </p>
+          {stats
+            .filter((stat) => effectiveStats(before)[stat] !== effectiveStats(preview!)[stat])
+            .map((stat) => (
+              <p key={stat}>
+                {stat}: {effectiveStats(before)[stat]} → {effectiveStats(preview!)[stat]}
+              </p>
+            ))}
           {slots
             .filter(
               (slot) =>
@@ -351,7 +515,10 @@ export function EquipmentChoices({
             )
             .map((slot) => (
               <p key={slot}>
-                <ItemIcon kind={preview!.equipment[slot]!.kind} />
+                <ItemIcon
+                  kind={preview!.equipment[slot]!.kind}
+                  iconId={preview!.equipment[slot]!.iconId}
+                />
                 {(slot === 'left' || slot === 'right') && preview!.equipment[slot]!.hands === 2
                   ? 'Both hands'
                   : slotLabels[slot]}
@@ -362,7 +529,7 @@ export function EquipmentChoices({
             .filter((item) => selected.includes(item.id))
             .map((item) => (
               <p key={item.id}>
-                <ItemIcon kind={item.kind} />
+                <ItemIcon kind={item.kind} iconId={item.iconId} />
                 Backpack: {item.name}
               </p>
             ))}
@@ -417,7 +584,9 @@ export function AbilityChoices({
                       )
                     }
                   >
-                    <b>{ability.name}</b>
+                    <b className="icon-heading">
+                      <AbilityIcon ability={ability} /><span>{ability.name}</span>
+                    </b>
                     <AbilityDetails ability={ability} scores={character.stats} />
                     <span className="ability-choice-label">{selected ? 'Selected' : 'Choose ability'}</span>
                   </button>
@@ -437,15 +606,37 @@ export function CharacterPortrait({
   character: Pick<Character, 'name' | 'portraitId'>;
   size?: '' | 'mini' | 'large';
 }) {
+  const [ready, setReady] = useState<string>();
+  const element = useRef<HTMLSpanElement>(null);
+  const url = character.portraitId ? `/api/portraits/${character.portraitId}` : undefined;
+  useEffect(() => {
+    if (!url || !element.current) return;
+    let disposed = false;
+    const load = () => {
+      void loadGeneratedImage(url).then((ok) => {
+        if (ok && !disposed) setReady(url);
+      });
+    };
+    // Journal pages can contain many NPCs; generate portraits only as they approach the viewport.
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        load();
+      }
+    }, { rootMargin: '150px' });
+    observer.observe(element.current);
+    return () => { disposed = true; observer.disconnect(); };
+  }, [url]);
   return (
-    <span className={`avatar ${size}`} title={character.name}>
-      {character.portraitId ? (
+    <span ref={element} className={`avatar ${size}`} title={character.name}>
+      {url && ready === url ? (
         <img
-          src={`/api/portraits/${character.portraitId}`}
+          src={url}
           alt={`${character.name} portrait`}
           width={96}
           height={96}
           loading="lazy"
+          onError={() => setReady(undefined)}
         />
       ) : (
         character.name[0]

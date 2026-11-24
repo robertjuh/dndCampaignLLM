@@ -1,7 +1,10 @@
 import { validateFactionEffects } from './factions';
 import { planQuests } from './quests';
-import { validateNPCUpdates } from './npcs';
-import { validateFeatureUpdates } from './scene-state';
+import { knownNPCs, validateNPCUpdates } from './npcs';
+import { npcNames, npcNameKey } from '../shared/npcs';
+import { submittedActionObligations } from './action-intent';
+import { applyFeatureUpdates, validateFeatureUpdates } from './scene-state';
+import { environmentalFacts } from './environment';
 import { structureSceneAtEvent, validateStructures, witnessedLocations } from './structures';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -20,8 +23,8 @@ import { incapacitatingCondition } from '../shared/rules';
 import { outcomeSchema, type ResourceUse, type CombatInput } from '../shared/schema';
 import type { CombatReceipt, GMContext, ResourceReceipt } from './game';
 import { combatFact } from './narration';
-import { memberScene, knownLocations, occupiedPlaces } from '../shared/locations';
-import { memberLocationAtEvent, orderRouteOpenings, validateWorldMap } from './world-map';
+import { memberScene, placeScene, knownLocations, occupiedPlaces } from '../shared/locations';
+import { memberLocationAtEvent, orderRouteOpenings, turnConnections, validateWorldMap } from './world-map';
 import { validateExploration } from './exploration';
 import { validateWorldProgression } from './world-progression';
 import { updateGMMemory } from '../shared/gm-memory';
@@ -85,6 +88,7 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
     result: ResolvedEvent['result'] = null,
     presentation?: 'log',
     locationRef?: string,
+    dialogue?: true,
   ) => {
     events.push({
       id,
@@ -102,6 +106,7 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
       dependsOn: [],
       ...(presentation ? { presentation } : {}),
       ...(locationRef ? { locationRef } : {}),
+      ...(dialogue ? { dialogue } : {}),
     });
   };
   for (const [index, arrival] of (context.arrivingCharacters ?? []).entries())
@@ -109,7 +114,7 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
   for (const [index, fact] of (
     (context.receipts?.factionIntroductions as string[] | undefined) ?? []
   ).entries())
-    add(`faction:connection:${index}`, fact, null, ['tool:factionIntroductions'], 'arrival');
+    add(`faction:connection:${index}`, fact, null, ['tool:factionIntroductions'], 'arrival', null, null, 'log');
   if (context.turn.number > 0)
     for (const member of context.startingMembers ?? context.members) {
       const incapacitated = incapacitatingCondition(member.state);
@@ -165,6 +170,7 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
           : event.status,
         event.presentation,
         event.locationId ?? context.combatResult.locationId,
+        event.dialogue,
       );
   }
   for (const roll of context.turn.rolls.filter((roll) => !roll.notation)) {
@@ -195,6 +201,10 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
       assisted.fact += dutch
         ? ` De geslaagde hulp van ${name} ondersteunt deze check.`
         : ` ${name}'s successful assistance supports this check.`;
+    }
+    if (roll.success && roll.goal) {
+      add(`goal:${roll.id}`, roll.goal.success, member.id, [`roll:${roll.id}`], 'action', 'main', 'success');
+      events.at(-1)!.dependsOn = [{ eventId: `check:${roll.id}`, requires: 'success' }];
     }
   }
   for (const [key, receipt] of Object.entries(context.receipts ?? {})) {
@@ -230,7 +240,7 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
     if (key.startsWith('resource:')) {
       const resource = receipt as ResourceReceipt;
       const actor = identity(context, resource.memberId);
-      const target = identity(context, resource.targetId ?? resource.memberId);
+      const targetName = resource.npcTarget?.name ?? identity(context, resource.targetId ?? resource.memberId).character.name;
       const effects = resource.targets
         ? resource.targets
             .map(
@@ -238,7 +248,7 @@ export function engineEvents(context: GMContext): ResolvedEvent[] {
                 `${identity(context, result.targetId).character.name} recovers ${result.restored} HP.${result.cured.length ? ` Removes ${result.cured.join(', ')}.` : ''}`,
             )
             .join(' ')
-        : `${target.character.name} recovers ${resource.restored} HP.${resource.cured?.length ? ` Removes ${resource.cured.join(', ')}.` : ''}`;
+        : `${targetName} ${resource.npcTarget && !resource.npcTarget.enemy ? 'receives' : 'recovers'} ${resource.restored} ${resource.npcTarget && !resource.npcTarget.enemy ? 'HP of healing' : 'HP'}.${resource.cured?.length ? ` Removes ${resource.cured.join(', ')}.` : ''}`;
       add(
         key,
         `${actor.character.name} uses ${resource.sourceName}, consuming its item or ability use; ${effects}`,
@@ -800,7 +810,7 @@ export function normalizeAdjudicationStructure(context: GMContext, input: unknow
   // Screen focus is bookkeeping; an empty default must not block actors at another saved place.
   if (
     !context.receipts?.encounterProposal &&
-    output.sceneFocus === 'current' &&
+    (output.sceneFocus === 'current' || output.sceneFocus === undefined) &&
     output.location == null &&
     resultingPositions.length &&
     !resultingPositions.some((position) => position.ref === context.scene.location.id)
@@ -867,6 +877,14 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
     turnAdjudicationSchema.parse(normalizeAdjudicationStructure(context, input)),
   );
   const value = parsed.pickups?.length ? resolvePickups(context, parsed).value : parsed;
+  if (context.turn.number === 0 && value.sceneDraft) {
+    const storyIds = new Set(value.events.filter((event) => event.presentation !== 'log').map((event) => event.id));
+    const words = value.sceneDraft.passages
+      .filter((passage) => passage.eventIds.some((id) => storyIds.has(id)))
+      .map((passage) => passage.text).join(' ').trim().split(/\s+/u).filter(Boolean).length;
+    if (words > 120)
+      throw new Error(`Opening has ${words} spoken words; use 80–120 total. Keep the immediate scene, visible stakes and two or three available people/objects/routes. Save fuller background in the journal.`);
+  }
   updateGMMemory(context.gmMemory ?? [], value.gmNotes ?? []);
   const updates = value.placeUpdates ?? [];
   const refs = new Set(updates.map((update) => update.ref));
@@ -887,6 +905,60 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
   validateFeatureUpdates(context, value, resultingRef);
   orderRouteOpenings(context, value, resultingRef);
   validateNPCUpdates(context, value, resultingRef);
+  // ponytail: explicit English/Dutch attacks on named saved actors; the GM resolves pronouns.
+  for (const submitted of context.turn.actions) {
+    const attacks = submittedActionObligations(context, submitted.memberId).filter((intent) => intent.kind === 'attack');
+    const result = value.actions.find((action) => action.memberId === submitted.memberId);
+    if (!attacks.length || !result || combatReceiptForMember(context, submitted.memberId) ||
+      result.components.main?.processingFailure || engineComponents(context, submitted.memberId).main?.status === 'blocked') continue;
+    const at = memberLocationAtEvent(context, value, submitted.memberId,
+      result.components.main?.eventIds.at(-1) ?? result.eventIds.at(-1) ?? '', resultingRef);
+    const people = Object.values(knownNPCs(context.scene));
+    const targets = new Set(attacks.flatMap((intent) => {
+      const target = npcNameKey(intent.evidence)
+        .replace(/^(?:attack(?:ing)?|strike|punch|shoot|stab|sla|schiet|steek|val)\b\s*/u, '')
+        .replace(/^(?:(?:at|the|a|an|de|het|een|op|naar)\s+)+/u, '');
+      const matches = people.filter((person) => npcNames(person).some((alias) => {
+        const name = npcNameKey(alias).replace(/^(?:(?:the|a|an|de|het|een)\s+)+/u, '');
+        const rest = target.slice(name.length);
+        return target.startsWith(name) && (!rest || /^[^\p{L}\p{N}'’]/u.test(rest));
+      }));
+      // Beneficiaries and possessive owners mentioned later are not attack targets.
+      return matches.length === 1 ? [matches[0].id] : [];
+    }));
+    for (const person of people.filter((npc) => npc.status === 'alive' && npc.locationId === at && targets.has(npc.id))) {
+      const started = (context.receipts?.startCombatByLocation as Record<string, { enemies: { id: string }[] }> | undefined)?.[at];
+      const response = value.npcUpdates?.some((update) => update.npcId === person.id &&
+        (update.status === 'surrendered' || update.status === 'withdrawn' ||
+          (update.locationId != null && resultingRef(update.locationId) !== at)));
+      if (started?.enemies.some((enemy) => enemy.id === person.id) || response) continue;
+      const main = result.components.main;
+      const proof = main?.withoutCheck;
+      if (main?.status === 'blocked' && proof) {
+        const eventId = main.eventIds.at(-1)!;
+        const preceding = new Set(value.events.slice(0, value.events.findIndex((event) => event.id === eventId)).map((event) => event.id));
+        const projected = structuredClone(context.scene);
+        applyFeatureUpdates(projected, { ...value,
+          featureUpdates: value.featureUpdates?.filter((update) => preceding.has(update.eventId)),
+        }, resultingRef);
+        const saved = placeScene(context.scene, at), current = placeScene(projected, at);
+        const feature = proof.sourceId.startsWith('feature:') ? saved.features?.[proof.sourceId.slice(8)] : undefined;
+        const physicalSource = feature || proof.sourceId === `scene:${saved.location.name}:hazard`;
+        const evidence = ` ${npcNameKey(proof.evidence).replace(/[\p{P}\s]+/gu, ' ')} `;
+        const identifiesTarget = npcNames(person).some((name) =>
+          evidence.includes(` ${npcNameKey(name).replace(/[\p{P}\s]+/gu, ' ')} `));
+        const route = feature?.route;
+        const passage = route && turnConnections(context.scene, value, resultingRef, eventId).find((edge) =>
+          (edge.from === route.from && edge.to === route.to) ||
+          (edge.from === route.to && edge.to === route.from));
+        if (physicalSource && identifiesTarget && main.reason.includes(proof.evidence) &&
+          environmentalFacts({ ...context, scene: saved })[proof.sourceId]?.includes(proof.evidence) &&
+          environmentalFacts({ ...context, scene: current })[proof.sourceId]?.includes(proof.evidence) &&
+          (!feature?.route || passage?.blocked)) continue;
+      }
+      throw new Error(`The submitted attack on ${person.name} needs start_combat at ${at} with the same saved NPC identity, or a concrete surrender/escape saved in npcUpdates. A blocked attack needs withoutCheck:{sourceId,evidence} citing an established local feature or hazard that identifies this target; include the exact evidence in the blocked reason. Invented barriers, NPC attitude and missing combat stats cannot block an attack.`);
+    }
+  }
   const destination = resultingRef('destination');
   const combatScene = { ...context.scene, places: { ...context.scene.places } };
   const encounters =
@@ -1162,6 +1234,7 @@ export function validateAdjudication(context: GMContext, input: unknown): TurnAd
           planned.dc ||
           planned.effect ||
           planned.environment ||
+          planned.maneuver ||
           planned.cureCondition)
       )
         throw new Error('Orientation cannot reinterpret an executed combat action as informational.');

@@ -11,8 +11,10 @@ async function post<T>(request: APIRequestContext, path: string, data: unknown):
 
 test('shared-screen item inspection exposes types and mechanics without changing equipment', async ({
   page,
+  browser,
 }) => {
   const character = templateCharacter('Fransinator');
+  character.equipmentOptions[2] = character.equipmentOptions[0];
   character.equipmentOptions[0] = {
     ...baseItem('focus', 'Pijnreservoir', 'focus'),
     scaling: ['CHA'],
@@ -24,7 +26,7 @@ test('shared-screen item inspection exposes types and mechanics without changing
     defense: 1,
     description: 'A clinic door repurposed as a shield.',
   };
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   character.healingItemName = 'Verzegelde ontwenningsampul';
   const saved = await post<{ id: string }>(page.request, '/api/characters', character);
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
@@ -63,6 +65,17 @@ test('shared-screen item inspection exposes types and mechanics without changing
   for (const kind of ['armour', 'helmet', 'boots', 'relic', 'tool'] as const)
     snapshot.members[0].state.inventory.push({
       ...baseItem(`spare-${kind}`, `Spare ${kind}`, kind),
+      ...(kind === 'armour'
+        ? {
+            rarity: 'Rare' as const,
+            perk: 'reinforced' as const,
+            attributeBonus: { stat: 'CON' as const, amount: 2 },
+            immunities: ['Burning' as const],
+          }
+        : {}),
+      ...(kind === 'helmet'
+        ? { attributeBonus: { stat: 'WIS' as const, amount: 1 }, attributePenalty: 'WIS' as const }
+        : {}),
       quantity: 1,
     });
   snapshot.isHost = false;
@@ -101,7 +114,7 @@ test('shared-screen item inspection exposes types and mechanics without changing
   );
   await card.getByRole('button', { name: 'Fransinator' }).click();
   const itemIcons = card.locator('.item-inspection summary .item-icon');
-  await expect(itemIcons).toHaveCount(9);
+  await expect(itemIcons).toHaveCount(10);
   for (const icon of await itemIcons.all()) {
     await expect(icon).toBeVisible();
     await expect(icon).toHaveAttribute('aria-hidden', 'true');
@@ -135,14 +148,64 @@ test('shared-screen item inspection exposes types and mechanics without changing
   await expect(weapon).toContainText('Requires 7 STR');
   await expect(weapon).toContainText('25% chance to inflict Burning on weapon hits (100% on critical hits)');
   await expect(weapon).toContainText('Grants Flame surge while equipped');
+  const armour = card.locator('.item-inspection').filter({ hasText: 'Spare armour' });
+  await armour.locator('summary').click();
+  await armour.getByRole('button', { name: 'Reinforced +2', exact: true }).click();
+  await expect(page.getByRole('tooltip')).toContainText('first enemy hit each round by 2');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await armour.getByRole('button', { name: '+2 CON', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('tooltip')).toContainText('+2 CON while equipped');
+  await armour.getByRole('button', { name: 'Immune to Burning', exact: true }).click();
+  await expect(page.getByRole('tooltip')).toContainText('prevents its application and ongoing effects');
+  await page.keyboard.press('Escape');
+  const helmet = card.locator('.item-inspection').filter({ hasText: 'Spare helmet' });
+  await helmet.locator('summary').click();
+  await expect(helmet.getByRole('button', { name: /WIS/ })).toHaveCount(0);
   await focus.locator('summary').click();
   await expect(focus.getByText(character.equipmentOptions[0].description, { exact: true })).not.toBeVisible();
   await expect(card.getByRole('button', { name: /Equip|Drop|Stow/ })).toHaveCount(0);
   const after: Snapshot = await (await page.request.get(`/api/campaigns/${campaign.id}`)).json();
   expect(after.members[0].state).toEqual(before);
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: 'test-results/shared-item-inspection.png', fullPage: true });
+  const mobile = await browser.newContext({
+    baseURL: new URL(page.url()).origin,
+    storageState: await page.context().storageState(),
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  try {
+    await mobile.addInitScript(() =>
+      Object.defineProperty(window, 'EventSource', {
+        value: class {
+          close() {}
+        },
+      }),
+    );
+    await mobile.route(`**/api/campaigns/${campaign.id}`, (route) => route.fulfill({ json: snapshot }));
+    const phone = await mobile.newPage();
+    await phone.goto(`/screen/${campaign.id}#${campaign.displayToken}`);
+    await phone.locator('.member-heading').tap();
+    const mobileArmour = phone.locator('.item-inspection').filter({ hasText: 'Spare armour' });
+    await mobileArmour.locator('summary').tap();
+    for (const label of ['Reinforced +2', '+2 CON', 'Immune to Burning']) {
+      await mobileArmour.getByRole('button', { name: label, exact: true }).tap();
+      const tooltip = phone.getByRole('tooltip');
+      await expect(tooltip).toBeVisible();
+      const bounds = (await tooltip.boundingBox())!;
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+      if (label === 'Reinforced +2')
+        await phone.screenshot({ path: 'test-results/equipment-perk-tooltip.png' });
+      await mobileArmour.getByRole('button', { name: label, exact: true }).tap();
+      await expect(tooltip).toHaveCount(0);
+    }
+    expect(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await phone.screenshot({ path: 'test-results/shared-item-inspection.png', fullPage: true });
+  } finally {
+    await mobile.close();
+  }
 });
 
 test('starting and stowed relics use the designated relic slot without a hand selector', async ({ page }) => {
@@ -152,7 +215,7 @@ test('starting and stowed relics use the designated relic slot without a hand se
     scaling: ['INT'],
     checkBonus: 1,
   };
-  character.equipmentOptions[1].name = 'Oath blade';
+  character.equipmentOptions[1] = { ...templateCharacter().equipmentOptions[0], name: 'Oath blade' };
   const saved = await post<{ id: string }>(page.request, '/api/characters', character);
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
     name: 'Relic equipment',
@@ -171,9 +234,15 @@ test('starting and stowed relics use the designated relic slot without a hand se
     characterId: saved.id,
   });
   await page.goto(`/campaign/${campaign.id}`);
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
-  await expect(page.locator('.equipment-choices button .item-icon')).toHaveCount(5);
+  const firstChoice = page.locator('.equipment-choice').filter({ hasText: 'Remembered oath' });
+  await firstChoice.getByRole('button', { name: /checks$/ }).click();
+  await expect(page.getByRole('tooltip')).toContainText('out-of-combat checks');
+  await expect(firstChoice.locator('.equipment-choice-select')).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('Escape');
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
+  await expect(page.locator('.equipment-choices .equipment-choice-select .item-icon')).toHaveCount(7);
   await expect(page.getByLabel('Starting loadout preview')).toContainText('Relic: Remembered oath');
   await expect(page.getByLabel('Starting loadout preview')).toContainText('Right hand: Oath blade');
   await page.getByRole('button', { name: 'Confirm starting equipment', exact: true }).click();
@@ -214,6 +283,7 @@ test('mobile equipment previews swaps, equips nearby loot, and records free chan
     { ...baseItem('boots', 'Leather boots', 'boots'), defense: 1 },
     { ...baseItem('helmet', 'Leather cap', 'helmet'), defense: 1 },
     { ...baseItem('armour', 'Leather coat', 'armour'), defense: 1 },
+    ...templateCharacter().equipmentOptions.filter((item) => item.kind === 'weapon'),
   ];
   const saved = await post<{ id: string }>(page.request, '/api/characters', character);
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
@@ -233,8 +303,9 @@ test('mobile equipment previews swaps, equips nearby loot, and records free chan
     characterId: saved.id,
   });
   await page.goto(`/campaign/${campaign.id}`);
-  await page.locator('.equipment-choices button').nth(0).click();
-  await page.locator('.equipment-choices button').nth(1).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await page.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   await expect(page.getByLabel('Starting loadout preview')).toContainText('Body: Moon coat');
   await expect(page.getByLabel('Starting loadout preview')).toContainText('Backpack: Iron coat');
   await page.getByRole('button', { name: 'Confirm starting equipment', exact: true }).click();
@@ -296,7 +367,9 @@ test('equipment controls explain combat, full backpacks, and unmet requirements 
   page,
 }) => {
   const character = templateCharacter('Mira');
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions
+    .filter((_, index) => [0, 1, 4].includes(index))
+    .map((item) => item.id);
   const saved = await post<{ id: string }>(page.request, '/api/characters', character);
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
     name: 'Equipment limits',
@@ -355,7 +428,7 @@ test('equipment controls explain combat, full backpacks, and unmet requirements 
   await great.getByRole('checkbox', { name: 'Spare 1 ×1', exact: true }).check();
   await great.getByRole('checkbox', { name: 'Spare 2 ×1', exact: true }).check();
   await expect(great.getByRole('button', { name: 'Take & equip' })).toBeEnabled();
-  await expect(great).toContainText('Backpack 8/8 → 8/8');
+  await expect(great).toContainText('Backpack 8/8 → 7/8');
   const boots = page.getByRole('article', { name: 'Empty-slot boots', exact: true });
   await expect(boots.getByRole('button', { name: 'Take item' })).toBeDisabled();
   await expect(boots.getByRole('button', { name: 'Take & equip' })).toBeEnabled();
@@ -381,7 +454,7 @@ test('Legendary gear exposes equipped abilities with the correct combat scope an
   page,
 }) => {
   const character = templateCharacter('Mira');
-  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+  character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
   const saved = await post<{ id: string }>(page.request, '/api/characters', character);
   const campaign = await post<Snapshot>(page.request, '/api/campaigns', {
     name: 'Legendary gear',

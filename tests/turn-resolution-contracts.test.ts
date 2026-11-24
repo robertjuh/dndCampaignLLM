@@ -402,7 +402,9 @@ it('records a requested minor blocked when the entire submitted interaction is s
   ).toEqual([
     ['main', 'blocked'],
     ['minor', 'blocked'],
+    ['main', 'success'],
   ]);
+  expect(actor.state.guarding).toBe(true);
 });
 
 it('assigns a rejected equipment-change request to the minor slot while preserving its existing text', () => {

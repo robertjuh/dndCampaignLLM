@@ -12,7 +12,7 @@ test('a fallen player queues and cancels a fresh character without changing the 
   page,
 }) => {
   const fallen = templateCharacter('Fallen Ivo');
-  fallen.selectedEquipmentIds = fallen.equipmentOptions.slice(0, 2).map((item) => item.id);
+  fallen.selectedEquipmentIds = fallen.equipmentOptions.slice(0, 3).map((item) => item.id);
   const oldSaved = await post<Character & { id: string }>(page.request, '/api/characters', fallen);
   let newSaved: Character & { id: string };
   await post(page.request, '/api/characters', templateCharacter('Unfinished character'));
@@ -113,8 +113,9 @@ test('a fallen player queues and cancels a fresh character without changing the 
   ).toBeVisible();
   await library.locator('.ability-choices button').nth(0).click();
   await library.locator('.ability-choices button').nth(2).click();
-  await library.locator('.equipment-choices button').nth(0).click();
-  await library.locator('.equipment-choices button').nth(1).click();
+  await library.locator('.equipment-choices .equipment-choice-select').nth(0).click();
+  await library.locator('.equipment-choices .equipment-choice-select').nth(2).click();
+  await library.locator('.equipment-choices .equipment-choice-select').nth(3).click();
   const saved = library.waitForResponse(
     (response) => response.url().endsWith('/api/characters') && response.request().method() === 'POST',
   );
@@ -122,7 +123,7 @@ test('a fallen player queues and cancels a fresh character without changing the 
   const saveResponse = await saved;
   expect(saveResponse.ok(), await saveResponse.text()).toBe(true);
   newSaved = await saveResponse.json();
-  expect(newSaved.selectedEquipmentIds).toHaveLength(2);
+  expect(newSaved.selectedEquipmentIds).toHaveLength(3);
   await expect(
     library.locator('.library-card').getByRole('heading', { name: 'New Neri', exact: true }),
   ).toBeVisible();

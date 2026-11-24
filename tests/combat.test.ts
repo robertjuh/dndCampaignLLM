@@ -2,10 +2,460 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { normalizeCombatInput } from '../server/combat';
 import { environmentalFacts } from '../server/environment';
-import { requestedAbility, requestedConsumable } from '../server/action-resources';
+import { combatFact } from '../server/narration';
+import { requestedAbility, requestedConsumable, requestedHealingNPC } from '../server/action-resources';
 import type { GMContext } from '../server/game';
-import { baseItem, equip, initialScene, initialState, runCombat } from '../shared/rules';
-import { enemySchema, templateCharacter, type Member, type EnvironmentalAction } from '../shared/schema';
+import {
+  baseItem,
+  defense,
+  equip,
+  initialScene,
+  initialState,
+  prepareEnemyIntents,
+  runCombat,
+} from '../shared/rules';
+import {
+  combatManeuverSchema,
+  enemySchema,
+  templateCharacter,
+  type Member,
+  type EnvironmentalAction,
+} from '../shared/schema';
+
+it.each([
+  'I help healing Tavin using Blood magic, with my newly learned skills',
+  'Heal Tavin with my newly learned skills',
+  'Ik genees Tavin met mijn bloed magie',
+])('recognizes an explicit owned healing power without its exact name: %s', (text) => {
+  const c = fixture(text);
+  const member = c.members[0];
+  const ability = { ...member.character.abilities[1], name: "Anatomist's Mercy", effect: 'mend' as const };
+  member.character.abilities[1] = ability;
+  member.state.inventory.push({ ...baseItem('tonic', 'Ruby Temple Tonic', 'consumable'), healing: 6, quantity: 1 });
+  expect(requestedAbility(member.character, c.turn.actions[0], undefined, ability.name, member.state)).toEqual(ability);
+  expect(requestedConsumable(member, c.turn.actions[0])).toBeUndefined();
+  c.scene.npcs = { tavin: { id: 'tavin', name: 'Tavin Reed', aliases: [], locationId: 'here',
+    status: 'alive', allegiance: null, fact: 'Tavin is wounded.' } };
+  expect(requestedHealingNPC(c.scene, text)?.id).toBe('tavin');
+});
+
+describe('combat voice lines', () => {
+  it('speaks once in initiative order, including a conscious passing character, without changing dice or outcomes', () => {
+    const context = fixture('Attack Ork Breachmob');
+    context.turn.actions.push({ memberId: context.members[1].id, text: '', passed: true });
+    const voices = [
+      { actorId: context.members[0].id, line: 'Take this, you filthy brute!' },
+      { actorId: context.members[1].id, line: 'That is an alarming number of teeth.' },
+      { actorId: 'enemy-0', line: 'Your little knife will not save you!' },
+      { actorId: 'enemy-1', line: 'The breach belongs to us!' },
+    ];
+    const plan = normalizeCombatInput(context, { voiceLines: voices });
+    const control = structuredClone(context);
+    const controlDice: string[] = [];
+    const dice: string[] = [];
+    runCombat(control.members, control.scene.encounter!, normalizeCombatInput(control), (sides, label) => {
+      controlDice.push(label); return sides === 20 ? 12 : 2;
+    });
+    const logs = runCombat(context.members, context.scene.encounter!, plan, (sides, label) => {
+      dice.push(label); return sides === 20 ? 12 : 2;
+    });
+    expect(dice).toEqual(controlDice);
+    expect(context.members).toEqual(control.members);
+    expect(context.scene.encounter).toEqual(control.scene.encounter);
+    let previous = -1;
+    for (const voice of voices) {
+      const spoken = logs.findIndex((fact) => fact.includes(`“${voice.line}”`));
+      expect(spoken).toBeGreaterThan(previous);
+      expect(logs.filter((fact) => fact.includes(`“${voice.line}”`))).toHaveLength(1);
+      previous = spoken;
+    }
+    expect(plan.actions).toHaveLength(1);
+  });
+
+  it('suppresses a line from a player downed before their slot, a dead enemy, and an interrupted enemy', () => {
+    const context = fixture('Attack Ork Breachmob');
+    const actor = context.members[0];
+    actor.state.hp = 1;
+    context.scene.encounter!.enemies[1].hp = 0;
+    context.scene.encounter!.initiative = [
+      { id: 'enemy-0', total: 20 }, { id: actor.id, total: 10 }, { id: 'enemy-1', total: 1 },
+    ];
+    const plan = normalizeCombatInput(context, { voiceLines: [
+      { actorId: actor.id, line: 'I am still standing!' },
+      { actorId: 'enemy-0', line: 'Brace yourself!' },
+      { actorId: 'enemy-1', line: 'A dead enemy must never speak.' },
+    ] });
+    const logs = runCombat(context.members, context.scene.encounter!, plan, (sides) => sides === 20 ? 20 : 2);
+    expect(logs.join(' ')).toContain('Brace yourself!');
+    expect(logs.join(' ')).not.toContain('I am still standing!');
+    expect(logs.join(' ')).not.toContain('A dead enemy must never speak.');
+    context.scene.encounter!.enemies[0].stunned = true;
+    const next = runCombat(context.members.filter((member) => member.state.hp > 0),
+      context.scene.encounter!, { ...plan, actions: [] }, () => 12);
+    expect(next.join(' ')).not.toContain('Brace yourself!');
+  });
+
+  it('honors explicit silence, preserves submitted dialogue, and drops duplicate or unknown speakers', () => {
+    const context = fixture('I attack Ork Breachmob without speaking.');
+    const actorId = context.members[0].id;
+    const proposal = { voiceLines: [
+      { actorId, line: 'The model must not invent this.' },
+      { actorId, line: 'Or repeat it.' },
+      { actorId: 'imaginary-speaker', line: 'No invented participant.' },
+    ] };
+    expect(normalizeCombatInput(context, proposal).voiceLines).toBeUndefined();
+    context.turn.actions[0].text = 'I attack Ork Breachmob and shout "For the king!"';
+    expect(normalizeCombatInput(context, proposal).voiceLines).toEqual([{ actorId, line: 'For the king!' }]);
+    context.config.language = 'Nederlands';
+    const quote = `${context.members[0].character.name}: “For the king! I fight with honor.”`;
+    expect(combatFact(context, quote)).toBe(quote);
+  });
+});
+
+describe('creative attacks and automatic teamwork', () => {
+  function setup(count = 2) {
+    const context = fixture();
+    if (count === 3)
+      context.members.push({
+        ...structuredClone(context.members[1]),
+        id: randomUUID(),
+        playerId: randomUUID(),
+        character: { ...structuredClone(context.members[1].character), name: 'Third ally' },
+      });
+    context.members.forEach((member, index) => {
+      for (const stat of Object.keys(member.state.stats))
+        member.state.stats[stat as keyof typeof member.state.stats] = 5;
+      member.state.equipment = { ...member.state.equipment, left: null, right: null, body: null };
+      member.state.equipment.left = {
+        ...baseItem(`blade-${index}`, 'Blade', 'weapon'),
+        scaling: ['DEX'],
+        damage: '1d6',
+      };
+    });
+    const encounter = context.scene.encounter!;
+    encounter.enemies = [encounter.enemies[0]];
+    encounter.enemies[0].hp = encounter.enemies[0].maxHp = 200;
+    encounter.initiative = [
+      ...context.members.map((member) => ({ id: member.id, total: 15 })),
+      { id: encounter.enemies[0].id, total: 1 },
+    ];
+    context.turn.roster = context.members.map((member) => member.id);
+    context.turn.actions = context.members.map((member) => ({
+      memberId: member.id,
+      text: 'I strike Ork Breachmob in the arm to disrupt their attack.',
+      passed: false,
+    }));
+    return context;
+  }
+  const effect = (kind: 'hinder' | 'interrupt' | 'opening') =>
+    combatManeuverSchema.parse({
+      effect: kind,
+      intent: 'strike Ork Breachmob in the arm to disrupt their attack',
+    });
+  const input = (context: GMContext, kind?: 'hinder' | 'interrupt' | 'opening') =>
+    normalizeCombatInput(context, {
+      actions: context.members.map((member, index) => ({
+        memberId: member.id,
+        main: 'attack',
+        targetId: 'enemy-0',
+        ...(index === 0 && kind ? { maneuver: effect(kind) } : {}),
+      })),
+    });
+  const draw = (sides: number) => (sides === 20 ? 12 : 2);
+
+  it.each(['hinder', 'interrupt', 'opening'] as const)(
+    'keeps full weapon damage alongside %s and a single shared teamwork die',
+    (kind) => {
+      const context = setup(3);
+      const control = structuredClone(context);
+      const plan = input(context, kind);
+      const rolls: string[] = [];
+      runCombat(control.members, control.scene.encounter!, input(control), draw);
+      const logs = runCombat(context.members, context.scene.encounter!, plan, (sides, label) => {
+        rolls.push(label);
+        return draw(sides);
+      });
+      expect(context.scene.encounter!.enemies[0].hp).toBe(control.scene.encounter!.enemies[0].hp);
+      expect(rolls.filter((label) => label.startsWith('Teamwork:'))).toHaveLength(1);
+      expect(logs.find((log) => log.startsWith('Teamwork:'))).toContain('Mara Vex + Krail Venn');
+      expect(logs.join(' ')).toContain(
+        kind === 'opening' ? 'creates an opening' : kind === 'hinder' ? 'disrupts' : 'prevents',
+      );
+    },
+  );
+
+  it('uses the worse enemy die for a disruption and consumes it on that attack', () => {
+    const context = setup();
+    const encounter = context.scene.encounter!;
+    const dice: number[] = [];
+    runCombat(context.members, encounter, input(context, 'hinder'), (sides, _label, actor) => {
+      if (sides === 20 && actor === 'enemy-0') {
+        const value = dice.length ? 2 : 20;
+        dice.push(value);
+        return value;
+      }
+      return draw(sides);
+    });
+    expect(dice).toEqual([20, 2]);
+    expect(context.members.every((member) => member.state.hp === member.state.maxHp)).toBe(true);
+    expect(encounter.enemies[0].hindered).toBeUndefined();
+  });
+
+  it('preserves an interruption applied after the enemy slot across a JSON restart', () => {
+    let context = setup();
+    context.scene.encounter!.initiative.reverse();
+    runCombat(context.members, context.scene.encounter!, input(context, 'interrupt'), draw);
+    expect(context.scene.encounter!.enemies[0].stunned).toBe(true);
+    context = JSON.parse(JSON.stringify(context));
+    const hp = context.members.map((member) => member.state.hp);
+    const logs = runCombat(context.members, context.scene.encounter!, input(context), draw);
+    expect(context.members.map((member) => member.state.hp)).toEqual(hp);
+    expect(logs.join(' ')).toContain('unable to attack');
+    expect(context.scene.encounter!.enemies[0].stunned).toBe(false);
+  });
+
+  it('combines an opening with existing ability advantage without rolling three dice', () => {
+    const context = setup();
+    const ally = context.members[1];
+    ally.state.abilityAssist = 2;
+    const dice: number[] = [];
+    runCombat(
+      context.members,
+      context.scene.encounter!,
+      input(context, 'opening'),
+      (sides, _label, actor) => {
+        if (sides === 20 && actor === ally.id) {
+          dice.push(sides);
+          return dice.length === 1 ? 2 : 12;
+        }
+        return draw(sides);
+      },
+    );
+    expect(dice).toHaveLength(2);
+    expect(ally.state.abilityAssist).toBeUndefined();
+    expect(context.scene.encounter!.enemies[0].opening).toBeUndefined();
+  });
+
+  it('does not invent a combo from a miss, off-hand hit, or two characters belonging to one player', () => {
+    for (const scenario of ['miss', 'offhand', 'same-player']) {
+      const context = setup();
+      const plan = input(context);
+      if (scenario === 'same-player') context.members[1].playerId = context.members[0].playerId;
+      if (scenario === 'offhand') {
+        plan.actions = [plan.actions[0]];
+        const member = context.members[0];
+        member.state.equipment.left!.light = true;
+        member.state.equipment.right = { ...member.state.equipment.left!, id: 'other-blade' };
+        plan.actions[0].minor = 'offhand';
+      }
+      const logs = runCombat(context.members, context.scene.encounter!, plan, (sides, _label, actor) =>
+        scenario === 'miss' && actor === context.members[1].id && sides === 20 ? 2 : draw(sides),
+      );
+      expect(
+        logs.some((log) => log.startsWith('Teamwork:')),
+        scenario,
+      ).toBe(false);
+    }
+  });
+
+  it('counts a damaging environmental attack alongside a weapon hit and starts a fresh combo each round', () => {
+    const context = setup();
+    context.scene.location.atmosphere = 'A loaded cannon overlooks the deck.';
+    context.turn.actions[1].text = 'I fire the cannon at Ork Breachmob.';
+    const plan = normalizeCombatInput(context, {
+      actions: [
+        input(context).actions[0],
+        {
+          memberId: context.members[1].id,
+          main: 'creative',
+          effect: 'damage',
+          targetId: 'enemy-0',
+          environment: {
+            sourceId: `scene:${context.scene.location.name}:atmosphere`,
+            name: 'Cannon',
+            evidence: context.scene.location.atmosphere,
+            operation: 'attack',
+            roll: 'defense',
+            damage: '2d6',
+            damageBonus: 0,
+            consumption: 'none',
+            reloadSourceId: null,
+            reloadEvidence: null,
+          },
+        },
+      ],
+    });
+    for (let round = 0; round < 2; round++) {
+      const logs = runCombat(context.members, context.scene.encounter!, plan, draw);
+      expect(logs.filter((log) => log.startsWith('Teamwork:'))).toHaveLength(1);
+    }
+  });
+
+  it('validates exact intent and local sources, then saves real displacement and persistent cover', () => {
+    const context = setup();
+    const actor = context.members[0];
+    const sourceId = `scene:${context.scene.location.name}:atmosphere`;
+    context.scene.location.atmosphere = 'A stone table stands beside the doorway.';
+    const plan = input(context);
+    const push = {
+      effect: 'push',
+      intent: 'strike Ork Breachmob',
+      sourceId,
+      evidence: context.scene.location.atmosphere,
+      destination: 'the doorway',
+    };
+    plan.actions[0] = normalizeCombatInput(context, {
+      actions: [
+        {
+          ...plan.actions[0],
+          maneuver: push,
+        },
+      ],
+    }).actions[0];
+    runCombat(context.members, context.scene.encounter!, plan, draw);
+    expect(context.scene.encounter!.enemies[0].position).toBe('the doorway');
+    expect(() =>
+      normalizeCombatInput(context, {
+        actions: [{ ...plan.actions[0], maneuver: { ...push, destination: 'an invented pit' } }],
+      }),
+    ).toThrow(/destination/);
+    expect(() =>
+      normalizeCombatInput(context, {
+        actions: [
+          { ...plan.actions[0], maneuver: { ...push, intent: 'A maneuver the player never submitted' } },
+        ],
+      }),
+    ).toThrow(/actual tactical intent/);
+    context.turn.actions[0].text = 'I take cover behind the stone table.';
+    const coverPlan = normalizeCombatInput(context, {
+      actions: [
+        {
+          memberId: actor.id,
+          main: 'interact',
+          maneuver: {
+            effect: 'cover',
+            intent: 'take cover',
+            sourceId,
+            evidence: context.scene.location.atmosphere,
+          },
+        },
+      ],
+    });
+    const before = defense(actor.character, actor.state);
+    runCombat(context.members, context.scene.encounter!, coverPlan, draw);
+    expect(defense(actor.character, actor.state)).toBe(before + 2);
+    expect(JSON.parse(JSON.stringify(actor.state)).combatCover.sourceId).toBe(sourceId);
+    context.turn.actions[0].text = 'I move away from the table.';
+    runCombat(context.members, context.scene.encounter!, normalizeCombatInput(context), draw);
+    expect(actor.state.combatCover).toBeUndefined();
+  });
+
+  it('locks a visible enemy target before submissions rather than accepting a planner counter-target', () => {
+    const context = setup();
+    const encounter = context.scene.encounter!;
+    prepareEnemyIntents(context.members, encounter);
+    const plan = input(context);
+    plan.enemyTargets = [{ enemyId: 'enemy-0', memberId: context.members[1].id }];
+    const hp = context.members.map((member) => member.state.hp);
+    runCombat(context.members, encounter, plan, draw);
+    expect(context.members[0].state.hp).toBeLessThan(hp[0]);
+    expect(context.members[1].state.hp).toBe(hp[1]);
+    expect(encounter.enemies[0].intent).toEqual({ targetId: context.members[1].id, round: 2 });
+  });
+
+  it('keeps an opening for a faster ally next round, without retroactively improving their earlier hit', () => {
+    let context = setup();
+    const [creator, ally] = context.members;
+    context.scene.encounter!.initiative = [
+      { id: ally.id, total: 20 },
+      { id: creator.id, total: 15 },
+      { id: 'enemy-0', total: 1 },
+    ];
+    const firstDice: number[] = [];
+    runCombat(
+      context.members,
+      context.scene.encounter!,
+      input(context, 'opening'),
+      (sides, _label, actor) => {
+        if (actor === ally.id && sides === 20) firstDice.push(sides);
+        return draw(sides);
+      },
+    );
+    expect(firstDice).toHaveLength(1);
+    context = JSON.parse(JSON.stringify(context));
+    const nextDice: number[] = [];
+    runCombat(context.members, context.scene.encounter!, input(context), (sides, _label, actor) => {
+      if (actor === ally.id && sides === 20) nextDice.push(sides);
+      return draw(sides);
+    });
+    expect(nextDice).toHaveLength(2);
+    expect(context.scene.encounter!.enemies[0].opening).toBeUndefined();
+  });
+
+  it('retains disruption while an interruption prevents the enemy from making its next attack', () => {
+    const context = setup();
+    const plan = input(context, 'hinder');
+    plan.actions[1].maneuver = effect('interrupt');
+    runCombat(context.members, context.scene.encounter!, plan, draw);
+    expect(context.scene.encounter!.enemies[0].hindered).toBe(true);
+    const logs = runCombat(context.members, context.scene.encounter!, input(context), draw);
+    expect(logs).toContain('Ork Breachmob attacks with disadvantage.');
+    expect(context.scene.encounter!.enemies[0].hindered).toBeUndefined();
+  });
+
+  it('groups teamwork by the actual target after redirection, never by the requested corpse', () => {
+    const context = setup();
+    const encounter = context.scene.encounter!;
+    encounter.enemies.push({ ...structuredClone(encounter.enemies[0]), id: 'enemy-1', name: 'Other guard' });
+    const plan = input(context);
+    plan.actions[1].targetId = 'enemy-1';
+    let logs = runCombat(context.members, encounter, plan, draw);
+    expect(logs.some((log) => log.startsWith('Teamwork:'))).toBe(false);
+    encounter.enemies[0].hp = 0;
+    plan.actions.forEach((action) => {
+      action.targetId = 'enemy-0';
+    });
+    logs = runCombat(context.members, encounter, plan, draw);
+    expect(logs.filter((log) => log.startsWith('Teamwork:'))).toHaveLength(1);
+    expect(logs.find((log) => log.startsWith('Teamwork:'))).toContain('Other guard');
+  });
+
+  it('includes an offensive ability in teamwork without multiplying its shared die on a critical', () => {
+    const context = setup();
+    const ability = context.members[1].character.abilities.find((ability) => ability.effect === 'strike')!;
+    context.turn.actions[1].text = `Use ${ability.name} on Ork Breachmob.`;
+    context.turn.actions[1].abilityName = ability.name;
+    const plan = input(context);
+    const dice: number[] = [];
+    const logs = runCombat(context.members, context.scene.encounter!, plan, (sides, label) => {
+      if (label.startsWith('Teamwork:')) dice.push(sides);
+      return sides === 20 ? 20 : 2;
+    });
+    expect(plan.actions[1].main).toBe('ability');
+    expect(context.members[1].state.abilityUses?.[ability.name]).toBe(1);
+    expect(dice).toEqual([6]);
+    expect(logs.find((log) => log.startsWith('Teamwork:'))).toContain('2 bonus damage');
+  });
+
+  it('does not grant a missed maneuver or count an ally downed before their attack', () => {
+    const context = setup();
+    const missed = input(context, 'interrupt');
+    runCombat(context.members, context.scene.encounter!, missed, (sides, _label, actor) =>
+      actor === context.members[0].id && sides === 20 ? 2 : draw(sides),
+    );
+    expect(context.scene.encounter!.enemies[0].stunned).not.toBe(true);
+    context.members[0].state.hp = 1;
+    prepareEnemyIntents(context.members, context.scene.encounter!);
+    context.scene.encounter!.enemies[0].intent!.targetId = context.members[0].id;
+    context.scene.encounter!.initiative = [
+      { id: 'enemy-0', total: 20 },
+      ...context.members.map((member) => ({ id: member.id, total: 10 })),
+    ];
+    const logs = runCombat(context.members, context.scene.encounter!, input(context), draw);
+    expect(context.members[0].state.hp).toBe(0);
+    expect(logs.some((log) => log.startsWith('Teamwork:'))).toBe(false);
+  });
+});
 
 function fixture(text = 'Attack the enemy'): GMContext {
   const members = ['Mara Vex', 'Krail Venn'].map((name): Member => {
@@ -944,7 +1394,7 @@ describe('server combat interpretation defaults', () => {
     expect(logs.some((log) => log.includes('with Knife'))).toBe(false);
   });
 
-  it('uses a neutral fallback for unknown or malformed intent without a risk check', () => {
+  it('uses an instinctive innate strike for unknown or malformed combat intent', () => {
     const context = fixture('A white light fills the room.');
     for (const proposal of [
       undefined,
@@ -952,7 +1402,7 @@ describe('server combat interpretation defaults', () => {
       { actions: [{ memberId: context.members[0].id, main: 'invalid', effect: 'damage', dc: 20 }] },
     ]) {
       const action = normalizeCombatInput(context, proposal).actions[0];
-      expect(action).toMatchObject({ main: 'interact', targetId: null, weaponSlot: null, minor: 'none' });
+      expect(action).toMatchObject({ intent: 'instinct', main: 'attack', targetId: null, weaponSlot: 'natural', minor: 'none' });
       expect(action.dc).toBeUndefined();
       expect(action.effect).toBeUndefined();
     }
@@ -1379,7 +1829,7 @@ function cannonFixture(text = 'Knal de boegharpoenier voor zijnen donder volle b
       input,
       (sides, label, actor, _stat, _mod, dc) => {
         rolls.push({ actor, sides, label, dc });
-        return sides === 20 ? (actor === context.members[0].id ? die : 2) : 3;
+        return sides === 20 ? (actor === context.members[0].id ? die : 2) : Math.min(3, sides);
       },
       (event) => events.push(event),
       context.scene.environment,
@@ -1502,8 +1952,9 @@ describe('grounded environmental combat', () => {
     });
     expect(changed.actions[0].environment).toMatchObject(f.profile);
     const second = f.execute(changed);
-    expect(second.rolls).toHaveLength(0);
-    expect(f.context.scene.encounter!.enemies[0].hp).toBe(23);
+    expect(second.rolls.map((roll) => roll.sides)).toEqual([20, 4]);
+    expect(second.logs.join(' ')).toContain('acts on instinct with an innate strike');
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(20);
     expect(second.events).toContainEqual(
       expect.objectContaining({ status: 'blocked', fact: expect.stringContaining('needs reloading') }),
     );
@@ -1513,8 +1964,8 @@ describe('grounded environmental combat', () => {
     const f = cannonFixture();
     f.execute(f.plan({ consumption }));
     const second = f.execute(f.plan({ consumption }));
-    expect(f.context.scene.encounter!.enemies[0].hp).toBe(consumption === 'once' ? 23 : 16);
-    expect(second.rolls).toHaveLength(consumption === 'once' ? 0 : 3);
+    expect(f.context.scene.encounter!.enemies[0].hp).toBe(consumption === 'once' ? 20 : 16);
+    expect(second.rolls.map((roll) => roll.sides)).toEqual(consumption === 'once' ? [20, 4] : [20, 6, 6]);
     expect(f.context.scene.environment!.sources[f.profile.sourceId].ready).toBe(consumption === 'none');
   });
 

@@ -339,7 +339,7 @@ it.each(['after-arrival', 'after-resolution'] as const)(
       custom: [],
     });
     const character = templateCharacter('Pirate');
-    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 2).map((item) => item.id);
+    character.selectedEquipmentIds = character.equipmentOptions.slice(0, 3).map((item) => item.id);
     game.join(campaign.inviteCode!, player.id, game.saveCharacter(player.id, character).id);
     game.start(campaign.id, host.id);
     await game.idle();

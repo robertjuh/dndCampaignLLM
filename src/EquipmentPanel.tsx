@@ -4,6 +4,7 @@ import { slots, stats, type Item, type Member, type Slot, type Snapshot } from '
 import {
   capacity,
   defense,
+  effectiveStats,
   equip,
   equippedItems,
   equipmentBonus,
@@ -16,6 +17,7 @@ import {
   healWithItem,
   isDead,
   canInteract,
+  initiativeBonus,
 } from '../shared/rules';
 import { ItemDetails, ItemIcon, slotLabels } from './CharacterSheet';
 import { memberScene } from '../shared/locations';
@@ -88,7 +90,9 @@ function EquipmentItem({
     )
       healingReason = 'Healing an ally requires your action in an active turn.';
   }
-  const dropIds = item.currencyValue ? [] : drops.filter((id) => state.inventory.some((item) => item.id === id));
+  const dropIds = item.currencyValue
+    ? []
+    : drops.filter((id) => state.inventory.some((item) => item.id === id));
   const next = structuredClone(state);
   let equipReason = '';
   if (equippable) {
@@ -119,10 +123,9 @@ function EquipmentItem({
     if (displaced.length) comparison.push(`Stows ${displaced.map((item) => item.name).join(', ')}`);
     if (defense(character, state) !== defense(character, next))
       comparison.push(`Defense ${defense(character, state)} → ${defense(character, next)}`);
-    const initiative = (state: Member['state']) =>
-      equippedItems(state).reduce((sum, item) => sum + item.initiativePenalty, 0);
-    if (initiative(state) !== initiative(next))
-      comparison.push(`Initiative penalty ${initiative(state)} → ${initiative(next)}`);
+    if (state.maxHp !== next.maxHp) comparison.push(`Maximum HP ${state.maxHp} → ${next.maxHp}`);
+    if (initiativeBonus(state) !== initiativeBonus(next))
+      comparison.push(`Initiative bonus ${signed(initiativeBonus(state))} → ${signed(initiativeBonus(next))}`);
     if (item.kind === 'weapon') {
       const previous =
         [state.equipment[slot], state.equipment.right, state.equipment.left].find(
@@ -141,6 +144,8 @@ function EquipmentItem({
       comparison.push(`Weapon attack ${attack(previous, state)} → ${attack(item, next)}`);
     }
     for (const stat of stats) {
+      if (effectiveStats(state)[stat] !== effectiveStats(next)[stat])
+        comparison.push(`${stat} ${effectiveStats(state)[stat]} → ${effectiveStats(next)[stat]}`);
       for (const kind of ['attackBonus', 'checkBonus'] as const) {
         const before = equipmentBonus(state, stat, kind);
         const after = equipmentBonus(next, stat, kind);
@@ -155,14 +160,16 @@ function EquipmentItem({
     <article className="gear-item" aria-label={itemName}>
       <div className="gear-item-info">
         <b>
-          <ItemIcon kind={item.kind} />
+          <ItemIcon kind={item.kind} iconId={item.iconId} />
           {itemName} {item.quantity > 1 && <span>×{item.quantity}</span>}
         </b>
         <ItemDetails item={item} compact currencyName={currencyName} />
         {comparison.length > 0 && <p className="gear-preview">{comparison.join(' · ')}</p>}
         {ground && !takeReason && (
           <p className="gear-preview">
-            {item.currencyValue ? `${currencyName}: ${state.currency} → ${taken.currency}` : `Take into backpack: ${occupiedSlots(state)}/${capacity(character)} → ${occupiedSlots(taken)}/${capacity(character)}`}
+            {item.currencyValue
+              ? `${currencyName}: ${state.currency} → ${taken.currency}`
+              : `Take into backpack: ${occupiedSlots(state)}/${capacity(character)} → ${occupiedSlots(taken)}/${capacity(character)}`}
           </p>
         )}
         {ground && dropIds.length > 0 && (
@@ -204,7 +211,7 @@ function EquipmentItem({
                       )
                     }
                   />
-                  <ItemIcon kind={owned.kind} />
+                  <ItemIcon kind={owned.kind} iconId={owned.iconId} />
                   {owned.name} ×{owned.quantity}
                 </label>
               ))}
@@ -393,9 +400,9 @@ export function EquipmentPanel({
                   <span className="eyebrow">{bothHands ? 'Both hands' : slotLabels[slot]}</span>
                   {item ? (
                     <>
-                      <b>
-                        <ItemIcon kind={item.kind} />
-                        {item.name}
+                      <b className="icon-heading">
+                        <ItemIcon kind={item.kind} iconId={item.iconId} size={64} />
+                        <span>{item.name}</span>
                       </b>
                       <ItemDetails item={item} compact />
                       {stowReason && <p className="gear-reason">{stowReason}</p>}
